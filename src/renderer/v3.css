@@ -1860,6 +1860,7 @@ textarea:focus-visible {
   background: linear-gradient(135deg, #7c65f4, #6549d8);
   font-size: 9px;
   font-weight: 700;
+  cursor: pointer;
 }
 
 .profile-switch-action svg {
@@ -1871,6 +1872,7 @@ textarea:focus-visible {
   color: #8b8f9e;
   border-color: rgba(255, 255, 255, 0.06);
   background: rgba(255, 255, 255, 0.035);
+  cursor: not-allowed;
 }
 
 .quota-refresh-warning {

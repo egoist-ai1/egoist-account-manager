@@ -82,6 +82,13 @@ for await (const line of input) {
   } else if (request.method === "account/login/start" && request.params?.type === "apiKey") {
     writeAuth({ OPENAI_API_KEY: request.params.apiKey });
     result = { type: "apiKey" };
+  } else if (request.method === "account/login/start" && request.params?.type === "chatgptDeviceCode") {
+    result = {
+      type: "chatgptDeviceCode",
+      loginId: "pending-device-login-" + Math.random().toString(16).slice(2),
+      verificationUrl: "https://example.invalid/device",
+      userCode: "TEST-CODE"
+    };
   } else if (request.method === "account/read") {
     let auth = fs.existsSync(authPath) ? JSON.parse(fs.readFileSync(authPath, "utf8")) : null;
     if (request.params?.refreshToken && auth?.ROTATE_TO) {
@@ -1053,6 +1060,145 @@ describe.skipIf(process.platform !== "win32")("AccountManager Codex auth modes",
       expect(reauthSettled).toBe(true);
     } finally {
       releaseQuiesce();
+      await manager.shutdown();
+      store.close();
+    }
+  });
+
+  it("does not create a switch transaction while the target profile is being reauthenticated", async () => {
+    const appDataDir = tempDir();
+    const globalCodexHome = path.join(appDataDir, "global-codex-home");
+    const store = new AccountStore(appDataDir);
+    const vault = new Vault(appDataDir);
+    const manager = new AccountManager(store, vault, appDataDir, installFakeCodex(appDataDir), {
+      codexHome: globalCodexHome,
+      durableAuthStableCheckIntervalMs: 0
+    });
+    try {
+      const first = await manager.startLogin({ type: "apiKey", credential: "sk-prepare-first-profile" });
+      const target = await manager.startLogin({ type: "apiKey", credential: "sk-prepare-target-profile" });
+      store.setActive(first.account!.id);
+      fs.mkdirSync(globalCodexHome, { recursive: true });
+      fs.writeFileSync(
+        getAuthFilePath(globalCodexHome),
+        vault.decryptUtf8(store.get(first.account!.id)!.encryptedAuthJson),
+        "utf8"
+      );
+
+      await manager.reauthenticateAccount(target.account!.id, { type: "chatgptDeviceCode" });
+
+      await expect(manager.prepareSwitchAccount(target.account!.id)).rejects.toThrow("still being reauthenticated");
+      expect(manager.listSwitchTransactions()).toEqual([]);
+    } finally {
+      await manager.shutdown();
+      store.close();
+    }
+  });
+
+  it("supersedes a duplicate reauthentication instead of leaving an orphaned blocker", async () => {
+    const appDataDir = tempDir();
+    const store = new AccountStore(appDataDir);
+    const vault = new Vault(appDataDir);
+    const logMessages: string[] = [];
+    const manager = new AccountManager(store, vault, appDataDir, installFakeCodex(appDataDir), {
+      durableAuthStableCheckIntervalMs: 0
+    });
+    manager.on("log", (message) => logMessages.push(String(message)));
+    try {
+      const target = await manager.startLogin({ type: "apiKey", credential: "sk-duplicate-reauth-profile" });
+
+      await manager.reauthenticateAccount(target.account!.id, { type: "chatgptDeviceCode" });
+      await manager.reauthenticateAccount(target.account!.id, { type: "chatgptDeviceCode" });
+
+      expect(logMessages.some((message) => message.includes("Superseded an unfinished Codex reauthentication"))).toBe(true);
+      await expect(manager.prepareSwitchAccount(target.account!.id)).rejects.toThrow("still being reauthenticated");
+
+      await manager.shutdown();
+      const retry = await manager.prepareSwitchAccount(target.account!.id);
+      expect(manager.cancelSwitch(retry.transaction.id).status).toBe("aborted");
+    } finally {
+      await manager.shutdown();
+      store.close();
+    }
+  });
+
+  it("terminates a prepared switch when reauthentication starts before commit", async () => {
+    const appDataDir = tempDir();
+    const globalCodexHome = path.join(appDataDir, "global-codex-home");
+    const store = new AccountStore(appDataDir);
+    const vault = new Vault(appDataDir);
+    const manager = new AccountManager(store, vault, appDataDir, installFakeCodex(appDataDir), {
+      codexHome: globalCodexHome,
+      durableAuthStableCheckIntervalMs: 0
+    });
+    try {
+      const first = await manager.startLogin({ type: "apiKey", credential: "sk-race-first-profile" });
+      const target = await manager.startLogin({ type: "apiKey", credential: "sk-race-target-profile" });
+      store.setActive(first.account!.id);
+      fs.mkdirSync(globalCodexHome, { recursive: true });
+      fs.writeFileSync(
+        getAuthFilePath(globalCodexHome),
+        vault.decryptUtf8(store.get(first.account!.id)!.encryptedAuthJson),
+        "utf8"
+      );
+
+      const preparation = await manager.prepareSwitchAccount(target.account!.id);
+      await manager.reauthenticateAccount(target.account!.id, { type: "chatgptDeviceCode" });
+
+      await expect(manager.switchAccount(target.account!.id, preparation.transaction.id)).rejects.toThrow("still being reauthenticated");
+      expect(manager.listSwitchTransactions()[0]).toMatchObject({
+        id: preparation.transaction.id,
+        status: "failed",
+        phase: "failed",
+        errorCode: "SWITCH_FAILED"
+      });
+
+      await manager.shutdown();
+      const retry = await manager.prepareSwitchAccount(target.account!.id);
+      expect(retry.transaction.phase).toBe("ready");
+      expect(manager.cancelSwitch(retry.transaction.id).status).toBe("aborted");
+    } finally {
+      await manager.shutdown();
+      store.close();
+    }
+  });
+
+  it("releases a prepared transaction when the cross-process switch lock rejects", async () => {
+    const appDataDir = tempDir();
+    const globalCodexHome = path.join(appDataDir, "global-codex-home");
+    const store = new AccountStore(appDataDir);
+    const vault = new Vault(appDataDir);
+    const manager = new AccountManager(store, vault, appDataDir, installFakeCodex(appDataDir), {
+      codexHome: globalCodexHome,
+      durableAuthStableCheckIntervalMs: 0,
+      crossProcessSwitchLock: {
+        runExclusive: async () => {
+          throw new Error("synthetic live Manager lock");
+        }
+      }
+    });
+    try {
+      const first = await manager.startLogin({ type: "apiKey", credential: "sk-lock-first-profile" });
+      const target = await manager.startLogin({ type: "apiKey", credential: "sk-lock-target-profile" });
+      store.setActive(first.account!.id);
+      fs.mkdirSync(globalCodexHome, { recursive: true });
+      fs.writeFileSync(
+        getAuthFilePath(globalCodexHome),
+        vault.decryptUtf8(store.get(first.account!.id)!.encryptedAuthJson),
+        "utf8"
+      );
+
+      const preparation = await manager.prepareSwitchAccount(target.account!.id);
+      await expect(manager.switchAccount(target.account!.id, preparation.transaction.id)).rejects.toThrow("synthetic live Manager lock");
+      expect(manager.listSwitchTransactions()[0]).toMatchObject({
+        id: preparation.transaction.id,
+        status: "failed",
+        phase: "failed"
+      });
+
+      const retry = await manager.prepareSwitchAccount(target.account!.id);
+      expect(manager.cancelSwitch(retry.transaction.id).status).toBe("aborted");
+    } finally {
       await manager.shutdown();
       store.close();
     }

@@ -735,12 +735,13 @@ export class AccountManager extends EventEmitter {
     const account = this.store.get(accountId);
     if (!account) throw new Error("Account not found");
     if (account.platform !== "codex") throw new Error("Codex authentication is only available for Codex accounts");
-    return this.operationLock.runExclusive("provider:codex", () =>
-      this.beginLogin(input, {
+    return this.operationLock.runExclusive("provider:codex", async () => {
+      await this.discardPendingReauthentication(account.id);
+      return this.beginLogin(input, {
         replaceAccountId: account.id,
         previousProfileDir: account.profileDir
-      })
-    );
+      });
+    });
   }
 
   private async beginLogin(
@@ -1132,6 +1133,9 @@ export class AccountManager extends EventEmitter {
     let target = this.store.get(accountId);
     if (!target) throw new Error("Account not found");
     if (target.platform === "codex") {
+      if (this.hasPendingReauthentication(target.id)) {
+        throw new Error("The target Codex profile is still being reauthenticated. Finish the current sign-in before switching.");
+      }
       this.assertCompatibleCodexCredentialStore();
       await this.reconcileActiveCodexAuth();
       target = this.store.get(accountId);
@@ -1403,39 +1407,42 @@ export class AccountManager extends EventEmitter {
     const current = this.switchInFlight.get(account.platform);
     if (current) {
       if (current.accountId === accountId) return current.promise;
+      if (transactionId) {
+        this.failSwitchTransactionIfActive(
+          transactionId,
+          "SWITCH_CONFLICT",
+          `Another ${account.platform} account switch is already running for ${current.accountId}`
+        );
+      }
       throw new Error(`Another ${account.platform} account switch is already running for ${current.accountId}`);
     }
+    let activeTransactionId = transactionId;
     const execute = async () => {
-      if (
-        account.platform === "codex"
-        && [...this.pendingLogins.values()].some((login) => Boolean(login.replaceAccountId))
-      ) {
-        throw new Error("A Codex reauthentication is still in progress. Finish or cancel it before switching.");
-      }
       const prepared = transactionId
         ? this.switchTransactions.get(transactionId)
         : (await this.prepareSwitchAccount(accountId)).transaction;
       if (!prepared) throw new Error("Prepared switch transaction not found");
-      this.switchTransactions.begin(prepared.id, accountId);
-      try {
-        return await this.performSwitchAccount(accountId, prepared.id);
-      } catch (error) {
-        const latest = this.switchTransactions.get(prepared.id);
-        if (latest?.status !== "recovery_required") {
-          this.switchTransactions.fail(
-            prepared.id,
-            "SWITCH_FAILED",
-            error instanceof Error ? error.message : String(error)
-          );
-        }
-        throw error;
+      activeTransactionId = prepared.id;
+      if (account.platform === "codex" && this.hasPendingReauthentication(account.id)) {
+        throw new Error("The target Codex profile is still being reauthenticated. Finish the current sign-in before switching.");
       }
+      this.switchTransactions.begin(prepared.id, accountId);
+      return this.performSwitchAccount(accountId, prepared.id);
     };
     const promise = this.operationLock.runExclusive(`provider:${account.platform}`, () =>
       account.platform === "codex"
         ? this.crossProcessSwitchLock.runExclusive(`switch:${accountId}`, execute)
         : execute()
-    ).finally(() => {
+    ).catch((error) => {
+      if (activeTransactionId) {
+        this.failSwitchTransactionIfActive(
+          activeTransactionId,
+          "SWITCH_FAILED",
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+      throw error;
+    }).finally(() => {
       if (this.switchInFlight.get(account.platform)?.promise === promise) this.switchInFlight.delete(account.platform);
     });
     this.switchInFlight.set(account.platform, { accountId, promise });
@@ -2780,6 +2787,29 @@ export class AccountManager extends EventEmitter {
     const event: AuthEvent = { loginId, profileId, success: false, error: redactSensitiveText(message) };
     this.emit("auth-event", event);
     await pending.client.stop();
+  }
+
+  private hasPendingReauthentication(accountId: string): boolean {
+    return [...this.pendingLogins.values()].some((login) => login.replaceAccountId === accountId);
+  }
+
+  private async discardPendingReauthentication(accountId: string): Promise<void> {
+    const stale = [...this.pendingLogins.entries()].filter(([, login]) => login.replaceAccountId === accountId);
+    for (const [loginId, login] of stale) {
+      this.pendingLogins.delete(loginId);
+      if (login.pollTimer) clearTimeout(login.pollTimer);
+      await login.client.stop();
+      if (this.codexProfileVault.isManagedProfile(login.profileDir)) {
+        fs.rmSync(login.profileDir, { recursive: true, force: true });
+      }
+      this.emitLog(`Superseded an unfinished Codex reauthentication for managed profile ${accountId}.`);
+    }
+  }
+
+  private failSwitchTransactionIfActive(transactionId: string, errorCode: string, errorMessage: string): void {
+    const transaction = this.switchTransactions.get(transactionId);
+    if (!transaction || ["committed", "rolled_back", "aborted", "failed", "recovery_required"].includes(transaction.status)) return;
+    this.switchTransactions.fail(transaction.id, errorCode, errorMessage);
   }
 
   private scheduleLoginPoll(loginId: string, profileId: string): void {

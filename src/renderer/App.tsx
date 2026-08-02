@@ -703,6 +703,12 @@ function switchErrorMessage(error: unknown): string {
   if (/could not be safely closed|did not exit|still running/i.test(detail)) {
     return "Codex не удалось полностью закрыть. Включи «Автоматическое закрытие» в настройках и повтори.";
   }
+  if (/still being reauthenticated|reauthentication is still in progress/i.test(detail)) {
+    return "Для выбранного профиля ещё открыт вход. Заверши его или запусти авторизацию заново — предыдущая незавершённая попытка будет безопасно заменена.";
+  }
+  if (/another switch transaction is already active/i.test(detail)) {
+    return "Предыдущая попытка переключения ещё не завершена. Менеджер отменит её до изменения авторизации; затем повтори переключение.";
+  }
   return `Не удалось переключить аккаунт: ${detail}`;
 }
 
@@ -2644,12 +2650,18 @@ function App() {
     }
     setBusy(`switch:${id}`);
     try {
-      await cam.switchAccount(id, preparation.transaction.id);
+      const switched = await cam.switchAccount(id, preparation.transaction.id);
+      setAccounts((current) => current.map((item) => item.id === switched.id
+        ? switched
+        : accountPlatform(item) === accountPlatform(switched)
+          ? { ...item, isActive: false }
+          : item));
       setMessage(account && accountPlatform(account) === "antigravity"
         ? "Antigravity профиль переключён, резервная копия сохранена"
         : "Профиль Codex переключён. ChatGPT/Codex безопасно перезапускается с выбранным аккаунтом.");
-      await reload();
+      void reload();
     } catch (error) {
+      await cam.cancelSwitch(preparation.transaction.id).catch(() => undefined);
       setMessage(switchErrorMessage(error));
     } finally {
       setBusy(null);

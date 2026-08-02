@@ -1,7 +1,7 @@
 {
   "name": "codex-account-manager",
   "productName": "Codex Account Manager",
-  "version": "3.1.4",
+  "version": "3.1.5",
   "description": "Codex Account Manager by Egoist AI — local Windows profile switcher and quota dashboard for user-authorized AI coding accounts.",
   "author": "Egoist Gorbachev",
   "license": "MIT",

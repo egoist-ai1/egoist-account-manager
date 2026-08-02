@@ -4,6 +4,8 @@
 
 ## Recent notes
 
+- [2026-08-02T235740Z-v3-1-5-switch-recovery](./2026-08-02T235740Z-v3-1-5-switch-recovery.md)
+- [2026-08-02T193006Z-v3-1-4-public-claude-research](./2026-08-02T193006Z-v3-1-4-public-claude-research.md)
 - [2026-08-02T185339Z-v3-1-4-transparent-tray](./2026-08-02T185339Z-v3-1-4-transparent-tray.md)
 - [2026-08-02T183037Z-v3-1-3-compact-active-tray](./2026-08-02T183037Z-v3-1-3-compact-active-tray.md)
 - [2026-08-02T180323Z-v3-1-2-tray-hover](./2026-08-02T180323Z-v3-1-2-tray-hover.md)
@@ -12,12 +14,10 @@
 - [2026-08-02T150644Z-v3-1-0-official-auth-release](./2026-08-02T150644Z-v3-1-0-official-auth-release.md)
 - [2026-08-02T134857Z-v3-0-10-current-session-viewport](./2026-08-02T134857Z-v3-0-10-current-session-viewport.md)
 - [2026-08-02T125858Z-v3-0-9-continuation-notifications](./2026-08-02T125858Z-v3-0-9-continuation-notifications.md)
-- [2026-08-01T221323Z-v3-0-8-device-handoff-profile-control](./2026-08-01T221323Z-v3-0-8-device-handoff-profile-control.md)
-- [2026-08-01T205831Z-v3-0-7-interface-precision](./2026-08-01T205831Z-v3-0-7-interface-precision.md)
 
 ## Archive
 
-- [2026/08](./archive/2026/08/) - 4 notes
+- [2026/08](./archive/2026/08/) - 6 notes
 - [2026/07](./archive/2026/07/) - 1 notes
 
-Hot set: 10. Archived: 5.
+Hot set: 10. Archived: 7.

@@ -431,6 +431,24 @@ export interface UpdateCheckResult {
   progressPercent?: number | null;
 }
 
+export type AppNotificationTone = "progress" | "success" | "warning" | "error";
+
+export interface AppNotificationPayload {
+  key: string;
+  title: string;
+  body: string;
+  tone: AppNotificationTone;
+  silent: boolean;
+  timeoutType: "default" | "never";
+  locale?: "ru" | "en";
+  createdAt: number;
+  progress?: {
+    value: number;
+    label: string;
+    status: string;
+  };
+}
+
 export interface AccountExportResult {
   exportedCount: number;
   filePath: string;
@@ -449,6 +467,7 @@ export interface WorkspaceBinding {
 }
 
 export type SmartSwitchMode = "off" | "suggest" | "auto";
+export type TrayRefreshIntervalMs = 0 | 60_000 | 180_000 | 300_000 | 600_000 | 900_000;
 
 export interface SmartRecommendation {
   accountId: string;
@@ -555,12 +574,13 @@ export interface ImportPreview {
 export interface AppSettings {
   language: "ru" | "en";
   autoRefreshIntervalMs: 0 | 180_000 | 600_000 | 900_000;
+  trayRefreshIntervalMs: TrayRefreshIntervalMs;
   privacyMode: boolean;
   confirmSwitch: boolean;
   desktopClosePolicy: DesktopClosePolicy;
   smartSwitchMode: SmartSwitchMode;
   smartSwitchThresholdPercent: number;
-  desktopNotifications: boolean;
+  notificationSoundEnabled: boolean;
   trayEnabled: boolean;
   autostartEnabled: boolean;
 }
@@ -595,6 +615,8 @@ export interface AppApi {
   minimizeWindow(): Promise<void>;
   toggleMaximizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
+  showMainWindow(): Promise<void>;
+  hideTrayPopover(): Promise<void>;
   selectWorkspace(): Promise<AppDiagnostics>;
   refreshAccount(accountId: string): Promise<ManagedAccount>;
   validateAuth(accountId: string): Promise<AuthValidationState>;
@@ -654,4 +676,5 @@ export interface AppApi {
   onAntigravityOAuthResult(callback: (result: AntigravityImportResult) => void): () => void;
   onAntigravityOAuthError(callback: (message: string) => void): () => void;
   onUpdateStatus(callback: (result: UpdateCheckResult) => void): () => void;
+  onAppNotification(callback: (notification: AppNotificationPayload) => void): () => void;
 }

@@ -2,11 +2,11 @@
 
 ## Now
 
-- Завершить exact package gate и GitHub Release 3.1.0: official-login-only onboarding, last-known-good vault fallback, DB v10 invariants/performance и безопасная startup-проверка GitHub Releases.
+- Exact local package 3.1.4 завершён: прозрачный compositor-safe WhyX hover без прямоугольного halo и минималистичный читаемый single-digit tray glyph. Публичной публикации 3.1.4 в этой задаче нет; стабильным GitHub Release остаётся 3.1.0.
 
 ## Next
 
-- Ручная acceptance-проверка на выделенных тестовых аккаунтах и чистой Windows 11 VM; затем Authenticode и отдельный signed in-app installer gate. Будущий RFC может рассмотреть «переключить после текущего шага» только при официально наблюдаемом idle/turn-completed, checkpoint и запрете replay после первых response bytes.
+- При отдельном разрешении — опубликовать 3.1.4 после Authenticode либо как честный manual/unsigned release с SHA-256. Будущий RFC может рассмотреть «переключить после текущего шага» только при официально наблюдаемом idle/turn-completed, checkpoint и запрете replay после первых response bytes.
 
 ## Later
 

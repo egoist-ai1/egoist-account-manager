@@ -1,7 +1,7 @@
 {
   "name": "codex-account-manager",
   "productName": "Codex Account Manager",
-  "version": "3.1.0",
+  "version": "3.1.4",
   "description": "Codex Account Manager by Egoist AI — local Windows profile switcher and quota dashboard for user-authorized AI coding accounts.",
   "author": "Egoist Gorbachev",
   "license": "MIT",
@@ -33,6 +33,9 @@
     "test:electron": "pnpm run build:dir && playwright test",
     "verify:package": "node scripts/verify-package.mjs",
     "verify:startup": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-packaged-startup.ps1",
+    "verify:tray-native": "electron scripts/verify-live-tray-native.cjs",
+    "verify:sandbox": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-windows-sandbox-release-test.ps1",
+    "verify:sandbox:apply": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-windows-sandbox-release-test.ps1 -Apply",
     "release:checksums": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/write-checksums.ps1"
   },
   "dependencies": {

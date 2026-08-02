@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AccountStore } from "../../src/main/db";
 import { SettingsService } from "../../src/main/services/settingsService";
+import type { AppSettings } from "../../src/shared/types";
 
 const dirs: string[] = [];
 
@@ -29,29 +30,32 @@ describe("SettingsService", () => {
       language: "en",
       privacyMode: true,
       autoRefreshIntervalMs: 180000,
+      trayRefreshIntervalMs: 60_000,
       desktopClosePolicy: "exact-tree-fallback",
       smartSwitchMode: "suggest",
       smartSwitchThresholdPercent: 10,
-      desktopNotifications: true,
-      trayEnabled: false,
+      notificationSoundEnabled: true,
+      trayEnabled: true,
       autostartEnabled: false
     });
     service.update({
       smartSwitchMode: "auto",
       smartSwitchThresholdPercent: 15,
-      desktopNotifications: false,
+      notificationSoundEnabled: false,
       trayEnabled: true,
       autostartEnabled: true,
-      autoRefreshIntervalMs: 0
+      autoRefreshIntervalMs: 0,
+      trayRefreshIntervalMs: 300_000
     });
 
     expect(service.get()).toMatchObject({
       smartSwitchMode: "suggest",
       smartSwitchThresholdPercent: 15,
-      desktopNotifications: false,
+      notificationSoundEnabled: false,
       trayEnabled: true,
       autostartEnabled: true,
-      autoRefreshIntervalMs: 0
+      autoRefreshIntervalMs: 0,
+      trayRefreshIntervalMs: 300_000
     });
     store.close();
   });
@@ -63,6 +67,18 @@ describe("SettingsService", () => {
       expect(new SettingsService(store).get().autoRefreshIntervalMs).toBe(180_000);
       store.setSetting("appSettings", JSON.stringify({ autoRefreshIntervalMs: 300_000 }));
       expect(new SettingsService(store).get().autoRefreshIntervalMs).toBe(180_000);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("drops the retired Windows notification preference", () => {
+    const store = new AccountStore(tempDir());
+    try {
+      store.setSetting("appSettings", JSON.stringify({ desktopNotifications: true, notificationSoundEnabled: false }));
+      const settings = new SettingsService(store).get() as AppSettings & { desktopNotifications?: boolean };
+      expect(settings.desktopNotifications).toBeUndefined();
+      expect(settings.notificationSoundEnabled).toBe(false);
     } finally {
       store.close();
     }

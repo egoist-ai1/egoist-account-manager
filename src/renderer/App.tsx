@@ -37,6 +37,7 @@ import {
 import type {
   AppDiagnostics,
   AppApi,
+  AppNotificationPayload,
   AntigravityDiagnostics,
   AntigravityCredentialBatchImportResult,
   AntigravityCredentialImportSource,
@@ -73,6 +74,8 @@ import { getUiText } from "./i18n";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ActivityPage } from "./components/v3/ActivityPage";
 import { OverviewPage } from "./components/v3/OverviewPage";
+import { TrayPopover } from "./components/TrayPopover";
+import { TrayHoverPopover } from "./components/TrayHoverPopover";
 import "@fontsource-variable/montserrat";
 import "./styles.css";
 import "./v3.css";
@@ -83,64 +86,6 @@ import "./v309.css";
 import "./v310.css";
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
-
-type ProcessNoticeTone = "progress" | "success" | "error";
-
-interface ProcessNotice {
-  id: string;
-  tone: ProcessNoticeTone;
-  eyebrow: string;
-  title: string;
-  detail: string;
-  step: 1 | 2 | 3;
-  stages: [string, string, string];
-  terminal: boolean;
-}
-
-export function buildSwitchProcessNotice(transaction: SwitchTransaction, isEnglish: boolean): ProcessNotice {
-  const phase = transaction.phase;
-  if (phase === "committed") {
-    return {
-      id: `switch:${transaction.id}:committed`, tone: "success", step: 3, stages: isEnglish ? ["Save", "Restart", "Verify"] : ["Сессия", "Перезапуск", "Проверка"], terminal: true,
-      eyebrow: isEnglish ? "SWITCH COMPLETE · 3 OF 3" : "ПЕРЕКЛЮЧЕНИЕ ГОТОВО · 3 ИЗ 3",
-      title: isEnglish ? "Account identity verified" : "Личность аккаунта подтверждена",
-      detail: isEnglish ? "Codex is running with the selected protected profile." : "Codex работает с выбранным защищённым профилем."
-    };
-  }
-  if (["failed", "recovery_required", "rolled_back", "aborted"].includes(phase)) {
-    return {
-      id: `switch:${transaction.id}:${phase}`, tone: "error", step: 3, stages: isEnglish ? ["Save", "Restart", "Recovery"] : ["Сессия", "Перезапуск", "Откат"], terminal: true,
-      eyebrow: isEnglish ? "SAFE RECOVERY" : "БЕЗОПАСНОЕ ВОССТАНОВЛЕНИЕ",
-      title: phase === "rolled_back"
-        ? (isEnglish ? "Previous account restored" : "Предыдущий аккаунт восстановлен")
-        : (isEnglish ? "Switch needs attention" : "Переключение требует внимания"),
-      detail: isEnglish ? "No unverified identity was left active. Details are in the activity journal." : "Неподтверждённая личность не оставлена активной. Подробности — в журнале."
-    };
-  }
-  const restarting = ["activating", "launching", "verifying", "rolling_back"].includes(phase);
-  return {
-    id: `switch:${transaction.id}:${phase}`, tone: "progress", step: restarting ? 2 : 1, stages: isEnglish ? ["Save", "Restart", "Verify"] : ["Сессия", "Перезапуск", "Проверка"], terminal: false,
-    eyebrow: restarting ? (isEnglish ? "RESTART · 2 OF 3" : "ПЕРЕЗАПУСК · 2 ИЗ 3") : (isEnglish ? "PREPARATION · 1 OF 3" : "ПОДГОТОВКА · 1 ИЗ 3"),
-    title: restarting ? (isEnglish ? "Starting Codex with the new profile" : "Запускаю Codex с новым профилем") : (isEnglish ? "Saving and checking the current session" : "Сохраняю и проверяю текущую сессию"),
-    detail: restarting ? (isEnglish ? "The new identity will be confirmed before the switch is committed." : "Новая личность будет проверена до фиксации переключения.") : (isEnglish ? "Authorization is changed only after the safety checks pass." : "Авторизация изменится только после успешных проверок.")
-  };
-}
-
-export function buildAuthProcessNotice(event: AuthEvent, isEnglish: boolean): ProcessNotice {
-  return event.success
-    ? {
-      id: `auth:${event.loginId}:success`, tone: "success", step: 3, stages: isEnglish ? ["Sign in", "Encrypt", "Ready"] : ["Вход", "Шифрование", "Готово"], terminal: true,
-      eyebrow: isEnglish ? "AUTHORIZATION SAVED" : "АВТОРИЗАЦИЯ СОХРАНЕНА",
-      title: event.account?.label ?? (isEnglish ? "Codex account added" : "Аккаунт Codex добавлен"),
-      detail: isEnglish ? "The encrypted profile is ready for future switches." : "Зашифрованный профиль готов к будущим переключениям."
-    }
-    : {
-      id: `auth:${event.loginId}:failed`, tone: "error", step: 1, stages: isEnglish ? ["Sign in", "Encrypt", "Ready"] : ["Вход", "Шифрование", "Готово"], terminal: true,
-      eyebrow: isEnglish ? "AUTHORIZATION NOT COMPLETED" : "АВТОРИЗАЦИЯ НЕ ЗАВЕРШЕНА",
-      title: isEnglish ? "The saved profiles were not changed" : "Сохранённые профили не изменены",
-      detail: isEnglish ? "Retry sign-in from the account manager." : "Повторите вход из менеджера аккаунтов."
-    };
-}
 
 function codexLoginMethodLabel(id: CodexLoginMethodId, isEnglish: boolean): string {
   const labels: Record<CodexLoginMethodId, [string, string]> = {
@@ -156,12 +101,13 @@ function codexLoginMethodLabel(id: CodexLoginMethodId, isEnglish: boolean): stri
 const demoSettings: AppSettings = {
   language: "ru",
   autoRefreshIntervalMs: 180_000,
+  trayRefreshIntervalMs: 60_000,
   privacyMode: false,
   confirmSwitch: true,
   desktopClosePolicy: "graceful-only",
   smartSwitchMode: "suggest",
   smartSwitchThresholdPercent: 10,
-  desktopNotifications: true,
+  notificationSoundEnabled: true,
   trayEnabled: false,
   autostartEnabled: false
 };
@@ -401,6 +347,8 @@ const cam: AppApi = window.cam ?? {
   minimizeWindow: async () => undefined,
   toggleMaximizeWindow: async () => undefined,
   closeWindow: async () => undefined,
+  showMainWindow: async () => undefined,
+  hideTrayPopover: async () => undefined,
   selectWorkspace: async () => ({
     codexPath: "browser-preview",
     activeCodexHome: "browser-preview",
@@ -651,6 +599,7 @@ const cam: AppApi = window.cam ?? {
   onSwitchTransaction: () => () => undefined,
   onAntigravityOAuthStep: () => () => undefined,
   onUpdateStatus: () => () => undefined
+  ,onAppNotification: () => () => undefined
 };
 
 function formatTime(value: number | null): string {
@@ -1770,13 +1719,43 @@ function AntigravityImportModal({
   );
 }
 
+let notificationAudioContext: AudioContext | null = null;
+let lastNotificationSoundAt = 0;
+
+async function playNotificationSound(tone: AppNotificationPayload["tone"]): Promise<void> {
+  if (tone === "progress" || document.visibilityState !== "visible") return;
+  const now = performance.now();
+  if (now - lastNotificationSoundAt < 420) return;
+  lastNotificationSoundAt = now;
+  try {
+    notificationAudioContext ??= new AudioContext();
+    if (notificationAudioContext.state === "suspended") await notificationAudioContext.resume();
+    const context = notificationAudioContext;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const frequencies = tone === "success" ? [660, 880] : tone === "warning" ? [520, 660] : [390, 310];
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(frequencies[0], context.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(frequencies[1], context.currentTime + 0.16);
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.035, context.currentTime + 0.018);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.34);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.36);
+  } catch {
+    // Sound is optional feedback; text and status remain authoritative.
+  }
+}
+
 function App() {
   const [accounts, setAccounts] = useState<ManagedAccount[]>([]);
   const [switchTransactions, setSwitchTransactions] = useState<SwitchTransaction[]>([]);
   const [switchHistory, setSwitchHistory] = useState<SwitchHistoryItem[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string>("Готов к работе");
-  const [processNotice, setProcessNotice] = useState<ProcessNotice | null>(null);
+  const [appNotifications, setAppNotifications] = useState<AppNotificationPayload[]>([]);
+  const [visibilityEpoch, setVisibilityEpoch] = useState(0);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "degraded" | "error">("loading");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<AppDiagnostics | null>(null);
@@ -1814,6 +1793,7 @@ function App() {
   const reloadSequenceRef = useRef(0);
   const language = settingsData?.language ?? "ru";
   const languageRef = useRef(language);
+  const settingsRef = useRef(settingsData);
   const uiText = getUiText(language);
   const isEnglish = language === "en";
   const shellText = {
@@ -1944,13 +1924,24 @@ function App() {
   useEffect(() => {
     document.documentElement.lang = language;
     languageRef.current = language;
-  }, [language]);
+    settingsRef.current = settingsData;
+  }, [language, settingsData]);
 
   useEffect(() => {
-    if (!processNotice?.terminal || processNotice.tone === "error") return;
-    const timer = window.setTimeout(() => setProcessNotice((current) => current?.id === processNotice.id ? null : current), 6500);
-    return () => window.clearTimeout(timer);
-  }, [processNotice]);
+    const onVisibilityChange = () => setVisibilityEpoch((value) => value + 1);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, []);
+
+  useEffect(() => {
+    if (document.visibilityState !== "visible") return;
+    const dismissible = appNotifications.filter((notice) => notice.timeoutType === "default" && notice.tone !== "error");
+    if (dismissible.length === 0) return;
+    const timers = dismissible.map((notice) => window.setTimeout(() => {
+      setAppNotifications((current) => current.filter((item) => item.key !== notice.key));
+    }, notice.tone === "progress" ? 8_500 : 7_000));
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [appNotifications, visibilityEpoch]);
 
   useEffect(() => {
     if (!inspectorOpen) return;
@@ -2058,7 +2049,6 @@ function App() {
     }
     const offAuth = cam.onAuthEvent((event: AuthEvent) => {
       setMessage(event.success ? "Аккаунт добавлен" : uiErrorMessage("Не удалось завершить вход"));
-      setProcessNotice(buildAuthProcessNotice(event, languageRef.current === "en"));
       setLoginWizard((current) => ({
         ...current,
         open: true,
@@ -2093,7 +2083,6 @@ function App() {
         recovery_required: "Требуется восстановление переключения"
       };
       setMessage(phaseMessage[transaction.phase] ?? `Переключение: ${transaction.phase}`);
-      setProcessNotice(buildSwitchProcessNotice(transaction, languageRef.current === "en"));
       if (["committed", "rolled_back", "failed", "recovery_required"].includes(transaction.status)) {
         void reload();
       }
@@ -2127,6 +2116,15 @@ function App() {
       setUpdateStatus(result);
       setMessage(result.message);
     });
+    const offAppNotification = cam.onAppNotification((notification) => {
+      setAppNotifications((current) => [
+        notification,
+        ...current.filter((item) => item.key !== notification.key)
+      ].slice(0, 3));
+      if (!notification.silent && settingsRef.current?.notificationSoundEnabled !== false) {
+        void playNotificationSound(notification.tone);
+      }
+    });
     return () => {
       offAuth();
       offAccountsUpdated();
@@ -2135,6 +2133,7 @@ function App() {
       offAntigravityOAuthResult();
       offAntigravityOAuthError();
       offUpdateStatus();
+      offAppNotification();
     };
   }, []);
 
@@ -3283,26 +3282,28 @@ function App() {
           </div>
         </header>
 
-        {processNotice ? (
-          <aside className={`process-notice is-${processNotice.tone}`} role={processNotice.tone === "error" ? "alert" : "status"} aria-live={processNotice.tone === "error" ? "assertive" : "polite"}>
-            <span className="process-notice-icon">
-              {processNotice.tone === "success" ? <CheckCircle2 /> : processNotice.tone === "error" ? <AlertTriangle /> : <Activity />}
-            </span>
-            <span className="process-notice-copy">
-              <span>{processNotice.eyebrow}</span>
-              <strong>{processNotice.title}</strong>
-              <small>{processNotice.detail}</small>
-            </span>
-            <button className="process-notice-close" onClick={() => setProcessNotice(null)} aria-label={isEnglish ? "Dismiss notification" : "Закрыть уведомление"}><X /></button>
-            <span className="process-notice-progress" aria-label={`${processNotice.step} / 3`}>
-              {processNotice.stages.map((label, index) => (
-                <span className={index + 1 <= processNotice.step ? "is-complete" : ""} key={label}>
-                  <i />
-                  <small>{label}</small>
+        {appNotifications.length > 0 ? (
+          <section className="process-notice-stack" aria-label={isEnglish ? "Application notifications" : "Уведомления приложения"}>
+            {appNotifications.map((notice) => (
+              <aside className={`process-notice is-${notice.tone}`} role={notice.tone === "error" ? "alert" : "status"} aria-live={notice.tone === "error" ? "assertive" : "polite"} key={notice.key}>
+                <span className="process-notice-icon">
+                  {notice.tone === "success" ? <CheckCircle2 /> : notice.tone === "warning" || notice.tone === "error" ? <AlertTriangle /> : <Activity />}
                 </span>
-              ))}
-            </span>
-          </aside>
+                <span className="process-notice-copy">
+                  <span>{notice.progress?.label ?? (notice.tone === "warning" ? (isEnglish ? "ATTENTION" : "ВНИМАНИЕ") : notice.tone === "error" ? (isEnglish ? "ACTION REQUIRED" : "НУЖНО ДЕЙСТВИЕ") : (isEnglish ? "CODEX MANAGER" : "CODEX MANAGER"))}</span>
+                  <strong>{notice.title}</strong>
+                  <small>{notice.body}</small>
+                </span>
+                <button className="process-notice-close" onClick={() => setAppNotifications((current) => current.filter((item) => item.key !== notice.key))} aria-label={isEnglish ? "Dismiss notification" : "Закрыть уведомление"}><X /></button>
+                {notice.progress ? (
+                  <span className="process-notice-progress" aria-label={`${Math.round(notice.progress.value * 100)}%`}>
+                    <span><small>{notice.progress.status}</small><b>{Math.round(notice.progress.value * 100)}%</b></span>
+                    <i><em style={{ width: `${Math.max(0, Math.min(100, notice.progress.value * 100))}%` }} /></i>
+                  </span>
+                ) : null}
+              </aside>
+            ))}
+          </section>
         ) : null}
 
         {showUpdateBanner ? (
@@ -3533,8 +3534,15 @@ function BridgeUnavailable() {
 }
 
 const root = createRoot(document.getElementById("root")!);
+const surface = new URLSearchParams(window.location.search).get("surface");
 root.render(
   <React.StrictMode>
-    {window.cam || import.meta.env.DEV ? <App /> : <BridgeUnavailable />}
+    {window.cam || import.meta.env.DEV
+      ? surface === "tray"
+        ? <TrayPopover api={cam} />
+        : surface === "tray-hover"
+          ? <TrayHoverPopover api={cam} />
+          : <App />
+      : <BridgeUnavailable />}
   </React.StrictMode>
 );

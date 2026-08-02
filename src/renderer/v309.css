@@ -368,12 +368,18 @@
   justify-content: center;
 }
 
-/* In-app counterpart of the native Windows toast. */
-.process-notice {
+/* In-app notification queue; no OS toast or Action Center channel. */
+.process-notice-stack {
   position: fixed;
   z-index: 220;
   top: 66px;
   right: 24px;
+  display: grid;
+  gap: 9px;
+  pointer-events: none;
+}
+
+.process-notice {
   display: grid;
   grid-template-columns: 38px minmax(0, 1fr) 28px;
   width: min(390px, calc(100vw - 32px));
@@ -386,12 +392,15 @@
   border-radius: 13px;
   background: linear-gradient(145deg, rgba(26, 22, 39, 0.98), rgba(13, 14, 20, 0.98));
   box-shadow: 0 22px 62px rgba(0, 0, 0, 0.5), 0 0 36px rgba(116, 76, 228, 0.11);
+  pointer-events: auto;
 }
 
 .process-notice.is-success { border-color: rgba(73, 211, 150, 0.25); }
+.process-notice.is-warning { border-color: rgba(255, 180, 94, 0.3); }
 .process-notice.is-error { border-color: rgba(255, 106, 133, 0.32); }
 .process-notice-icon { display: grid; grid-row: 1 / span 2; width: 38px; height: 38px; place-items: center; color: #b29eff; border: 1px solid rgba(157, 128, 255, 0.2); border-radius: 10px; background: rgba(119, 78, 226, 0.1); }
 .process-notice.is-success .process-notice-icon { color: #61dca4; border-color: rgba(73, 211, 150, 0.2); background: rgba(48, 157, 111, 0.09); }
+.process-notice.is-warning .process-notice-icon { color: #ffbd6a; border-color: rgba(255, 180, 94, 0.22); background: rgba(160, 102, 38, 0.1); }
 .process-notice.is-error .process-notice-icon { color: #ff778f; border-color: rgba(255, 106, 133, 0.22); background: rgba(160, 53, 73, 0.09); }
 .process-notice-icon svg { width: 17px; }
 .process-notice-copy { display: grid; min-width: 0; gap: 3px; }
@@ -401,9 +410,12 @@
 .process-notice-close { display: grid; width: 28px; height: 28px; place-items: center; color: #8f8997; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 8px; background: rgba(255, 255, 255, 0.025); cursor: pointer; }
 .process-notice-close:hover { color: #f1edf5; background: rgba(255, 255, 255, 0.06); }
 .process-notice-close svg { width: 14px; }
-.process-notice-progress { display: grid; grid-column: 2 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
-.process-notice-progress i { height: 3px; border-radius: 99px; background: rgba(255, 255, 255, 0.075); }
-.process-notice-progress i.is-complete { background: linear-gradient(90deg, #7955ee, #5bd8a1); box-shadow: 0 0 9px rgba(111, 91, 255, 0.22); }
+.process-notice-progress { display: grid; grid-column: 2 / -1; gap: 6px; }
+.process-notice-progress > span { display: flex; justify-content: space-between; gap: 10px; }
+.process-notice-progress small { color: #a69eaf; font-size: 8.5px; }
+.process-notice-progress b { color: #d8d1e5; font-size: 8.5px; font-variant-numeric: tabular-nums; }
+.process-notice-progress > i { display: block; height: 3px; overflow: hidden; border-radius: 99px; background: rgba(255, 255, 255, 0.075); }
+.process-notice-progress em { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7955ee, #5bd8a1); box-shadow: 0 0 9px rgba(111,91,255,.22); transition: width 300ms cubic-bezier(.2,.8,.2,1); }
 
 @media (max-width: 1180px) {
   .overview-v306 .overview-secondary-grid { grid-template-columns: minmax(0, 1fr) minmax(360px, 0.88fr); }
@@ -428,7 +440,7 @@
   .continuation-foot { align-items: stretch; flex-direction: column; }
   .continuation-guardrails { grid-template-columns: 1fr; }
   .overview-v306 .continuation-foot .recommendation-action { width: 100%; }
-  .process-notice { top: 58px; right: 12px; }
+  .process-notice-stack { top: 58px; right: 12px; }
 }
 
 @media (prefers-reduced-motion: no-preference) {

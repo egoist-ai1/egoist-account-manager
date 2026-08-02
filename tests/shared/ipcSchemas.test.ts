@@ -109,11 +109,18 @@ describe("IPC schemas", () => {
     expect(updateSettingsInputSchema.parse({ autoRefreshIntervalMs: 0 })).toEqual({
       autoRefreshIntervalMs: 0
     });
+    expect(updateSettingsInputSchema.parse({ trayRefreshIntervalMs: 60_000 })).toEqual({
+      trayRefreshIntervalMs: 60_000
+    });
+    expect(updateSettingsInputSchema.parse({ trayRefreshIntervalMs: 300_000 })).toEqual({
+      trayRefreshIntervalMs: 300_000
+    });
     expect(() => updateSettingsInputSchema.parse({ language: "de" })).toThrow();
   });
 
   it("rejects unsupported refresh intervals", () => {
     expect(() => updateSettingsInputSchema.parse({ language: "ru", autoRefreshIntervalMs: 120000 })).toThrow();
+    expect(() => updateSettingsInputSchema.parse({ trayRefreshIntervalMs: 120000 })).toThrow();
   });
 
   it("accepts optional privacy and switch confirmation booleans", () => {
@@ -124,7 +131,7 @@ describe("IPC schemas", () => {
         confirmSwitch: false,
         smartSwitchMode: "suggest",
         smartSwitchThresholdPercent: 15,
-        desktopNotifications: false
+        notificationSoundEnabled: false
       })
     ).toEqual({
       language: "ru",
@@ -132,7 +139,7 @@ describe("IPC schemas", () => {
       confirmSwitch: false,
       smartSwitchMode: "suggest",
       smartSwitchThresholdPercent: 15,
-      desktopNotifications: false
+      notificationSoundEnabled: false
     });
     expect(() => updateSettingsInputSchema.parse({ smartSwitchMode: "manual" })).toThrow();
     expect(() => updateSettingsInputSchema.parse({ smartSwitchThresholdPercent: 3 })).toThrow();

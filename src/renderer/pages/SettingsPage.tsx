@@ -1,8 +1,9 @@
-import { ChevronDown, RefreshCcw, ShieldCheck, SlidersHorizontal, Zap } from "lucide-react";
+import { ChevronDown, Gauge, RefreshCcw, ShieldCheck, SlidersHorizontal, Volume2, Zap } from "lucide-react";
 import type { AppSettings } from "../../shared/types";
 import { getUiText } from "../i18n";
 
 const intervals: AppSettings["autoRefreshIntervalMs"][] = [180_000, 600_000, 900_000, 0];
+const trayIntervals: AppSettings["trayRefreshIntervalMs"][] = [60_000, 180_000, 300_000, 600_000, 900_000, 0];
 
 function minutes(ms: number, language: AppSettings["language"]): string {
   if (ms === 0) return language === "en" ? "Off" : "Выкл";
@@ -91,9 +92,30 @@ export function SettingsPage({
             <div><strong>{isEnglish ? "Start with Windows" : "Запускать вместе с Windows"}</strong><span>{isEnglish ? "Keeps session snapshots protected after sign-in." : "Менеджер сразу продолжит защищать снимки сессии."}</span></div>
             <Toggle checked={settings?.autostartEnabled === true} disabled={disabled} label={isEnglish ? "Start with Windows" : "Запускать вместе с Windows"} onClick={() => onUpdate({ autostartEnabled: !settings?.autostartEnabled })} />
           </div>
+          <div className="settings-item settings-item-live-tray">
+            <div><strong><Gauge />{isEnglish ? "Live quota indicator" : "Живой индикатор лимитов"}</strong><span>{isEnglish ? "A dynamic percentage by the clock; click it for both quota windows." : "Динамический процент рядом с часами; по клику — оба окна лимитов."}</span></div>
+            <Toggle checked={settings?.trayEnabled === true} disabled={disabled} label={isEnglish ? "Live quota indicator" : "Живой индикатор лимитов"} onClick={() => onUpdate({ trayEnabled: !settings?.trayEnabled })} />
+          </div>
+          <div className={`settings-item settings-item-stack settings-tray-cadence ${settings?.trayEnabled ? "is-enabled" : ""}`}>
+            <div><strong>{isEnglish ? "Active account cadence" : "Частота активного аккаунта"}</strong><span>{isEnglish ? "Only the active profile is checked; fleet refresh stays independent." : "Проверяется только активный профиль; общее обновление работает отдельно."}</span></div>
+            <div className="settings-segments settings-segments-six" role="radiogroup" aria-label={isEnglish ? "Live tray refresh interval" : "Интервал живого индикатора"}>
+              {trayIntervals.map((interval) => (
+                <button
+                  key={interval}
+                  className={settings?.trayRefreshIntervalMs === interval ? "is-selected" : ""}
+                  role="radio"
+                  aria-checked={settings?.trayRefreshIntervalMs === interval}
+                  disabled={disabled || !settings?.trayEnabled}
+                  onClick={() => onUpdate({ trayRefreshIntervalMs: interval })}
+                >
+                  {minutes(interval, language)}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="settings-item">
-            <div><strong>{isEnglish ? "Keep in system tray" : "Оставлять в системном трее"}</strong><span>{isEnglish ? "Closing the window keeps local session protection running." : "Закрытие окна не останавливает локальную защиту сессии."}</span></div>
-            <Toggle checked={settings?.trayEnabled === true} disabled={disabled} label={isEnglish ? "Keep in tray" : "Оставлять в трее"} onClick={() => onUpdate({ trayEnabled: !settings?.trayEnabled })} />
+            <div><strong><Volume2 />{isEnglish ? "Notification sound" : "Звук уведомлений"}</strong><span>{isEnglish ? "A short in-app chime plays only for a result, warning or error." : "Короткий звук внутри приложения только для результата, предупреждения или ошибки."}</span></div>
+            <Toggle checked={settings?.notificationSoundEnabled === true} disabled={disabled} label={isEnglish ? "Notification sound" : "Звук уведомлений"} onClick={() => onUpdate({ notificationSoundEnabled: !settings?.notificationSoundEnabled })} />
           </div>
         </section>
 
@@ -110,10 +132,6 @@ export function SettingsPage({
             <div className="settings-item">
               <div><strong>{isEnglish ? "Privacy mode" : "Режим приватности"}</strong><span>{isEnglish ? "Masks emails and local paths." : "Скрывает email и локальные пути."}</span></div>
               <Toggle checked={settings?.privacyMode === true} disabled={disabled} label={isEnglish ? "Privacy mode" : "Режим приватности"} onClick={() => onUpdate({ privacyMode: !settings?.privacyMode })} />
-            </div>
-            <div className="settings-item">
-              <div><strong>{isEnglish ? "Windows notifications" : "Уведомления Windows"}</strong><span>{isEnglish ? "Warns about low quota without automatic switching." : "Предупреждает о низком лимите, но не переключает автоматически."}</span></div>
-              <Toggle checked={settings?.desktopNotifications === true} disabled={disabled} label={isEnglish ? "Windows notifications" : "Уведомления Windows"} onClick={() => onUpdate({ desktopNotifications: !settings?.desktopNotifications })} />
             </div>
             <div className="settings-item settings-item-stack">
               <div><strong>{isEnglish ? "Codex close policy" : "Закрытие Codex при переключении"}</strong><span>{isEnglish ? "Automatic mode closes only the exact verified Codex process tree if graceful close times out." : "Автоматический режим завершает только заранее проверенное дерево процессов Codex, если мягкое закрытие не сработало."}</span></div>

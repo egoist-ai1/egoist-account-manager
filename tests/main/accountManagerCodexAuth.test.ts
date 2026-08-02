@@ -259,6 +259,27 @@ describe.skipIf(process.platform !== "win32")("AccountManager Codex auth modes",
     }
   });
 
+  it("excludes an active tray probe from an overlapping fleet refresh", async () => {
+    const appDataDir = tempDir();
+    const store = new AccountStore(appDataDir);
+    const vault = new Vault(appDataDir);
+    const authJson = chatGptAuth("provider-tray", "tray@example.com", "stable");
+    const account = addChatGptAccount(store, vault, appDataDir, "tray", "tray@example.com", "provider-tray", authJson);
+    fs.mkdirSync(account.profileDir, { recursive: true });
+    fs.writeFileSync(path.join(account.profileDir, ".force-rate-error"), "1", "utf8");
+    const manager = new AccountManager(store, vault, appDataDir, installFakeCodex(appDataDir));
+    try {
+      const refreshed = await manager.refreshAllAccounts({ excludeAccountIds: new Set([account.id]) });
+      expect(refreshed.find((item) => item.id === account.id)).toMatchObject({
+        lastRefreshAt: null,
+        lastRefreshError: null
+      });
+    } finally {
+      await manager.shutdown();
+      store.close();
+    }
+  });
+
   it("does not rotate credentials during a quota refresh", async () => {
     const appDataDir = tempDir();
     const store = new AccountStore(appDataDir);

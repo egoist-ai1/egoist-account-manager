@@ -88,12 +88,22 @@ export const updateSettingsInputSchema = z.object({
       z.literal(900_000)
     ])
     .optional(),
+  trayRefreshIntervalMs: z
+    .union([
+      z.literal(0),
+      z.literal(60_000),
+      z.literal(180_000),
+      z.literal(300_000),
+      z.literal(600_000),
+      z.literal(900_000)
+    ])
+    .optional(),
   privacyMode: z.boolean().optional(),
   confirmSwitch: z.boolean().optional(),
   desktopClosePolicy: z.union([z.literal("graceful-only"), z.literal("exact-tree-fallback")]).optional(),
   smartSwitchMode: z.union([z.literal("off"), z.literal("suggest")]).optional(),
   smartSwitchThresholdPercent: z.number().int().min(5).max(50).optional(),
-  desktopNotifications: z.boolean().optional(),
+  notificationSoundEnabled: z.boolean().optional(),
   trayEnabled: z.boolean().optional(),
   autostartEnabled: z.boolean().optional()
 }).strict();

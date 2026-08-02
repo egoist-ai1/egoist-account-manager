@@ -12,6 +12,8 @@ const api: AppApi = {
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggleMaximize"),
   closeWindow: () => ipcRenderer.invoke("window:close"),
+  showMainWindow: () => ipcRenderer.invoke("window:showMain"),
+  hideTrayPopover: () => ipcRenderer.invoke("tray:hidePopover"),
   selectWorkspace: () => ipcRenderer.invoke("app:workspace:select"),
   refreshAccount: (accountId) => ipcRenderer.invoke("accounts:refresh", { accountId }),
   validateAuth: (accountId) => ipcRenderer.invoke("accounts:auth:validate", { accountId }),
@@ -90,6 +92,11 @@ const api: AppApi = {
     const listener = (_event: Electron.IpcRendererEvent, result: unknown) => callback(result as Awaited<ReturnType<AppApi["checkForUpdates"]>>);
     ipcRenderer.on("release:updateStatus", listener);
     return () => ipcRenderer.off("release:updateStatus", listener);
+  },
+  onAppNotification: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: Parameters<typeof callback>[0]) => callback(payload);
+    ipcRenderer.on("app:notification", listener);
+    return () => ipcRenderer.off("app:notification", listener);
   }
 };
 

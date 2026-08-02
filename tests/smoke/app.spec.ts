@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expect, test, _electron as electron, type Page } from "@playwright/test";
+import { expect, test, _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
+import { appVersion } from "../../src/shared/releaseNotes";
 
 const packagedPlaywrightEnabled = process.env.CAM_PACKAGED_PLAYWRIGHT === "1";
 
@@ -30,6 +31,13 @@ async function closeReleaseNotesIfVisible(page: Page) {
   }
 }
 
+async function closeTestApp(app: ElectronApplication) {
+  for (const page of app.windows()) {
+    await page.evaluate(() => window.cam?.updateSettings({ trayEnabled: false })).catch(() => undefined);
+  }
+  await app.close();
+}
+
 test("запускает приложение и показывает русскую навигацию", async () => {
   const userDataDir = tempUserData();
   const app = await electron.launch({
@@ -56,7 +64,7 @@ test("запускает приложение и показывает русск
     });
     expect(accountPanelMotion).toEqual({ opacity: "1", delay: "0s", animation: "none" });
   } finally {
-    await app.close();
+    await closeTestApp(app);
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });
@@ -199,7 +207,7 @@ test("3.0.10 сохраняет естественный поток, читае�
       expect(accountSurface!.visibleCapacity).toBeGreaterThanOrEqual(4);
     }
   } finally {
-    await app.close();
+    await closeTestApp(app);
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });
@@ -309,7 +317,7 @@ test("собранное приложение показывает Cockpit-style
     });
     expect(JSON.stringify(history)).not.toContain("refresh-secret-token");
   } finally {
-    await app.close();
+    await closeTestApp(app);
     fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     fs.rmSync(antigravityAppData, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     fs.rmSync(homeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
@@ -330,7 +338,7 @@ test("показывает интерфейс, если dev-server недост�
     await expect(nav.getByText("Данные", { exact: true })).toHaveCount(0);
     await expectServicesReady(page);
   } finally {
-    await app.close();
+    await closeTestApp(app);
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });
@@ -383,7 +391,7 @@ test("показывает рабочую консоль с двумя плат�
     expect(viewport.contentOverflowMode).toBe("hidden");
     expect(viewport.profileOverflowMode).toBe("auto");
   } finally {
-    await app.close();
+    await closeTestApp(app);
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });
@@ -406,7 +414,7 @@ test("release notes ведут в аккаунты и закрываются б�
     await expect(page.getByRole("heading", { name: /Аккаунты/ })).toBeVisible();
     await expect(page.locator(".rail-nav .is-active").getByText("Аккаунты")).toBeVisible();
   } finally {
-    await app.close();
+    await closeTestApp(app);
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });
@@ -431,13 +439,23 @@ test("настройки сохраняют реальные значения ч
       autoRefreshIntervalMs: 0
     });
     await settingsPanel.getByLabel("Интервал автообновления").getByRole("radio", { name: "3 мин", exact: true }).click();
+    const liveTrayToggle = settingsPanel.getByRole("switch", { name: "Живой индикатор лимитов" });
+    if (await liveTrayToggle.getAttribute("aria-checked") !== "true") await liveTrayToggle.click();
+    await settingsPanel.getByLabel("Интервал живого индикатора").getByRole("radio", { name: "1 мин", exact: true }).click();
+    const notificationSound = settingsPanel.getByRole("switch", { name: "Звук уведомлений" });
+    await notificationSound.click();
+    await notificationSound.click();
     await settingsPanel.locator(".settings-advanced").getByText("Интерфейс и дополнительные параметры").click();
+    await expect(settingsPanel.getByText("Уведомления Windows")).toHaveCount(0);
     const suggestions = settingsPanel.getByRole("switch", { name: "Советовать лучший аккаунт" });
     await suggestions.click();
     await suggestions.click();
 
     await expect.poll(async () => page.evaluate(() => window.cam!.getSettings())).toMatchObject({
       autoRefreshIntervalMs: 180_000,
+      trayRefreshIntervalMs: 60_000,
+      trayEnabled: true,
+      notificationSoundEnabled: true,
       smartSwitchMode: "suggest",
       language: "ru"
     });
@@ -448,7 +466,7 @@ test("настройки сохраняют реальные значения ч
       language: "en"
     });
   } finally {
-    await app.close();
+    await closeTestApp(app);
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });
@@ -480,7 +498,7 @@ test("собранное приложение запускает реальны�
       ]));
     }
   } finally {
-    await app.close();
+    await closeTestApp(app);
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });
@@ -501,7 +519,7 @@ test("3.0 packaged shell имеет доступные имена, keyboard focu
     await closeReleaseNotesIfVisible(page);
 
     const info = await page.evaluate(() => window.cam!.getAppInfo());
-    expect(info.version).toBe("3.1.0");
+    expect(info.version).toBe(appVersion);
 
     const expectedNavLabels = ["Обзор", "Аккаунты", "Активность", "Настройки"];
     const keyboardVisited: string[] = [];
@@ -540,7 +558,7 @@ test("3.0 packaged shell имеет доступные имена, keyboard focu
 
     const readiness = await page.evaluate(() => window.cam!.getReleaseReadiness());
     expect(readiness).toMatchObject({
-      version: "3.1.0",
+      version: appVersion,
       ready: true,
       signingEnabled: false,
       codeSignatureVerification: false
@@ -549,7 +567,7 @@ test("3.0 packaged shell имеет доступные имена, keyboard focu
     expect(readiness.artifacts.every((artifact) => artifact.exists)).toBe(true);
     expect(readiness.artifacts.every((artifact) => artifact.checksumListed)).toBe(true);
   } finally {
-    await app.close();
+    await closeTestApp(app);
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });
@@ -590,7 +608,7 @@ test("собранное приложение запускает реальны�
     expect(login.verificationUrl).toContain("http");
     expect(login.userCode?.length).toBeGreaterThan(0);
   } finally {
-    await app.close();
+    await closeTestApp(app);
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });

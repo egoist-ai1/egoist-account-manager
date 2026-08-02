@@ -71,11 +71,21 @@
 .process-notice-copy > strong { font-size: 13.5px; }
 .process-notice-copy > small { font-size: 10.5px; }
 .process-notice-progress { gap: 7px; }
-.process-notice-progress > span { display: grid; gap: 4px; min-width: 0; }
-.process-notice-progress i { display: block; height: 3px; border-radius: 99px; background: rgba(255,255,255,.075); }
-.process-notice-progress span.is-complete i { background: linear-gradient(90deg,#7955ee,#5bd8a1); box-shadow: 0 0 9px rgba(111,91,255,.22); }
-.process-notice-progress small { overflow: hidden; color: #817a8a; font-size: 8px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.process-notice-progress span.is-complete small { color: #bbb2c8; }
+.process-notice-progress > span { min-width: 0; }
+.process-notice-progress small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.settings-item-live-tray > div:first-child > strong,
+.content-settings .settings-item > div:first-child > strong:has(svg) { display: flex; align-items: center; gap: 7px; }
+.settings-item-live-tray strong svg,
+.content-settings .settings-item > div:first-child > strong svg { width: 14px; height: 14px; color: #9b7cff; }
+.settings-tray-cadence { background: linear-gradient(135deg,rgba(126,91,246,.055),rgba(255,255,255,.012)); }
+.settings-tray-cadence:not(.is-enabled) { opacity: .58; }
+.settings-segments.settings-segments-six { grid-template-columns: repeat(6,minmax(0,1fr)); }
+.settings-segments.settings-segments-six button { min-width: 0; padding-inline: 5px; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 1180px) {
+  .settings-segments.settings-segments-six { grid-template-columns: repeat(3,minmax(0,1fr)); }
+}
 
 .overview-operation-route { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 6px; margin-top: 10px; }
 .overview-operation-route > span { position: relative; display: grid; grid-template-columns: 22px minmax(0,1fr); align-items: center; min-width: 0; gap: 1px 7px; min-height: 50px; padding: 6px 7px; border: 1px solid rgba(99,220,165,.13); border-radius: 9px; background: linear-gradient(145deg,rgba(48,157,111,.055),rgba(255,255,255,.018)); }

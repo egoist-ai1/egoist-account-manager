@@ -1,0 +1,10 @@
+# 3.1.4 transparent tray checkpoint
+
+- Changed: passive hover теперь принудительно оставляет `html/body/#root` прозрачными только на `tray-hover` surface; внешний box-shadow, backdrop blur и декоративные glow удалены. Native tray glyph лишён периметральной рамки, однозначная `1` получила компактную форму и отдельный нижний state-rail. Версия поднята до exact local 3.1.4; добавлены release notes и обновлён staged Sandbox сценарий 3.1.3→3.1.4.
+- Why: реальный Windows screenshot показал непрозрачные чёрные corner gutters за rounded card и двусмысленный критический `1`, похожий на скобку.
+- How: CSS root-cause исправлен selector-scoped transparent canvas с более высоким приоритетом; лишние compositor effects удалены. Dependency-free BGRA renderer рисует тёмную rounded tile, pixel glyph и отдельный state rail; unit/render probes закрепляют геометрию.
+- Verification (2026-08-02): TypeScript pass; ESLint pass; 71 files / 339 tests pass включая soak1000; Playwright 15 pass / 4 intentional skips после Electron ABI rebuild; 252×144 corner alpha 4/4 equals zero; native 11 values/states × 4 DPI pass; 78/78 ASAR parity; isolated packaged startup pass; SHA-256 4/4. Independent outcome-reviewer verdict `pass`, no blockers.
+- Contracts: auth, session persistence, quotas, switching, rollback, in-app notifications and provider-window selection unchanged. Passive hover remains 252×144, click-through, non-focusable, action-free; click/context popup remains separate.
+- Durable context: promoted CTX-011; stable owners `ARCHITECTURE`, `APP_MAP`, `ROADMAP`, progress and release index updated.
+- Risks: exact EXE is unsigned; real Windows shell compositing/placement at 100/125/150/200% and Sandbox lifecycle 3.1.4 were not rerun. Four production-inspector Playwright scenarios remain intentionally unavailable; ASAR parity and isolated startup close that package boundary.
+- Next: with separate authorization, manually install exact 3.1.4 and inspect physical Windows tray at four DPI; run staged Sandbox 3.1.3→3.1.4 after unrelated Sandbox sessions are free; publish only as a separate approved action.

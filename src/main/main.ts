@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { BrowserWindow, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, powerMonitor, screen, shell, type IpcMainInvokeEvent } from "electron";
+import { BrowserWindow, Menu, Tray, app, clipboard, dialog, ipcMain, nativeImage, powerMonitor, screen, shell, type IpcMainInvokeEvent } from "electron";
 import { AccountStore } from "./db.js";
 import { Vault } from "./security.js";
 import { getAppDataDir, getDefaultCodexHome } from "./paths.js";
@@ -13,7 +13,7 @@ import { CodexCapabilityService } from "./services/codexCapabilityService.js";
 import { SettingsService } from "./services/settingsService.js";
 import { registerHealthIpc } from "./ipc/healthIpc.js";
 import { registerSettingsIpc } from "./ipc/settingsIpc.js";
-import type { AntigravityImportResult, AppDiagnostics, AppSettings, LoginStartResult } from "../shared/types.js";
+import type { AntigravityImportResult, AppDiagnostics, AppNotificationPayload, AppSettings, LoginStartResult, ManagedAccount } from "../shared/types.js";
 import { redactDiagnosticReport } from "../shared/diagnosticRedaction.js";
 import {
   antigravityCredentialPayloadImportInputSchema,
@@ -36,6 +36,8 @@ import {
 import { redactSensitiveText } from "../shared/redaction.js";
 import { selectSmartAccount } from "../shared/smartSelection.js";
 import { buildTrayAccountLabel } from "../shared/trayLabel.js";
+import { LIVE_TRAY_REPRESENTATIONS, buildLiveTraySnapshot, renderLiveTrayBitmap } from "../shared/liveTray.js";
+import { calculateTraySurfacePosition } from "../shared/traySurfacePosition.js";
 import { appVersion } from "../shared/releaseNotes.js";
 import { ReleaseService } from "./services/releaseService.js";
 import { getCrashReportsDir, writeCrashReport } from "./services/crashReportService.js";
@@ -58,33 +60,38 @@ import { WindowsDesktopLifecycleService } from "./services/windowsDesktopLifecyc
 import { QuotaAlertService } from "./services/quotaAlertService.js";
 import { DeviceCodeHandoffService } from "./services/deviceCodeHandoffService.js";
 import {
-  DesktopNotificationService,
+  InAppNotificationService,
   buildAuthNotification,
   buildQuotaNotification,
   buildSwitchNotification,
-  buildUpdateNotification,
-  createWindowsToastXml,
-  type DesktopNotificationPayload
-} from "./services/desktopNotificationService.js";
+  buildUpdateNotification
+} from "./services/inAppNotificationService.js";
 
 let mainWindow: BrowserWindow | null = null;
 let manager: AccountManager | null = null;
 let vault: Vault | null = null;
 let tray: Tray | null = null;
+let trayPopoverWindow: BrowserWindow | null = null;
+let trayHoverWindow: BrowserWindow | null = null;
 let isQuitting = false;
 let startupError: string | null = null;
 let settingsService: SettingsService | null = null;
 let logPath: string | null = null;
 let autoRefreshTimer: NodeJS.Timeout | null = null;
+let trayRefreshTimer: NodeJS.Timeout | null = null;
 let sessionSnapshotTimer: NodeJS.Timeout | null = null;
+let trayHoverShowTimer: NodeJS.Timeout | null = null;
+let trayHoverHideTimer: NodeJS.Timeout | null = null;
+let trayHoverRequested = false;
 let autoRefreshInFlight = false;
+let trayRefreshInFlight = false;
 let updaterService: UpdaterService | null = null;
 let codexCapabilityService: CodexCapabilityService | null = null;
 let desktopLifecycleService: WindowsDesktopLifecycleService | null = null;
 let quotaAlertService: QuotaAlertService | null = null;
 let antigravityGoogleLoginInFlight: Promise<unknown> | null = null;
 const deviceCodeHandoff = new DeviceCodeHandoffService(clipboard);
-const desktopNotificationService = new DesktopNotificationService();
+const inAppNotificationService = new InAppNotificationService();
 const antigravityGoogleOAuthSessions = new Map<string, {
   authorization: AntigravityGoogleOAuthAuthorization;
   expiresAt: number;
@@ -112,6 +119,9 @@ const allowedExternalHosts = new Set([
   "www.antigravity.google"
 ]);
 let currentRateLimitRefreshIntervalMs: AppSettings["autoRefreshIntervalMs"] = 180_000;
+let currentTrayRefreshIntervalMs: AppSettings["trayRefreshIntervalMs"] = 60_000;
+const trayHoverDwellMs = 240;
+const trayHoverExitMs = 120;
 
 function getWindowIconPath(): string {
   return app.isPackaged ? path.join(process.resourcesPath, "icon.png") : path.join(process.cwd(), "assets", "icon.png");
@@ -209,11 +219,12 @@ async function buildDiagnosticReport(appDataDir: string) {
     crashReportsDir: getCrashReportsDir(appDataDir),
     settings: settingsService ? {
       autoRefreshIntervalMs: settingsService.get().autoRefreshIntervalMs,
+      trayRefreshIntervalMs: settingsService.get().trayRefreshIntervalMs,
       privacyMode: settingsService.get().privacyMode,
       confirmSwitch: settingsService.get().confirmSwitch,
       smartSwitchMode: settingsService.get().smartSwitchMode,
       smartSwitchThresholdPercent: settingsService.get().smartSwitchThresholdPercent,
-      desktopNotifications: settingsService.get().desktopNotifications,
+      notificationSoundEnabled: settingsService.get().notificationSoundEnabled,
       desktopClosePolicy: settingsService.get().desktopClosePolicy,
       trayEnabled: settingsService.get().trayEnabled,
       autostartEnabled: settingsService.get().autostartEnabled
@@ -897,9 +908,19 @@ function registerIpc(appDataDir: string): void {
   handle("window:close", (event) => {
     BrowserWindow.fromWebContents(event.sender)?.close();
   });
+  handle("window:showMain", () => {
+    hideTrayHoverPopover();
+    trayPopoverWindow?.hide();
+    showMainWindow();
+  });
+  handle("tray:hidePopover", (event) => {
+    const source = BrowserWindow.fromWebContents(event.sender);
+    if (source && source === trayPopoverWindow) source.hide();
+  });
 }
 
 function showMainWindow(): void {
+  hideTrayHoverPopover();
   if (!mainWindow) {
     mainWindow = createWindow();
     return;
@@ -907,6 +928,214 @@ function showMainWindow(): void {
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
+}
+
+function broadcastAccountsUpdated(): void {
+  for (const window of [mainWindow, trayPopoverWindow, trayHoverWindow]) {
+    if (window && !window.isDestroyed()) window.webContents.send("accounts:updated");
+  }
+}
+
+function publishInAppNotification(payload: AppNotificationPayload): void {
+  const safePayload: AppNotificationPayload = {
+    ...payload,
+    title: redactSensitiveText(payload.title),
+    body: redactSensitiveText(payload.body)
+  };
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send("app:notification", safePayload);
+}
+
+function publishQuotaAlerts(accounts: ManagedAccount[]): void {
+  const settings = settingsService?.get();
+  const alerts = quotaAlertService?.evaluate(accounts, settings?.smartSwitchThresholdPercent ?? 10) ?? [];
+  for (const alert of alerts) {
+    const payload = inAppNotificationService.take(buildQuotaNotification(alert, settings?.language === "en"));
+    if (payload) publishInAppNotification(payload);
+  }
+}
+
+function createLiveTrayImage(): Electron.NativeImage {
+  const settings = settingsService?.get();
+  const snapshot = buildLiveTraySnapshot(manager?.list() ?? [], {
+    privacyMode: settings?.privacyMode,
+    language: settings?.language
+  });
+  const image = nativeImage.createEmpty();
+  for (const representation of LIVE_TRAY_REPRESENTATIONS) {
+    image.addRepresentation({
+      width: representation.pixelSize,
+      height: representation.pixelSize,
+      scaleFactor: representation.scaleFactor,
+      buffer: Buffer.from(renderLiveTrayBitmap(snapshot, representation.pixelSize))
+    });
+  }
+  return image.isEmpty() ? nativeImage.createFromPath(getWindowIconPath()) : image;
+}
+
+function loadTraySurface(window: BrowserWindow, surface: "tray" | "tray-hover"): void {
+  const packagedRendererPath = path.join(__dirname, "../renderer/index.html");
+  if (isDevelopmentRuntime) {
+    void window.loadURL(`http://127.0.0.1:5173/?surface=${surface}`).catch((error) => {
+      log("Failed to load tray dev renderer, falling back to packaged renderer", error);
+      if (fs.existsSync(packagedRendererPath)) void window.loadFile(packagedRendererPath, { query: { surface } });
+    });
+    return;
+  }
+  void window.loadFile(packagedRendererPath, { query: { surface } }).catch((error) => log("Failed to load tray renderer", error));
+}
+
+function createTrayPopoverWindow(): BrowserWindow {
+  if (trayPopoverWindow && !trayPopoverWindow.isDestroyed()) return trayPopoverWindow;
+  const window = new BrowserWindow({
+    width: 372,
+    height: 302,
+    minWidth: 372,
+    minHeight: 302,
+    maxWidth: 372,
+    maxHeight: 302,
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    backgroundColor: "#00000000",
+    title: `${productName} · Live`,
+    icon: getWindowIconPath(),
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true
+    }
+  });
+  window.on("blur", () => window.hide());
+  window.on("closed", () => {
+    if (trayPopoverWindow === window) trayPopoverWindow = null;
+  });
+  window.webContents.on("will-navigate", (event, url) => {
+    if (url !== window.webContents.getURL()) event.preventDefault();
+  });
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  loadTraySurface(window, "tray");
+  trayPopoverWindow = window;
+  return window;
+}
+
+function createTrayHoverWindow(): BrowserWindow {
+  if (trayHoverWindow && !trayHoverWindow.isDestroyed()) return trayHoverWindow;
+  const window = new BrowserWindow({
+    width: 252,
+    height: 144,
+    minWidth: 252,
+    minHeight: 144,
+    maxWidth: 252,
+    maxHeight: 144,
+    show: false,
+    frame: false,
+    transparent: true,
+    focusable: false,
+    resizable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    hasShadow: false,
+    backgroundColor: "#00000000",
+    title: `${productName} · Hover`,
+    icon: getWindowIconPath(),
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true
+    }
+  });
+  window.setIgnoreMouseEvents(true);
+  window.on("closed", () => {
+    if (trayHoverWindow === window) trayHoverWindow = null;
+  });
+  window.webContents.on("will-navigate", (event, url) => {
+    if (url !== window.webContents.getURL()) event.preventDefault();
+  });
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  loadTraySurface(window, "tray-hover");
+  trayHoverWindow = window;
+  return window;
+}
+
+function positionTraySurface(window: BrowserWindow, gap = 10): void {
+  if (!tray) return;
+  const trayBounds = tray.getBounds();
+  const display = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
+  const popupBounds = window.getBounds();
+  const position = calculateTraySurfacePosition(trayBounds, popupBounds, display.workArea, gap);
+  window.setPosition(position.x, position.y, false);
+}
+
+function toggleTrayPopover(): void {
+  const window = createTrayPopoverWindow();
+  if (window.isVisible()) {
+    window.hide();
+    return;
+  }
+  const show = () => {
+    positionTraySurface(window);
+    window.show();
+    window.focus();
+    window.webContents.send("accounts:updated");
+  };
+  if (window.webContents.isLoadingMainFrame()) window.webContents.once("did-finish-load", show);
+  else show();
+}
+
+function clearTrayHoverTimers(): void {
+  if (trayHoverShowTimer) clearTimeout(trayHoverShowTimer);
+  if (trayHoverHideTimer) clearTimeout(trayHoverHideTimer);
+  trayHoverShowTimer = null;
+  trayHoverHideTimer = null;
+}
+
+function hideTrayHoverPopover(): void {
+  trayHoverRequested = false;
+  clearTrayHoverTimers();
+  if (trayHoverWindow && !trayHoverWindow.isDestroyed()) trayHoverWindow.hide();
+}
+
+function showTrayHoverPopover(): void {
+  if (!trayHoverRequested || !tray) return;
+  const window = createTrayHoverWindow();
+  const show = () => {
+    if (!trayHoverRequested || window.isDestroyed()) return;
+    positionTraySurface(window, 8);
+    window.webContents.send("accounts:updated");
+    window.showInactive();
+  };
+  if (window.webContents.isLoadingMainFrame()) window.webContents.once("did-finish-load", show);
+  else show();
+}
+
+function scheduleTrayHoverShow(): void {
+  trayHoverRequested = true;
+  if (trayHoverHideTimer) clearTimeout(trayHoverHideTimer);
+  trayHoverHideTimer = null;
+  if (trayHoverWindow?.isVisible() || trayHoverShowTimer) return;
+  trayHoverShowTimer = setTimeout(() => {
+    trayHoverShowTimer = null;
+    showTrayHoverPopover();
+  }, trayHoverDwellMs);
+}
+
+function scheduleTrayHoverHide(): void {
+  trayHoverRequested = false;
+  if (trayHoverShowTimer) clearTimeout(trayHoverShowTimer);
+  trayHoverShowTimer = null;
+  if (trayHoverHideTimer) clearTimeout(trayHoverHideTimer);
+  trayHoverHideTimer = setTimeout(() => {
+    trayHoverHideTimer = null;
+    if (trayHoverWindow && !trayHoverWindow.isDestroyed()) trayHoverWindow.hide();
+  }, trayHoverExitMs);
 }
 
 function updateTrayMenu(): void {
@@ -917,10 +1146,20 @@ function updateTrayMenu(): void {
   const best = recommendation ? accounts.find((account) => account.id === recommendation.accountId) : null;
   const privacyMode = settingsService?.get().privacyMode === true;
 
-  tray.setToolTip(`${productName}${active ? ` · ${active.label}` : ""}`);
+  tray.setImage(createLiveTrayImage());
+  // The branded passive hover surface replaces the small native gray tooltip.
+  tray.setToolTip("");
+  if (trayHoverWindow && !trayHoverWindow.isDestroyed() && !trayHoverWindow.webContents.isLoadingMainFrame()) {
+    trayHoverWindow.webContents.send("accounts:updated");
+  }
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: active ? `Активный: ${active.label}` : "Активный аккаунт не выбран", enabled: false },
+      {
+        label: active
+          ? (privacyMode ? "Активный профиль выбран" : `Активный: ${active.label}`)
+          : "Активный аккаунт не выбран",
+        enabled: false
+      },
       { type: "separator" },
       {
         label: best ? `Умный выбор: ${best.label}` : "Умный выбор недоступен",
@@ -958,8 +1197,14 @@ function updateTrayMenu(): void {
 
 function createTray(): void {
   if (tray) return;
-  tray = new Tray(getWindowIconPath());
-  tray.on("click", showMainWindow);
+  tray = new Tray(createLiveTrayImage());
+  tray.on("mouse-enter", scheduleTrayHoverShow);
+  tray.on("mouse-move", scheduleTrayHoverShow);
+  tray.on("mouse-leave", scheduleTrayHoverHide);
+  tray.on("click", () => {
+    hideTrayHoverPopover();
+    toggleTrayPopover();
+  });
   updateTrayMenu();
 }
 
@@ -968,6 +1213,11 @@ function applyDesktopIntegrationSettings(settings: AppSettings): void {
     createTray();
     updateTrayMenu();
   } else if (tray) {
+    hideTrayHoverPopover();
+    trayHoverWindow?.destroy();
+    trayHoverWindow = null;
+    trayPopoverWindow?.destroy();
+    trayPopoverWindow = null;
     tray.destroy();
     tray = null;
   }
@@ -977,49 +1227,6 @@ function applyDesktopIntegrationSettings(settings: AppSettings): void {
       openAtLogin: settings.autostartEnabled,
       path: process.execPath
     });
-  }
-}
-
-function notify(payload: DesktopNotificationPayload): void {
-  if (settingsService?.get().desktopNotifications === false || !Notification.isSupported()) return;
-  const safePayload = {
-    ...payload,
-    title: redactSensitiveText(payload.title),
-    body: redactSensitiveText(payload.body)
-  };
-  const showBasicNotification = (): void => {
-    const fallback = new Notification({
-      title: safePayload.title,
-      body: safePayload.body,
-      silent: safePayload.silent,
-      timeoutType: safePayload.timeoutType,
-      icon: getWindowIconPath()
-    });
-    fallback.on("click", showMainWindow);
-    fallback.on("failed", (_event, error) => log("Desktop notification failed", error));
-    fallback.show();
-  };
-
-  try {
-    if (process.platform !== "win32") {
-      showBasicNotification();
-      return;
-    }
-    const notification = new Notification({
-      toastXml: createWindowsToastXml(safePayload, getWindowIconPath())
-    });
-    let fellBack = false;
-    notification.on("click", showMainWindow);
-    notification.on("failed", (_event, error) => {
-      log("Branded Windows notification failed; using native fallback", error);
-      if (fellBack) return;
-      fellBack = true;
-      showBasicNotification();
-    });
-    notification.show();
-  } catch (error) {
-    log("Branded Windows notification could not be created; using native fallback", error);
-    showBasicNotification();
   }
 }
 
@@ -1036,13 +1243,57 @@ function startAutoRefresh(intervalMs: AppSettings["autoRefreshIntervalMs"] = cur
   }, currentRateLimitRefreshIntervalMs);
 }
 
+function startTrayRefresh(intervalMs: AppSettings["trayRefreshIntervalMs"] = currentTrayRefreshIntervalMs): void {
+  currentTrayRefreshIntervalMs = intervalMs;
+  if (trayRefreshTimer) clearInterval(trayRefreshTimer);
+  trayRefreshTimer = null;
+  updateTrayMenu();
+  if (settingsService?.get().trayEnabled !== true || intervalMs <= 0) {
+    log("Live tray refresh disabled");
+    return;
+  }
+  trayRefreshTimer = setInterval(() => {
+    void refreshActiveTrayAccount("timer");
+  }, intervalMs);
+  log(`Live tray refresh interval: ${intervalMs}ms`);
+}
+
+async function refreshActiveTrayAccount(reason: "timer" | "resume" | "manual"): Promise<void> {
+  if (!manager || trayRefreshInFlight || autoRefreshInFlight) return;
+  const active = manager.list().find((account) => account.isActive);
+  if (!active) {
+    updateTrayMenu();
+    return;
+  }
+  const ageSeconds = active.lastRefreshAt ? Math.max(0, Math.floor(Date.now() / 1000) - active.lastRefreshAt) : Number.POSITIVE_INFINITY;
+  const minimumAgeSeconds = Math.max(15, Math.floor(currentTrayRefreshIntervalMs / 1000) - 5);
+  if (reason !== "manual" && ageSeconds < minimumAgeSeconds) {
+    updateTrayMenu();
+    return;
+  }
+  trayRefreshInFlight = true;
+  try {
+    await manager.refreshAccount(active.id);
+    const refreshed = manager.list();
+    publishQuotaAlerts(refreshed);
+    broadcastAccountsUpdated();
+    updateTrayMenu();
+    log(`Live tray active quota refreshed: ${reason}`);
+  } catch (error) {
+    updateTrayMenu();
+    log(`Live tray active quota refresh failed: ${reason}`, error);
+  } finally {
+    trayRefreshInFlight = false;
+  }
+}
+
 function syncActiveCodexSession(reason: string): void {
   if (!manager) return;
   try {
     const result = manager.syncActiveCodexSession();
     if (result.status === "updated") {
       log(`Active Codex session snapshot updated: ${reason}`);
-      mainWindow?.webContents.send("accounts:updated");
+      broadcastAccountsUpdated();
       updateTrayMenu();
     }
   } catch (error) {
@@ -1068,7 +1319,13 @@ async function refreshAllRateLimits(reason: "auto" | "manual") {
   }
 
   const accounts = manager.list();
-  const refreshableAccounts = accounts;
+  const trayActiveAccountId = trayRefreshInFlight
+    ? accounts.find((account) => account.isActive)?.id ?? null
+    : null;
+  const excludedAccountIds = trayActiveAccountId ? new Set([trayActiveAccountId]) : undefined;
+  const refreshableAccounts = trayActiveAccountId
+    ? accounts.filter((account) => account.id !== trayActiveAccountId)
+    : accounts;
   if (refreshableAccounts.length === 0) return accounts;
   autoRefreshInFlight = true;
   try {
@@ -1077,8 +1334,9 @@ async function refreshAllRateLimits(reason: "auto" | "manual") {
       error: account.lastRefreshErrorAt ?? null
     }]));
     log(`${reason === "auto" ? "Auto-refreshing" : "Refreshing"} account limits for ${refreshableAccounts.length} account(s)`);
-    const refreshed = await manager.refreshAllAccounts();
-    mainWindow?.webContents.send("accounts:updated");
+    if (trayActiveAccountId) log(`Fleet refresh excludes active tray probe already in flight: ${trayActiveAccountId}`);
+    const refreshed = await manager.refreshAllAccounts({ excludeAccountIds: excludedAccountIds });
+    broadcastAccountsUpdated();
     const failedCount = refreshed.filter((account) => account.lastRefreshErrorAt != null && account.lastRefreshErrorAt !== beforeRefresh.get(account.id)?.error).length;
     const updatedCount = refreshed.filter((account) => account.lastRefreshAt != null && account.lastRefreshAt !== beforeRefresh.get(account.id)?.success).length;
     const skippedCount = Math.max(0, refreshed.length - failedCount - updatedCount);
@@ -1088,13 +1346,8 @@ async function refreshAllRateLimits(reason: "auto" | "manual") {
     if (settings?.smartSwitchMode !== "off" && recommendation) {
       log(`Smart suggestion: ${recommendation.accountEmail}. Reason=${recommendation.reason}`);
     }
-    if (settings?.desktopNotifications !== false) {
-      const alerts = quotaAlertService?.evaluate(refreshed, settings?.smartSwitchThresholdPercent ?? 10) ?? [];
-      for (const alert of alerts) {
-        const payload = desktopNotificationService.take(buildQuotaNotification(alert, settings?.language === "en"));
-        if (payload) notify(payload);
-      }
-    }
+    publishQuotaAlerts(refreshed);
+    updateTrayMenu();
     return refreshed;
   } catch (error) {
     log(`${reason === "auto" ? "Auto-refresh" : "Manual refresh"} failed`, error);
@@ -1152,10 +1405,10 @@ if (!gotLock) {
       {
         onUpdateAvailable: (result) => {
           if (!result.version) return;
-          const payload = desktopNotificationService.take(
+          const payload = inAppNotificationService.take(
             buildUpdateNotification(result.version, settingsService?.get().language === "en")
           );
-          if (payload) notify(payload);
+          if (payload) publishInAppNotification(payload);
         }
       }
     );
@@ -1185,29 +1438,31 @@ if (!gotLock) {
         getDesktopClosePolicy: () => settingsService?.get().desktopClosePolicy ?? "graceful-only"
       });
       currentRateLimitRefreshIntervalMs = settingsService.get().autoRefreshIntervalMs;
+      currentTrayRefreshIntervalMs = settingsService.get().trayRefreshIntervalMs;
       registerSettingsIpc(settingsService, (settings) => {
         startAutoRefresh(settings.autoRefreshIntervalMs);
         applyDesktopIntegrationSettings(settings);
+        startTrayRefresh(settings.trayRefreshIntervalMs);
         log(`Auto-refresh interval updated: ${settings.autoRefreshIntervalMs}ms`);
       }, assertTrustedSender);
       manager.on("auth-event", (event) => {
         mainWindow?.webContents.send("auth:event", event);
-        const payload = desktopNotificationService.take(buildAuthNotification(event, settingsService?.get().language === "en"));
-        if (payload) notify(payload);
+        const payload = inAppNotificationService.take(buildAuthNotification(event, settingsService?.get().language === "en"));
+        if (payload) publishInAppNotification(payload);
       });
       manager.on("accounts-updated", () => {
-        mainWindow?.webContents.send("accounts:updated");
+        broadcastAccountsUpdated();
         updateTrayMenu();
       });
       manager.on("switch-transaction", (event) => {
         mainWindow?.webContents.send("switch:transaction", event);
         const targetLabel = manager?.list().find((account) => account.id === event.transaction.targetAccountId)?.label ?? null;
-        const payload = desktopNotificationService.take(buildSwitchNotification(
+        const payload = inAppNotificationService.take(buildSwitchNotification(
           event.transaction,
           targetLabel,
           settingsService?.get().language === "en"
         ));
-        if (payload) notify(payload);
+        if (payload) publishInAppNotification(payload);
       });
       manager.on("log", (message) => log(String(message)));
       const reconciledSwitches = await manager.recoverInterruptedSwitches();
@@ -1225,6 +1480,7 @@ if (!gotLock) {
       startSessionSnapshotSync();
       startAutoRefresh(currentRateLimitRefreshIntervalMs);
       applyDesktopIntegrationSettings(settingsService.get());
+      startTrayRefresh(currentTrayRefreshIntervalMs);
       log("Application services initialized");
     } catch (error) {
       startupError = error instanceof Error ? error.message : String(error);
@@ -1241,8 +1497,18 @@ if (!gotLock) {
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow();
     });
-    powerMonitor.on("suspend", () => syncActiveCodexSession("system-suspend"));
-    powerMonitor.on("lock-screen", () => syncActiveCodexSession("screen-lock"));
+    powerMonitor.on("suspend", () => {
+      hideTrayHoverPopover();
+      syncActiveCodexSession("system-suspend");
+    });
+    powerMonitor.on("lock-screen", () => {
+      hideTrayHoverPopover();
+      syncActiveCodexSession("screen-lock");
+    });
+    powerMonitor.on("resume", () => {
+      syncActiveCodexSession("system-resume");
+      void refreshActiveTrayAccount("resume");
+    });
   });
 
   app.on("child-process-gone", (_event, details) => {
@@ -1255,11 +1521,17 @@ if (!gotLock) {
   app.on("before-quit", () => {
     isQuitting = true;
     if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+    if (trayRefreshTimer) clearInterval(trayRefreshTimer);
     if (sessionSnapshotTimer) clearInterval(sessionSnapshotTimer);
     deviceCodeHandoff.dispose();
     syncActiveCodexSession("before-quit");
     tray?.destroy();
     tray = null;
+    hideTrayHoverPopover();
+    trayHoverWindow?.destroy();
+    trayHoverWindow = null;
+    trayPopoverWindow?.destroy();
+    trayPopoverWindow = null;
     void manager?.shutdown().catch((error) => log("Failed to stop Codex child processes", error));
   });
 

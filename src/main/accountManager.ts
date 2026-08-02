@@ -1091,10 +1091,14 @@ export class AccountManager extends EventEmitter {
     }
   }
 
-  async refreshAllAccounts(): Promise<ManagedAccount[]> {
+  async refreshAllAccounts(options: { excludeAccountIds?: ReadonlySet<string> } = {}): Promise<ManagedAccount[]> {
     const accounts = this.store.list();
     const refreshed: ManagedAccount[] = [];
     for (const account of accounts) {
+      if (options.excludeAccountIds?.has(account.id)) {
+        refreshed.push(this.store.get(account.id) ?? account);
+        continue;
+      }
       if (account.platform === "codex" && account.status === "error" && isCodexProfileLoginError(account.statusReason ?? "")) {
         refreshed.push(account);
         continue;

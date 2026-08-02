@@ -1,7 +1,7 @@
 # Codex Account Manager — status
 
-- Last updated: `2026-08-02T15:06:44Z`
-- Version/revision: `3.1.0`; Git `codex/commercial-v1-antigravity` based on `bec1dee`; release commit/tag publication pending.
+- Last updated: `2026-08-02T15:50:41Z`
+- Version/revision: `3.1.0`; tag `v3.1.0` at `25f882c`; [stable GitHub Release published](https://github.com/egoistgorbachev/codex-account-manager/releases/tag/v3.1.0).
 - Stage: `active`
 
 ## Observable outcome
@@ -10,7 +10,7 @@
 
 ## Current milestone
 
-- Milestone: exact 3.1.0 прошла source, UI и package gates с независимым `SHIP` для ручного GitHub Release; silent/high-trust установка остаётся закрыта до Authenticode.
+- Milestone: exact 3.1.0 опубликована как stable manual GitHub Release после двух зелёных CI-runs на `main` и tag; silent/high-trust установка остаётся закрыта до Authenticode.
 - Active spec: [`docs/product-3.0-spec-2026-07-29.md`](./docs/product-3.0-spec-2026-07-29.md)
 - Active ticket: [`docs/product-3.0-tickets-2026-07-29.md`](./docs/product-3.0-tickets-2026-07-29.md), базовые T00–T14 и hardening T15–T23 завершены.
 
@@ -25,12 +25,13 @@
 
 ## Next safe action
 
-1. Зафиксировать release commit, опубликовать tag/GitHub Release `v3.1.0`, дождаться зелёного CI; затем выполнить clean-VM/manual-account acceptance и отдельно решать Authenticode/RFC3161.
+1. Выполнить clean-VM/manual-account acceptance на опубликованном installer/portable и отдельно решать Authenticode/RFC3161 перед silent/high-trust доставкой.
 
 ## Verification
 
 | Date (UTC) | Check | Result | Evidence |
 | --- | --- | --- | --- |
+| 2026-08-02 | 3.1.0 public release gate | pass; stable `v3.1.0`, 5 assets uploaded, public `releases/latest` resolves correctly, tag CI green | [GitHub Release](https://github.com/egoistgorbachev/codex-account-manager/releases/tag/v3.1.0); CI runs `30754796564` and `30755079295`. |
 | 2026-08-02 | 3.1.0 exact source/package gate | pass; independent `SHIP`; manual GitHub Release ready | [`docs/releases/3.1.0.md`](./docs/releases/3.1.0.md): 69/323 tests, smoke 11/4, startup 4/4, 76/76 ASAR parity, 0 orphan bundles and exact hashes. |
 | 2026-08-02 | 3.0.10 exact source/package gate | pass; independent `SHIP`; local/manual ready | [`artifacts/3.0.10/verification/VERIFICATION.md`](./artifacts/3.0.10/verification/VERIFICATION.md): 69/323 tests, smoke 11 passed / 4 intentional skips, isolated startup 4/4, 124/124 ASAR parity, exact hashes. |
 | 2026-08-02 | 3.0.9 exact source/package gate | pass; independent `SHIP`; local/manual ready | [`artifacts/3.0.9/verification/VERIFICATION.md`](./artifacts/3.0.9/verification/VERIFICATION.md): 68/317 tests, smoke 9 passed / 4 intentional skips, 4/4 exact startup cleanup, 120/120 ASAR parity, exact hashes. |

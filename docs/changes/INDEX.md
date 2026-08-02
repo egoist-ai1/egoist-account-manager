@@ -4,6 +4,7 @@
 
 ## Recent notes
 
+- [2026-08-02T155041Z-v3-1-0-publication](./2026-08-02T155041Z-v3-1-0-publication.md)
 - [2026-08-02T150644Z-v3-1-0-official-auth-release](./2026-08-02T150644Z-v3-1-0-official-auth-release.md)
 - [2026-08-02T134857Z-v3-0-10-current-session-viewport](./2026-08-02T134857Z-v3-0-10-current-session-viewport.md)
 - [2026-08-02T125858Z-v3-0-9-continuation-notifications](./2026-08-02T125858Z-v3-0-9-continuation-notifications.md)
@@ -13,10 +14,9 @@
 - [2026-08-01T191521Z-v3-0-5-dense-ui-notifications](./2026-08-01T191521Z-v3-0-5-dense-ui-notifications.md)
 - [2026-08-01T183533Z-v3-0-4-account-repair-control-plane](./2026-08-01T183533Z-v3-0-4-account-repair-control-plane.md)
 - [2026-08-01T172024Z-v3-0-3-session-quota-ui](./2026-08-01T172024Z-v3-0-3-session-quota-ui.md)
-- [2026-07-31T170435Z-continuity-baseline](./2026-07-31T170435Z-continuity-baseline.md)
 
 ## Archive
 
-- No archived notes yet.
+- [2026/07](./archive/2026/07/) - 1 notes
 
-Hot set: 10. Archived: 0.
+Hot set: 10. Archived: 1.

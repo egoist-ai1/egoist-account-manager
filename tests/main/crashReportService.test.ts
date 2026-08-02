@@ -22,4 +22,17 @@ describe("crashReportService", () => {
     expect(report.message).toContain('"password":"[скрыто]"');
     expect(report.message).not.toContain("super-secret");
   });
+
+  it("redacts account identity and local user paths from crash text", () => {
+    const text = sanitizeCrashText(
+      "Refresh failed for user@example.com at C:\\Users\\EGOIST\\AppData\\Roaming\\Codex\\auth.json accountId=acc_1234567890abcdef"
+    );
+
+    expect(text).toContain("u***@example.com");
+    expect(text).toContain("C:\\Users\\[user]\\AppData\\Roaming\\Codex\\auth.json");
+    expect(text).toContain("accountId=[идентификатор]");
+    expect(text).not.toContain("user@example.com");
+    expect(text).not.toContain("EGOIST");
+    expect(text).not.toContain("acc_1234567890abcdef");
+  });
 });

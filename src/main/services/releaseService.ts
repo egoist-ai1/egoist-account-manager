@@ -13,6 +13,7 @@ interface ReleaseServiceOptions {
       publish?: unknown;
       win?: {
         signAndEditExecutable?: boolean;
+        signExecutable?: boolean;
         verifyUpdateCodeSignature?: boolean;
       };
     };
@@ -21,10 +22,10 @@ interface ReleaseServiceOptions {
 }
 
 const artifactNames: Array<{ kind: ReleaseArtifactKind; label: string; fileName: (version: string, productName: string) => string }> = [
-  { kind: "installer", label: "Установщик NSIS", fileName: (version, productName) => `${productName} Setup ${version}.exe` },
-  { kind: "portable", label: "Portable EXE", fileName: (version, productName) => `${productName} ${version}.exe` },
+  { kind: "installer", label: "Установщик NSIS", fileName: (version, productName) => `${productName.replace(/\s+/g, "-")}-Setup-${version}.exe` },
+  { kind: "portable", label: "Portable EXE", fileName: (version, productName) => `${productName.replace(/\s+/g, "-")}-${version}.exe` },
   { kind: "latestYml", label: "Манифест обновлений", fileName: () => "latest.yml" },
-  { kind: "blockmap", label: "Blockmap установщика", fileName: (version, productName) => `${productName} Setup ${version}.exe.blockmap` },
+  { kind: "blockmap", label: "Blockmap установщика", fileName: (version, productName) => `${productName.replace(/\s+/g, "-")}-Setup-${version}.exe.blockmap` },
   { kind: "checksums", label: "SHA256SUMS", fileName: (version) => `SHA256SUMS-${version}.txt` }
 ];
 
@@ -44,9 +45,10 @@ export class ReleaseService {
     const artifacts = artifactNames.map((artifact) => this.getArtifactStatus(artifact.kind, artifact.label, artifact.fileName(this.options.version, this.options.productName), checksums));
     const requiredReady = artifacts.every((artifact) => artifact.exists && (artifact.kind === "checksums" || artifact.checksumListed));
     const updateFeedConfigured = this.hasUpdateFeed();
-    const signingEnabled = this.options.packageConfig?.build?.win?.signAndEditExecutable === true;
+    const signingEnabled = this.options.packageConfig?.build?.win?.signExecutable === true;
     const codeSignatureVerification = this.options.packageConfig?.build?.win?.verifyUpdateCodeSignature === true;
-    const ready = requiredReady && updateFeedConfigured && signingEnabled && codeSignatureVerification;
+    const signed = signingEnabled && codeSignatureVerification;
+    const ready = requiredReady;
 
     return {
       version: this.options.version,
@@ -57,8 +59,12 @@ export class ReleaseService {
       codeSignatureVerification,
       ready,
       summary: ready
-        ? "Релиз готов: артефакты, обновления и подпись настроены."
-        : "Релиз собран локально, но для публичного канала нужно настроить подпись и update-feed.",
+        ? signed && updateFeedConfigured
+          ? "Релиз готов: артефакты, обновления и подпись настроены."
+          : "Релиз готов: артефакты и SHA256 проверены; GitHub Releases используется для ручной установки без скрытого запуска EXE."
+        : updateFeedConfigured
+          ? "Релиз собран не полностью: проверь артефакты."
+          : "Релиз собран локально, но GitHub Releases ещё не настроен.",
       artifacts
     };
   }

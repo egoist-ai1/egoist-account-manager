@@ -90,10 +90,19 @@ describe("database migrations", () => {
       expect(names).toContain("rate_limit_snapshots");
       expect(names).toContain("settings");
       expect(names).toContain("account_tags");
+      expect(names).toContain("antigravity_account_details");
+      expect(names).toContain("switch_transactions");
       expect(ledger).toEqual([
         { version: 1, name: "initial_accounts_settings" },
         { version: 2, name: "v2_switch_limits_tags" },
-        { version: 3, name: "v2_account_metadata" }
+        { version: 3, name: "v2_account_metadata" },
+        { version: 4, name: "v3_platform_accounts" },
+        { version: 5, name: "v3_codex_auth_identity" },
+        { version: 6, name: "v3_auth_drift_candidates" },
+        { version: 7, name: "v3_switch_transactions" },
+        { version: 8, name: "v3_legacy_identity_review" },
+        { version: 9, name: "v3_quota_refresh_health" },
+        { version: 10, name: "v31_storage_invariants" }
       ]);
     } finally {
       store.close();
@@ -108,7 +117,14 @@ describe("database migrations", () => {
     expect(readLedger(dir)).toEqual([
       { version: 1, name: "initial_accounts_settings" },
       { version: 2, name: "v2_switch_limits_tags" },
-      { version: 3, name: "v2_account_metadata" }
+      { version: 3, name: "v2_account_metadata" },
+      { version: 4, name: "v3_platform_accounts" },
+      { version: 5, name: "v3_codex_auth_identity" },
+      { version: 6, name: "v3_auth_drift_candidates" },
+      { version: 7, name: "v3_switch_transactions" },
+      { version: 8, name: "v3_legacy_identity_review" },
+      { version: 9, name: "v3_quota_refresh_health" },
+      { version: 10, name: "v31_storage_invariants" }
     ]);
   });
 
@@ -168,18 +184,49 @@ describe("database migrations", () => {
         label: "Legacy Plus",
         email: "legacy@example.com",
         planType: "plus",
+        platform: "codex",
         isActive: true,
-        status: "active",
+        authMode: null,
+        credentialState: "needs_review",
+        status: "error",
         primaryUsedPercent: 42,
         notes: "kept note"
       });
       expect(store.getSetting("privacyMode")).toBe("true");
-      expect(tables).toEqual(expect.arrayContaining(["schema_migrations", "switch_events", "rate_limit_snapshots", "account_tags"]));
+      expect(tables).toEqual(expect.arrayContaining(["schema_migrations", "switch_events", "switch_transactions", "rate_limit_snapshots", "account_tags", "antigravity_account_details"]));
       expect(ledger).toEqual([
         { version: 1, name: "initial_accounts_settings" },
         { version: 2, name: "v2_switch_limits_tags" },
-        { version: 3, name: "v2_account_metadata" }
+        { version: 3, name: "v2_account_metadata" },
+        { version: 4, name: "v3_platform_accounts" },
+        { version: 5, name: "v3_codex_auth_identity" },
+        { version: 6, name: "v3_auth_drift_candidates" },
+        { version: 7, name: "v3_switch_transactions" },
+        { version: 8, name: "v3_legacy_identity_review" },
+        { version: 9, name: "v3_quota_refresh_health" },
+        { version: 10, name: "v31_storage_invariants" }
       ]);
+      const backupFiles = fs
+        .readdirSync(path.join(dir, "migration-backups"))
+        .filter((entry) => entry.endsWith(".sqlite"));
+      expect(backupFiles).toHaveLength(1);
+      const backup = new Database(path.join(dir, "migration-backups", backupFiles[0]), {
+        readonly: true,
+        fileMustExist: true
+      });
+      try {
+        expect(backup.pragma("integrity_check", { simple: true })).toBe("ok");
+        expect(backup.prepare("SELECT id, status FROM accounts").get()).toEqual({
+          id: "acct-legacy",
+          status: "active"
+        });
+        const legacyColumns = (
+          backup.prepare("PRAGMA table_info(accounts)").all() as Array<{ name: string }>
+        ).map((column) => column.name);
+        expect(legacyColumns).not.toContain("auth_mode");
+      } finally {
+        backup.close();
+      }
     } finally {
       store.close();
     }
@@ -190,6 +237,17 @@ describe("database migrations", () => {
     const store = new AccountStore(dir);
     try {
       expect(readIndexNames(dir)).toContain("idx_accounts_email");
+      expect(readIndexNames(dir)).toContain("idx_accounts_platform_email");
+      expect(readIndexNames(dir)).toContain("idx_accounts_platform_active");
+      expect(readIndexNames(dir)).toContain("idx_accounts_codex_identity");
+      expect(readIndexNames(dir)).toEqual(expect.arrayContaining([
+        "idx_accounts_single_active",
+        "idx_accounts_email_ci",
+        "idx_accounts_platform_email_ci",
+        "idx_rate_limit_snapshots_account_captured",
+        "idx_switch_events_started_at",
+        "idx_switch_transactions_status_created"
+      ]));
     } finally {
       store.close();
     }
@@ -217,6 +275,12 @@ describe("database migrations", () => {
       });
 
       expect(first.status).toBe("active");
+      expect(first.platform).toBe("codex");
+      expect(first).toMatchObject({
+        authMode: "chatgpt",
+        credentialState: "ready",
+        version: 1
+      });
       expect(second.status).toBe("active");
       expect(store.get("acct-1")?.email).toBe("first@example.com");
       expect(store.getByEmail("SECOND@example.com")?.id).toBe("acct-2");
@@ -236,6 +300,225 @@ describe("database migrations", () => {
       expect(store.getSetting("confirmSwitch")).toBe("false");
       store.delete("acct-1");
       expect(store.get("acct-1")).toBeNull();
+    } finally {
+      store.close();
+    }
+  });
+
+  it("stores Antigravity account details separately from Codex defaults", () => {
+    const dir = tempDir();
+    const store = new AccountStore(dir);
+    try {
+      const saved = store.upsert({
+        id: "ag-1",
+        platform: "antigravity",
+        label: "Antigravity Work",
+        email: "ag@example.com",
+        planType: "unknown",
+        profileDir: "C:\\Users\\User\\AppData\\Roaming\\Antigravity IDE",
+        encryptedAuthJson: "{\"sealed\":\"auth\"}",
+        antigravity: {
+          googleProjectId: "project-1",
+          fingerprintId: "fp-1",
+          lastQuotaRefreshAt: 1_700_001_000,
+          forbidden: false,
+          ideStateDetected: true
+        }
+      });
+
+      expect(saved.platform).toBe("antigravity");
+      expect(saved.authMode).toBeNull();
+      expect(saved.antigravity).toMatchObject({
+        googleProjectId: "project-1",
+        fingerprintId: "fp-1",
+        lastQuotaRefreshAt: 1_700_001_000,
+        forbidden: false,
+        ideStateDetected: true
+      });
+      expect(store.get("ag-1")?.antigravity?.ideStateDetected).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("tracks active accounts independently for Codex and Antigravity", () => {
+    const dir = tempDir();
+    const store = new AccountStore(dir);
+    try {
+      store.upsert({
+        id: "codex-1",
+        label: "Codex One",
+        email: "codex-1@example.com",
+        planType: "pro",
+        profileDir: "C:\\profiles\\codex-1",
+        encryptedAuthJson: "{\"token\":\"codex-1\"}"
+      });
+      store.upsert({
+        id: "codex-2",
+        label: "Codex Two",
+        email: "codex-2@example.com",
+        planType: "pro",
+        profileDir: "C:\\profiles\\codex-2",
+        encryptedAuthJson: "{\"token\":\"codex-2\"}"
+      });
+      store.upsert({
+        id: "ag-1",
+        platform: "antigravity",
+        label: "Antigravity One",
+        email: "ag-1@example.com",
+        planType: "unknown",
+        profileDir: "C:\\profiles\\ag-1",
+        encryptedAuthJson: "{\"sealed\":\"ag-1\"}"
+      });
+
+      store.setActive("codex-1");
+      store.setActive("ag-1");
+      store.setActive("codex-2");
+
+      expect(store.get("codex-1")?.isActive).toBe(false);
+      expect(store.get("codex-2")?.isActive).toBe(true);
+      expect(store.get("ag-1")?.isActive).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("repairs duplicate active profiles and enforces one active row per platform", () => {
+    const dir = tempDir();
+    const legacy = new Database(dbPath(dir));
+    try {
+      legacy.exec(oldAccountSchema);
+      legacy.exec("ALTER TABLE accounts ADD COLUMN platform TEXT NOT NULL DEFAULT 'codex'");
+      const insert = legacy.prepare(`
+        INSERT INTO accounts (
+          id, label, email, plan_type, profile_dir, encrypted_auth_json, platform,
+          is_active, created_at, updated_at, status
+        ) VALUES (?, ?, ?, 'plus', ?, 'sealed', 'codex', 1, 1, ?, 'active')
+      `);
+      insert.run("older", "Older", "older@example.com", "older", 10);
+      insert.run("newer", "Newer", "newer@example.com", "newer", 20);
+    } finally {
+      legacy.close();
+    }
+
+    const store = new AccountStore(dir);
+    try {
+      expect(store.list().filter((account) => account.platform === "codex" && account.isActive).map((account) => account.id)).toEqual(["newer"]);
+      const db = new Database(dbPath(dir));
+      try {
+        expect(() => db.prepare("UPDATE accounts SET is_active = 1 WHERE id = 'older'").run()).toThrow();
+      } finally {
+        db.close();
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+  it("preserves Antigravity platform when importing portable accounts", () => {
+    const dir = tempDir();
+    const store = new AccountStore(dir);
+    try {
+      const imported = store.importPortable({
+        id: "ag-portable",
+        platform: "antigravity",
+        label: "Antigravity Portable",
+        email: "ag-portable@example.com",
+        planType: "unknown",
+        profileDir: "portable",
+        encryptedAuthJson: "{\"sealed\":\"none\"}",
+        isActive: false,
+        createdAt: 1_700_000_000,
+        updatedAt: 1_700_000_000,
+        lastUsedAt: null,
+        lastRefreshAt: null,
+        subscriptionEndsAt: null,
+        status: "unknown",
+        statusReason: null,
+        rateLimitJson: null,
+        notes: null
+      });
+
+      expect(imported.platform).toBe("antigravity");
+      expect(store.listForExport().find((account) => account.id === "ag-portable")?.platform).toBe("antigravity");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("stores Codex auth identity metadata without exposing it through legacy defaults", () => {
+    const dir = tempDir();
+    const store = new AccountStore(dir);
+    try {
+      const saved = store.upsert({
+        id: "codex-enterprise",
+        label: "Enterprise",
+        email: "owner@example.com",
+        planType: "enterprise",
+        profileDir: "C:\\profiles\\enterprise",
+        encryptedAuthJson: "sealed",
+        authMode: "enterpriseAccessToken",
+        providerAccountId: "provider-1",
+        workspaceAccountId: "workspace-1",
+        workspaceLabel: "Egoist",
+        authFingerprint: "fingerprint-1",
+        credentialState: "ready",
+        lastAuthenticatedAt: 1_800_000_000,
+        expiresAt: 1_800_003_600,
+        version: 3
+      });
+
+      expect(saved).toMatchObject({
+        authMode: "enterpriseAccessToken",
+        providerAccountId: "provider-1",
+        workspaceAccountId: "workspace-1",
+        workspaceLabel: "Egoist",
+        authFingerprint: "fingerprint-1",
+        credentialState: "ready",
+        lastAuthenticatedAt: 1_800_000_000,
+        expiresAt: 1_800_003_600,
+        version: 3
+      });
+      expect(store.listForExport()[0]).toMatchObject({
+        authMode: "enterpriseAccessToken",
+        providerAccountId: "provider-1",
+        version: 3
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("keeps externally changed auth as a separate encrypted drift candidate", () => {
+    const dir = tempDir();
+    const store = new AccountStore(dir);
+    try {
+      store.upsert({
+        id: "codex-drift",
+        label: "Drift",
+        email: "drift@example.com",
+        planType: "plus",
+        profileDir: "C:\\profiles\\drift",
+        encryptedAuthJson: "sealed-original",
+        authFingerprint: "original"
+      });
+      const account = store.storeAuthDriftCandidate({
+        accountId: "codex-drift",
+        encryptedAuthJson: "sealed-candidate",
+        fingerprint: "candidate",
+        observedAt: 1_800_000_100
+      });
+
+      expect(account).toMatchObject({
+        credentialState: "drifted",
+        status: "error"
+      });
+      expect(store.get("codex-drift")?.encryptedAuthJson).toBe("sealed-original");
+      expect(store.getAuthDriftCandidate("codex-drift")).toEqual({
+        encryptedAuthJson: "sealed-candidate",
+        fingerprint: "candidate",
+        observedAt: 1_800_000_100
+      });
     } finally {
       store.close();
     }

@@ -1,70 +1,166 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  Activity,
   AlertTriangle,
+  Activity,
   Archive,
-  ArrowUpRight,
-  Bot,
   CheckCircle2,
+  ChevronRight,
   Command,
-  Cpu,
+  Copy,
   Database,
   ExternalLink,
-  FileText,
   FileDown,
   FileUp,
   FolderOpen,
-  Gauge,
   KeyRound,
+  LayoutDashboard,
   Layers3,
   Loader2,
   LogIn,
   Maximize2,
   Minus,
+  MoreHorizontal,
   Search,
+  ShieldCheck,
   SlidersHorizontal,
   RefreshCcw,
-  Sparkles,
   Star,
   Tag,
   TerminalSquare,
   Trash2,
+  Wrench,
   X,
-  Zap
+  Zap,
+  type LucideIcon
 } from "lucide-react";
 import type {
   AppDiagnostics,
+  AppApi,
+  AntigravityDiagnostics,
+  AntigravityCredentialBatchImportResult,
+  AntigravityCredentialImportSource,
+  AntigravityProfileInspection,
+  AntigravityProfileStatus,
+  AntigravityOAuthStartResult,
   AppSettings,
   AuthEvent,
+  AuthValidationState,
+  CodexLoginRequest,
+  CodexLoginMethodId,
   HealthReport,
-  LimitHistoryPoint,
   LoginStartResult,
   ManagedAccount,
-  ProfileIntegrityReport,
-  ReleaseReadinessReport,
+  ProviderQuotaState,
   SwitchHistoryItem,
+  SwitchTransaction,
   UpdateCheckResult,
   WorkspaceBinding
 } from "../shared/types";
-import type { CommandPaletteCommand } from "../shared/commandPalette";
+import type { AppViewKey, CommandPaletteCommand } from "../shared/commandPalette";
 import { buildCommandPalette, filterCommandPalette } from "../shared/commandPalette";
+import { maskEmailForPrivacy, maskPathForPrivacy, maskSensitiveDisplayText } from "../shared/privacyDisplay";
+import { buildProviderQuotaState } from "../shared/providerAdapter";
+import { buildQuotaFreshness, hasCurrentQuotaRefreshFailure } from "../shared/quotaFreshness";
+import { buildQuotaRefreshErrorMessage } from "../shared/quotaRefreshError";
+import { buildQuotaRefreshAccountMessage, buildQuotaRefreshMessage } from "../shared/quotaRefreshMessage";
 import { selectSmartAccount } from "../shared/smartSelection";
 import { appVersion, releaseNotes } from "../shared/releaseNotes";
-import logoUrl from "./assets/logo.png";
-import { DashboardPage } from "./pages/DashboardPage";
-import { HealthPage } from "./pages/HealthPage";
+import appAvatarUrl from "./assets/app-avatar-mark.png";
+import codexLogoUrl from "./assets/codex-color.svg";
+import antigravityLogoUrl from "./assets/antigravity-icon.png";
+import { getUiText } from "./i18n";
 import { SettingsPage } from "./pages/SettingsPage";
+import { ActivityPage } from "./components/v3/ActivityPage";
+import { OverviewPage } from "./components/v3/OverviewPage";
+import "@fontsource-variable/montserrat";
 import "./styles.css";
+import "./v3.css";
+import "./v306.css";
+import "./v307.css";
+import "./v308.css";
+import "./v309.css";
+import "./v310.css";
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
+
+type ProcessNoticeTone = "progress" | "success" | "error";
+
+interface ProcessNotice {
+  id: string;
+  tone: ProcessNoticeTone;
+  eyebrow: string;
+  title: string;
+  detail: string;
+  step: 1 | 2 | 3;
+  stages: [string, string, string];
+  terminal: boolean;
+}
+
+export function buildSwitchProcessNotice(transaction: SwitchTransaction, isEnglish: boolean): ProcessNotice {
+  const phase = transaction.phase;
+  if (phase === "committed") {
+    return {
+      id: `switch:${transaction.id}:committed`, tone: "success", step: 3, stages: isEnglish ? ["Save", "Restart", "Verify"] : ["Сессия", "Перезапуск", "Проверка"], terminal: true,
+      eyebrow: isEnglish ? "SWITCH COMPLETE · 3 OF 3" : "ПЕРЕКЛЮЧЕНИЕ ГОТОВО · 3 ИЗ 3",
+      title: isEnglish ? "Account identity verified" : "Личность аккаунта подтверждена",
+      detail: isEnglish ? "Codex is running with the selected protected profile." : "Codex работает с выбранным защищённым профилем."
+    };
+  }
+  if (["failed", "recovery_required", "rolled_back", "aborted"].includes(phase)) {
+    return {
+      id: `switch:${transaction.id}:${phase}`, tone: "error", step: 3, stages: isEnglish ? ["Save", "Restart", "Recovery"] : ["Сессия", "Перезапуск", "Откат"], terminal: true,
+      eyebrow: isEnglish ? "SAFE RECOVERY" : "БЕЗОПАСНОЕ ВОССТАНОВЛЕНИЕ",
+      title: phase === "rolled_back"
+        ? (isEnglish ? "Previous account restored" : "Предыдущий аккаунт восстановлен")
+        : (isEnglish ? "Switch needs attention" : "Переключение требует внимания"),
+      detail: isEnglish ? "No unverified identity was left active. Details are in the activity journal." : "Неподтверждённая личность не оставлена активной. Подробности — в журнале."
+    };
+  }
+  const restarting = ["activating", "launching", "verifying", "rolling_back"].includes(phase);
+  return {
+    id: `switch:${transaction.id}:${phase}`, tone: "progress", step: restarting ? 2 : 1, stages: isEnglish ? ["Save", "Restart", "Verify"] : ["Сессия", "Перезапуск", "Проверка"], terminal: false,
+    eyebrow: restarting ? (isEnglish ? "RESTART · 2 OF 3" : "ПЕРЕЗАПУСК · 2 ИЗ 3") : (isEnglish ? "PREPARATION · 1 OF 3" : "ПОДГОТОВКА · 1 ИЗ 3"),
+    title: restarting ? (isEnglish ? "Starting Codex with the new profile" : "Запускаю Codex с новым профилем") : (isEnglish ? "Saving and checking the current session" : "Сохраняю и проверяю текущую сессию"),
+    detail: restarting ? (isEnglish ? "The new identity will be confirmed before the switch is committed." : "Новая личность будет проверена до фиксации переключения.") : (isEnglish ? "Authorization is changed only after the safety checks pass." : "Авторизация изменится только после успешных проверок.")
+  };
+}
+
+export function buildAuthProcessNotice(event: AuthEvent, isEnglish: boolean): ProcessNotice {
+  return event.success
+    ? {
+      id: `auth:${event.loginId}:success`, tone: "success", step: 3, stages: isEnglish ? ["Sign in", "Encrypt", "Ready"] : ["Вход", "Шифрование", "Готово"], terminal: true,
+      eyebrow: isEnglish ? "AUTHORIZATION SAVED" : "АВТОРИЗАЦИЯ СОХРАНЕНА",
+      title: event.account?.label ?? (isEnglish ? "Codex account added" : "Аккаунт Codex добавлен"),
+      detail: isEnglish ? "The encrypted profile is ready for future switches." : "Зашифрованный профиль готов к будущим переключениям."
+    }
+    : {
+      id: `auth:${event.loginId}:failed`, tone: "error", step: 1, stages: isEnglish ? ["Sign in", "Encrypt", "Ready"] : ["Вход", "Шифрование", "Готово"], terminal: true,
+      eyebrow: isEnglish ? "AUTHORIZATION NOT COMPLETED" : "АВТОРИЗАЦИЯ НЕ ЗАВЕРШЕНА",
+      title: isEnglish ? "The saved profiles were not changed" : "Сохранённые профили не изменены",
+      detail: isEnglish ? "Retry sign-in from the account manager." : "Повторите вход из менеджера аккаунтов."
+    };
+}
+
+function codexLoginMethodLabel(id: CodexLoginMethodId, isEnglish: boolean): string {
+  const labels: Record<CodexLoginMethodId, [string, string]> = {
+    chatgpt: ["ChatGPT browser", "ChatGPT в браузере"],
+    chatgptDeviceCode: ["Device code", "Код устройства"],
+    apiKey: ["API key", "API key"],
+    enterpriseAccessToken: ["Enterprise token", "Enterprise-токен"],
+    chatgptAuthTokens: ["Access token", "Access token"]
+  };
+  return labels[id][isEnglish ? 0 : 1];
+}
 
 const demoSettings: AppSettings = {
   language: "ru",
   autoRefreshIntervalMs: 180_000,
   privacyMode: false,
   confirmSwitch: true,
+  desktopClosePolicy: "graceful-only",
   smartSwitchMode: "suggest",
+  smartSwitchThresholdPercent: 10,
   desktopNotifications: true,
   trayEnabled: false,
   autostartEnabled: false
@@ -92,11 +188,61 @@ const demoHealth: HealthReport = {
   ]
 };
 
+const demoAntigravityDiagnostics: AntigravityDiagnostics = {
+  profileKind: "unknown",
+  userDataDir: "browser-preview/Antigravity IDE",
+  globalStorageDir: "browser-preview/Antigravity IDE/User/globalStorage",
+  stateDbPath: "browser-preview/Antigravity IDE/User/globalStorage/state.vscdb",
+  storageJsonPath: "browser-preview/Antigravity IDE/User/globalStorage/storage.json",
+  machineIdPath: "browser-preview/Antigravity IDE/machineid",
+  appStoragePath: "browser-preview/Antigravity/app_storage.json",
+  geminiDataDir: "browser-preview/.gemini/antigravity",
+  installationIdPath: "browser-preview/.gemini/antigravity/installation_id",
+  userDataDirExists: false,
+  stateDbExists: false,
+  storageJsonExists: false,
+  machineIdExists: false,
+  appStorageExists: false,
+  geminiDataDirExists: false,
+  installationIdExists: false
+};
+
+const demoAntigravityInspection: AntigravityProfileInspection = {
+  inspectedAt: nowSeconds(),
+  stateDb: { exists: false, readable: false, itemTableFound: false, itemCount: null, authRelatedItemCount: null, error: null },
+  storageJson: { exists: false, readable: false, validJson: false, topLevelKeyCount: null, authRelatedKeyCount: null, error: null },
+  machineId: { exists: false, readable: false, hashPrefix: null, error: null }
+};
+
+const demoAntigravityProfileStatus: AntigravityProfileStatus = {
+  detected: false,
+  readyForWriteActions: false,
+  message: "Профиль Antigravity IDE пока не найден на этой машине.",
+  diagnostics: demoAntigravityDiagnostics,
+  inspection: demoAntigravityInspection,
+  capabilities: {
+    diagnostics: { supported: true, reason: null },
+    importFromIde: { supported: false, reason: "read-only foundation: безопасный коннектор записи Antigravity ещё не включён" },
+    switchAccount: { supported: false, reason: "read-only foundation: безопасный коннектор записи Antigravity ещё не включён" },
+    refreshQuota: { supported: false, reason: "read-only foundation: Antigravity quota adapter ещё не включён" }
+  }
+};
+
 const demoAccounts: ManagedAccount[] = [
   {
     id: "demo-pro",
+    platform: "codex",
     label: "основной",
     email: "primary@example.com",
+    authMode: "chatgpt",
+    providerAccountId: "demo-primary",
+    workspaceAccountId: null,
+    workspaceLabel: null,
+    authFingerprint: "demo-primary-fingerprint",
+    credentialState: "ready",
+    lastAuthenticatedAt: nowSeconds(),
+    expiresAt: null,
+    version: 1,
     planType: "pro",
     profileDir: "demo",
     isActive: true,
@@ -121,8 +267,18 @@ const demoAccounts: ManagedAccount[] = [
   },
   {
     id: "demo-plus",
+    platform: "codex",
     label: "резерв",
     email: "backup@example.com",
+    authMode: "chatgpt",
+    providerAccountId: "demo-backup",
+    workspaceAccountId: null,
+    workspaceLabel: null,
+    authFingerprint: "demo-backup-fingerprint",
+    credentialState: "ready",
+    lastAuthenticatedAt: nowSeconds(),
+    expiresAt: null,
+    version: 1,
     planType: "plus",
     profileDir: "demo",
     isActive: false,
@@ -130,6 +286,8 @@ const demoAccounts: ManagedAccount[] = [
     updatedAt: 0,
     lastUsedAt: null,
     lastRefreshAt: nowSeconds() - 2400,
+    lastRefreshErrorAt: nowSeconds() - 180,
+    lastRefreshError: "Codex profile is not authenticated",
     subscriptionEndsAt: null,
     status: "near_limit",
     statusReason: "Использование выше 90%",
@@ -147,24 +305,98 @@ const demoAccounts: ManagedAccount[] = [
   }
 ];
 
-const cam = window.cam ?? {
+const demoTimelineNow = nowSeconds();
+const demoSwitchTransactions: SwitchTransaction[] = [
+  {
+    id: "demo-verified-84d3c1a0",
+    platform: "codex",
+    targetAccountId: "demo-pro",
+    previousAccountId: "demo-plus",
+    status: "committed",
+    phase: "committed",
+    targetFingerprint: "demo-primary-fingerprint",
+    previousFingerprint: "demo-backup-fingerprint",
+    backupPath: "browser-preview-backup",
+    errorCode: null,
+    errorMessage: null,
+    createdAt: demoTimelineNow - 426,
+    updatedAt: demoTimelineNow - 421,
+    completedAt: demoTimelineNow - 421,
+    version: 9
+  },
+  {
+    id: "demo-rollback-690e72bf",
+    platform: "codex",
+    targetAccountId: "demo-plus",
+    previousAccountId: "demo-pro",
+    status: "rolled_back",
+    phase: "rolled_back",
+    targetFingerprint: "demo-backup-fingerprint",
+    previousFingerprint: "demo-primary-fingerprint",
+    backupPath: "browser-preview-backup",
+    errorCode: "IDENTITY_MISMATCH",
+    errorMessage: "Проверка личности не подтвердила целевой профиль; предыдущий вход безопасно восстановлен.",
+    createdAt: demoTimelineNow - 7_260,
+    updatedAt: demoTimelineNow - 7_252,
+    completedAt: demoTimelineNow - 7_252,
+    version: 12
+  },
+  {
+    id: "demo-verified-31fa46c8",
+    platform: "codex",
+    targetAccountId: "demo-plus",
+    previousAccountId: "demo-pro",
+    status: "committed",
+    phase: "committed",
+    targetFingerprint: "demo-backup-fingerprint",
+    previousFingerprint: "demo-primary-fingerprint",
+    backupPath: "browser-preview-backup",
+    errorCode: null,
+    errorMessage: null,
+    createdAt: demoTimelineNow - 91_804,
+    updatedAt: demoTimelineNow - 91_798,
+    completedAt: demoTimelineNow - 91_798,
+    version: 9
+  }
+];
+
+const demoSwitchHistory: SwitchHistoryItem[] = demoSwitchTransactions.map((transaction) => {
+  const account = demoAccounts.find((item) => item.id === transaction.targetAccountId);
+  return {
+    id: transaction.id,
+    accountId: transaction.targetAccountId,
+    accountLabel: account?.label ?? null,
+    accountEmail: account?.email ?? null,
+    previousAccountId: transaction.previousAccountId,
+    startedAt: transaction.createdAt,
+    completedAt: transaction.completedAt,
+    status: transaction.status === "committed" ? "completed" : transaction.status,
+    error: transaction.errorMessage,
+    backupPath: transaction.backupPath
+  };
+});
+
+const cam: AppApi = window.cam ?? {
   listAccounts: async () => demoAccounts,
-  startLogin: async (type: "chatgpt" | "chatgptDeviceCode") => ({
+  getAppInfo: async () => ({ name: "Codex Account Manager", publisher: "Egoist AI", version: appVersion, vaultDegraded: false }),
+  startLogin: async (input: CodexLoginRequest) => ({
     loginId: "demo-login",
     profileId: "demo-profile",
-    type,
+    type: input.type,
     authUrl: "https://chatgpt.com",
     verificationUrl: "https://auth.openai.com/codex/device",
     userCode: "DEMO-1234"
   }),
-  reauthenticateAccount: async (accountId: string, type: "chatgpt" | "chatgptDeviceCode") => ({
+  reauthenticateAccount: async (accountId: string, input: CodexLoginRequest) => ({
     loginId: "demo-reauth",
     profileId: accountId,
-    type,
+    type: input.type,
     authUrl: "https://chatgpt.com",
     verificationUrl: "https://auth.openai.com/codex/device",
     userCode: "DEMO-5678"
   }),
+  copyDeviceCode: async () => ({ copied: true }),
+  openDeviceLogin: async () => ({ copied: true, opened: true }),
   openExternal: async () => undefined,
   minimizeWindow: async () => undefined,
   toggleMaximizeWindow: async () => undefined,
@@ -174,16 +406,80 @@ const cam = window.cam ?? {
     activeCodexHome: "browser-preview",
     appDataDir: "browser-preview",
     workspacePath: "browser-preview",
-    rateLimitRefreshIntervalMs: 3 * 60 * 1000,
+    rateLimitRefreshIntervalMs: 180_000,
     startupError: null,
     logPath: null
   }),
   refreshAccount: async (accountId: string) => demoAccounts.find((account) => account.id === accountId) ?? demoAccounts[0],
+  validateAuth: async () => ({ state: "authorized", lastValidatedAt: nowSeconds(), errorReason: null }),
+  getProviderQuotaState: async (accountId: string) => {
+    const account = demoAccounts.find((item) => item.id === accountId) ?? demoAccounts[0];
+    return {
+      provider: account.platform,
+      accountId: account.id,
+      planType: account.planType,
+      remaining: account.primaryUsedPercent === null ? null : 100 - account.primaryUsedPercent,
+      used: account.primaryUsedPercent,
+      resetAt: account.primaryResetsAt,
+      windowType: account.primaryWindowDurationMins === 300 ? "5h" : "unknown",
+      confidence: account.primaryUsedPercent === null ? "unknown" : "confirmed",
+      source: account.primaryUsedPercent === null ? "unknown" : "official_api",
+      lastCheckedAt: account.lastRefreshAt,
+      errorReason: null,
+      windows: account.primaryUsedPercent === null ? [] : [{
+        id: "primary",
+        used: account.primaryUsedPercent,
+        remaining: 100 - account.primaryUsedPercent,
+        resetAt: account.primaryResetsAt,
+        windowType: account.primaryWindowDurationMins === 300 ? "5h" : "unknown",
+        confidence: "confirmed",
+        source: "official_api"
+      }]
+    } satisfies ProviderQuotaState;
+  },
   refreshAllAccounts: async () => demoAccounts,
   exportAccounts: async () => ({ exportedCount: demoAccounts.length, filePath: "browser-preview.cam-export" }),
   importAccounts: async () => ({ importedCount: demoAccounts.length, accounts: demoAccounts }),
-  importAuthJson: async () => ({ importedCount: 1, accounts: demoAccounts }),
   openProfileFolder: async () => undefined,
+  prepareSwitch: async (accountId: string) => ({
+    transaction: {
+      id: "demo-switch-transaction",
+      platform: "codex",
+      targetAccountId: accountId,
+      previousAccountId: demoAccounts.find((account) => account.isActive)?.id ?? null,
+      status: "pending",
+      phase: "ready",
+      targetFingerprint: null,
+      previousFingerprint: null,
+      backupPath: null,
+      errorCode: null,
+      errorMessage: null,
+      createdAt: nowSeconds(),
+      updatedAt: nowSeconds(),
+      completedAt: null,
+      version: 4
+    },
+    canCommit: true,
+    warnings: []
+  }),
+  cancelSwitch: async (transactionId: string) => ({
+    id: transactionId,
+    platform: "codex",
+    targetAccountId: demoAccounts[0].id,
+    previousAccountId: null,
+    status: "aborted",
+    phase: "aborted",
+    targetFingerprint: null,
+    previousFingerprint: null,
+    backupPath: null,
+    errorCode: "CANCELLED",
+    errorMessage: "Cancelled before auth activation.",
+    createdAt: nowSeconds(),
+    updatedAt: nowSeconds(),
+    completedAt: nowSeconds(),
+    version: 5
+  }),
+  listSwitchTransactions: async () => demoSwitchTransactions,
   switchAccount: async (accountId: string) => demoAccounts.find((account) => account.id === accountId) ?? demoAccounts[0],
   deleteAccount: async () => undefined,
   updateAccount: async () => demoAccounts[0],
@@ -192,7 +488,7 @@ const cam = window.cam ?? {
     return { workspacePath: "browser-preview", accountId: account?.id ?? null, accountLabel: account?.label ?? null, accountEmail: account?.email ?? null };
   },
   getWorkspaceBinding: async () => ({ workspacePath: "browser-preview", accountId: null, accountLabel: null, accountEmail: null }),
-  getSwitchHistory: async () => [],
+  getSwitchHistory: async () => demoSwitchHistory,
   getLimitHistory: async (accountId: string) => [
     { accountId, capturedAt: nowSeconds() - 1200, status: "active", statusReason: null, fiveHourUsedPercent: 62, weeklyUsedPercent: 18, primaryUsedPercent: 62, secondaryUsedPercent: 18 },
     { accountId, capturedAt: nowSeconds() - 600, status: "active", statusReason: null, fiveHourUsedPercent: 54, weeklyUsedPercent: 21, primaryUsedPercent: 54, secondaryUsedPercent: 21 },
@@ -203,10 +499,63 @@ const cam = window.cam ?? {
   openLogsFolder: async () => undefined,
   getDiagnostics: async () => ({
     codexPath: "browser-preview",
+    desktopLifecycle: {
+      status: "running",
+      selected: {
+        product: "codex",
+        packageName: "OpenAI.Codex",
+        packageFullName: "OpenAI.Codex_26.721.4979.0_x64__2p2nqsd0c76g0",
+        packageFamilyName: "OpenAI.Codex_2p2nqsd0c76g0",
+        version: "26.721.4979.0",
+        installLocation: "C:\\Program Files\\WindowsApps\\OpenAI.Codex",
+        executablePath: "C:\\Program Files\\WindowsApps\\OpenAI.Codex\\app\\ChatGPT.exe",
+        appUserModelId: "OpenAI.Codex_2p2nqsd0c76g0!App"
+      },
+      candidates: [],
+      selectionReason: "Explicit package policy selected OpenAI.Codex.",
+      runningRootCount: 1,
+      capturedProcessCount: 7,
+      message: "Exact desktop process tree captured."
+    },
+    codexCapabilities: {
+      generatedAt: nowSeconds(),
+      cliVersion: "codex-cli 0.144.0",
+      protocol: {
+        compatible: true,
+        userAgent: "codex_cli_rs/0.144.0",
+        codexHome: "browser-preview",
+        platformFamily: "windows",
+        platformOs: "windows",
+        schemaVersionKey: "browser-preview",
+        error: null
+      },
+      loginMethods: [
+        { id: "chatgpt", available: true, stability: "stable", reason: null },
+        { id: "chatgptDeviceCode", available: true, stability: "stable", reason: null },
+        { id: "apiKey", available: true, stability: "stable", reason: null },
+        { id: "enterpriseAccessToken", available: true, stability: "experimental", reason: "Official CLI stdin flow." },
+        { id: "chatgptAuthTokens", available: true, stability: "internal", reason: "Installed Codex marks this method for internal use only." }
+      ],
+      identity: {
+        signedIn: true,
+        authMode: "chatgpt",
+        email: "primary@example.com",
+        planType: "pro",
+        requiresOpenaiAuth: true,
+        error: null
+      }
+    },
+    credentialStore: {
+      configuredMode: "unspecified",
+      effectiveStore: "file",
+      authJsonPresent: true,
+      managerCompatible: true,
+      message: "Codex uses the documented default file credential store."
+    },
     activeCodexHome: "browser-preview",
     appDataDir: "browser-preview",
     workspacePath: "browser-preview",
-    rateLimitRefreshIntervalMs: 3 * 60 * 1000,
+    rateLimitRefreshIntervalMs: 180_000,
     startupError: null,
     logPath: null
   }),
@@ -231,12 +580,77 @@ const cam = window.cam ?? {
     checkedAt: nowSeconds(),
     version: null
   }),
+  openUpdateRelease: async () => ({
+    status: "available",
+    message: "Официальный релиз открыт на GitHub.",
+    feedUrl: "https://github.com/egoistgorbachev/codex-account-manager/releases/tag/v3.1.0",
+    checkedAt: nowSeconds(),
+    version: "3.1.0"
+  }),
   openReleaseFolder: async () => undefined,
   openCrashReportsFolder: async () => undefined,
   getSettings: async () => demoSettings,
-  updateSettings: async (input: Partial<Omit<AppSettings, "language">> & { language?: "ru" }) => ({ ...demoSettings, ...input, language: "ru" as const }),
+  updateSettings: async (input: Partial<AppSettings>) => ({ ...demoSettings, ...input }),
+  getAntigravityDiagnostics: async () => demoAntigravityDiagnostics,
+  getAntigravityProfileStatus: async () => demoAntigravityProfileStatus,
+  inspectAntigravityProfile: async () => demoAntigravityInspection,
+  openAntigravityLogin: async () => undefined,
+  startAntigravityGoogleLogin: async () => ({
+    imported: false,
+    account: null,
+    reason: "Google OAuth доступен только в desktop-приложении.",
+    status: demoAntigravityProfileStatus,
+    identity: null
+  }),
+  startAntigravityGoogleOAuth: async () => ({
+    sessionId: "demo-antigravity-oauth",
+    authUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+    redirectUri: "http://localhost:36742/oauth-callback",
+    expiresAt: nowSeconds() + 600
+  }),
+  finishAntigravityGoogleOAuth: async () => ({
+    imported: false,
+    account: null,
+    reason: "Google OAuth доступен только в desktop-приложении.",
+    status: demoAntigravityProfileStatus,
+    identity: null
+  }),
+  cancelAntigravityGoogleOAuth: async () => undefined,
+  onAntigravityOAuthResult: () => () => undefined,
+  onAntigravityOAuthError: () => () => undefined,
+  importAntigravityCredentialPayload: async () => ({
+    importedCount: 0,
+    failedCount: 1,
+    imported: [],
+    failures: [{ source: "demo", email: null, reason: "Импорт доступен только в desktop-приложении." }],
+    accounts: demoAccounts
+  }),
+  importAntigravityFromLocalFiles: async () => ({
+    importedCount: 0,
+    failedCount: 0,
+    imported: [],
+    failures: [],
+    accounts: demoAccounts
+  }),
+  importAntigravityFromExternalSource: async () => ({
+    importedCount: 0,
+    failedCount: 1,
+    imported: [],
+    failures: [{ source: "demo", email: null, reason: "Источник доступен только в desktop-приложении." }],
+    accounts: demoAccounts
+  }),
+  importAntigravityFromIde: async () => ({
+    imported: false,
+    account: null,
+    reason: "Локальный профиль Antigravity не найден. Сначала войди в официальном Antigravity IDE или CLI.",
+    status: demoAntigravityProfileStatus,
+    identity: null
+  }),
   onAuthEvent: () => () => undefined,
-  onAccountsUpdated: () => () => undefined
+  onAccountsUpdated: () => () => undefined,
+  onSwitchTransaction: () => () => undefined,
+  onAntigravityOAuthStep: () => () => undefined,
+  onUpdateStatus: () => () => undefined
 };
 
 function formatTime(value: number | null): string {
@@ -249,18 +663,47 @@ function formatTime(value: number | null): string {
   }).format(new Date(value * 1000));
 }
 
-function statusLabel(account: ManagedAccount): string {
-  if (account.status === "limited") return "лимит";
-  if (account.status === "near_limit") return "почти лимит";
-  if (account.status === "active") return "активен";
-  if (account.status === "error") return "ошибка";
-  return "не проверен";
+function authValidationLabel(state: AuthValidationState["state"]): string {
+  const labels: Record<AuthValidationState["state"], string> = {
+    unknown: "неизвестно",
+    authorized: "авторизован",
+    expired: "истёк срок",
+    revoked: "отозван",
+    needs_reauth: "нужен вход",
+    validation_failed: "проверка не удалась"
+  };
+  return labels[state];
+}
+
+function QuotaFreshnessChip({ account }: { account: ManagedAccount }) {
+  const freshness = buildQuotaFreshness(account, { now: nowSeconds(), staleAfterSeconds: 15 * 60 });
+  const refreshFailed = hasCurrentQuotaRefreshFailure(account);
+  return (
+    <span
+      className={`quota-freshness-chip ${refreshFailed ? "refresh-error" : freshness.state}`}
+      title={refreshFailed ? `Последний запрос завершился ошибкой. ${freshness.title}. Корректный снимок сохранён.` : freshness.title}
+    >
+      {refreshFailed ? "сбой обновления" : freshness.label}
+    </span>
+  );
+}
+
+function CredentialStateChip({ account }: { account: ManagedAccount }) {
+  const meta = account.credentialState === "ready"
+    ? { label: "вход сохранён", tone: "ready", title: "Авторизация зашифрована и сохранена локально" }
+    : account.credentialState === "needs_reauth"
+      ? { label: "нужен вход", tone: "warning", title: "Профиль сохранён, но Codex требует повторный вход" }
+      : account.credentialState === "drifted"
+        ? { label: "проверить вход", tone: "warning", title: "Обнаружено изменение авторизации вне менеджера" }
+        : { label: "проверить профиль", tone: "neutral", title: "Нужно подтвердить принадлежность сохранённого профиля" };
+  return <span className={`credential-chip ${meta.tone}`} title={meta.title}><ShieldCheck />{meta.label}</span>;
 }
 
 function statusClass(account: ManagedAccount): string {
   if (account.status === "limited") return "limited";
   if (account.status === "near_limit") return "risk";
   if (account.status === "active") return "active";
+  if (account.status === "error" && /not logged into a chatgpt account|belongs to a different chatgpt account|login required|reauth|required.*auth|sign.?in/i.test(account.statusReason ?? "")) return "risk";
   return "";
 }
 
@@ -288,10 +731,36 @@ function uiErrorMessage(action: string): string {
   return `${action}. Подробности доступны в журнале диагностики.`;
 }
 
-function autoRefreshLabel(ms?: number): string {
-  if (!ms) return "авто";
+function readableIpcError(error: unknown): string | null {
+  if (!(error instanceof Error) || !error.message.trim()) return null;
+  return error.message
+    .replace(/^Error invoking remote method '[^']+':\s*/i, "")
+    .replace(/^Error:\s*/i, "")
+    .trim();
+}
+
+function switchErrorMessage(error: unknown): string {
+  const detail = readableIpcError(error);
+  if (!detail) return uiErrorMessage("Не удалось переключить аккаунт");
+  if (/no auth\.json/i.test(detail)) {
+    return "В Codex сейчас нет активной авторизации. Менеджер сохранил профили и попробует активировать выбранный аккаунт повторно.";
+  }
+  if (/different account|different provider account/i.test(detail)) {
+    return "Текущая сессия Codex не совпала с отметкой в менеджере. Обнови список и повтори переключение — сессия будет согласована автоматически.";
+  }
+  if (/hosted inside the active Codex process tree/i.test(detail)) {
+    return "Manager был открыт из процесса Codex, поэтому безопасное переключение остановлено до закрытия сессии. Закрой только Manager и открой его из меню «Пуск» или с ярлыка, затем повтори.";
+  }
+  if (/could not be safely closed|did not exit|still running/i.test(detail)) {
+    return "Codex не удалось полностью закрыть. Включи «Автоматическое закрытие» в настройках и повтори.";
+  }
+  return `Не удалось переключить аккаунт: ${detail}`;
+}
+
+function autoRefreshLabel(ms?: number, language: AppSettings["language"] = "ru"): string {
+  if (!ms) return language === "en" ? "auto" : "авто";
   const minutes = Math.max(1, Math.round(ms / 60000));
-  return `${minutes} мин`;
+  return language === "en" ? `${minutes} min` : `${minutes} мин`;
 }
 
 function relativeRefresh(account: ManagedAccount): string {
@@ -309,123 +778,238 @@ function meterTone(usedPercent: number | null): string {
   return "good";
 }
 
-function LimitMeter({ label, usedPercent, resetsAt }: { label: string; usedPercent: number | null; resetsAt: number | null }) {
-  const pct = Math.max(0, Math.min(100, usedPercent ?? 0));
+function remainingPercent(usedPercent: number | null): number | null {
+  return usedPercent == null ? null : Math.max(0, Math.min(100, 100 - usedPercent));
+}
+
+function LimitMeter({
+  label,
+  usedPercent,
+  resetsAt,
+  unavailableReason
+}: {
+  label: string;
+  usedPercent: number | null;
+  resetsAt: number | null;
+  unavailableReason?: string;
+}) {
+  const remaining = remainingPercent(usedPercent);
+  const pct = remaining ?? 0;
+  const emptyReason = unavailableReason ?? "Нет свежих данных лимита";
   return (
-    <div className={`limit-meter ${meterTone(usedPercent)}`}>
+    <div
+      className={`limit-meter ${meterTone(usedPercent)}`}
+      title={usedPercent == null ? emptyReason : `Осталось ${remaining?.toFixed(0)}%, использовано ${usedPercent.toFixed(0)}%`}
+      aria-label={usedPercent == null ? `${label}: ${emptyReason}` : `${label}: осталось ${remaining?.toFixed(0)} процентов`}
+    >
       <div className="limit-line">
         <span>{label}</span>
-        <strong>{usedPercent == null ? "нет данных" : `${usedPercent.toFixed(0)}%`}</strong>
+        <strong>{remaining == null ? "—" : `${remaining.toFixed(0)}%`}</strong>
       </div>
       <div className="bar">
         <span style={{ width: `${pct}%` }} />
       </div>
-      <small>сброс {formatTime(resetsAt)}</small>
+      <small>{resetsAt ? `сброс ${formatTime(resetsAt)}` : emptyReason}</small>
     </div>
   );
 }
 
-function LimitHistoryChart({ history }: { history: LimitHistoryPoint[] }) {
-  const points = history.slice(-12);
+function accountLimitDisplay(account: ManagedAccount): {
+  primaryLabel: string;
+  primaryUsedPercent: number | null;
+  primaryResetsAt: number | null;
+  primaryUnavailableReason?: string;
+  secondaryLabel: string;
+  secondaryUsedPercent: number | null;
+  secondaryResetsAt: number | null;
+  secondaryUnavailableReason?: string;
+} {
+  if (accountPlatform(account) === "antigravity") {
+    return {
+      primaryLabel: windowLabel(account.primaryWindowDurationMins, "модель"),
+      primaryUsedPercent: account.primaryUsedPercent,
+      primaryResetsAt: account.primaryResetsAt,
+      primaryUnavailableReason: account.primaryUsedPercent == null
+        ? "Code Assist не вернул quota-enabled модели для этого Antigravity аккаунта."
+        : undefined,
+      secondaryLabel: windowLabel(account.secondaryWindowDurationMins, "резерв"),
+      secondaryUsedPercent: account.secondaryUsedPercent,
+      secondaryResetsAt: account.secondaryResetsAt,
+      secondaryUnavailableReason: account.secondaryUsedPercent == null
+        ? "Code Assist не вернул второй quota bucket в последнем ответе. Это не считается нулём и не подменяется оценкой."
+        : undefined
+    };
+  }
+  return {
+    primaryLabel: "5 часов",
+    primaryUsedPercent: account.fiveHourUsedPercent,
+    primaryResetsAt: account.fiveHourResetsAt,
+    secondaryLabel: "неделя",
+    secondaryUsedPercent: account.weeklyUsedPercent,
+    secondaryResetsAt: account.weeklyResetsAt
+  };
+}
+
+function windowLabel(durationMins: number | null, fallback: string): string {
+  if (durationMins === 300) return "5 часов";
+  if (durationMins === 10_080) return "неделя";
+  return fallback;
+}
+
+function antigravityAccessLabel(account: ManagedAccount, language: AppSettings["language"] = "ru"): string {
+  const en = language === "en";
+  if (account.antigravity?.forbidden) return en ? "restricted" : "ограничен";
+  if (account.status === "error") return en ? "error" : "ошибка";
+  if (account.status === "limited") return en ? "limited" : "лимит";
+  if (account.antigravity?.lastQuotaRefreshAt || account.primaryUsedPercent != null || account.secondaryUsedPercent != null) return en ? "ready" : "готов";
+  if (account.isActive || account.status === "active" || account.status === "near_limit") return en ? "ready" : "готов";
+  return en ? "preparing" : "готовится";
+}
+
+function accountPlatform(account: ManagedAccount): "codex" | "antigravity" {
+  return account.platform === "antigravity" ? "antigravity" : "codex";
+}
+
+function platformLabel(account: ManagedAccount): string {
+  return accountPlatform(account) === "antigravity" ? "Antigravity" : "Codex";
+}
+
+function platformLogoUrl(platform: "codex" | "antigravity"): string {
+  return platform === "antigravity" ? antigravityLogoUrl : codexLogoUrl;
+}
+
+function PlatformMark({
+  platform,
+  size = "small",
+  label
+}: {
+  platform: "codex" | "antigravity";
+  size?: "small" | "large" | "tile" | "micro";
+  label?: string;
+}) {
   return (
-    <div className="limit-history">
-      <div className="limit-history-head">
-        <span>История лимитов</span>
-        <strong>{points.length ? `${points.length} снимков` : "нет данных"}</strong>
-      </div>
-      <div className="history-bars" aria-label="История нагрузки">
-        {points.length ? points.map((point) => {
-          const value = Math.max(point.fiveHourUsedPercent ?? point.primaryUsedPercent ?? 0, point.weeklyUsedPercent ?? point.secondaryUsedPercent ?? 0);
-          return <span key={`${point.accountId}-${point.capturedAt}`} title={`${formatTime(point.capturedAt)} · ${value.toFixed(0)}%`} style={{ height: `${Math.max(8, value)}%` }} />;
-        }) : Array.from({ length: 8 }, (_, index) => <i key={index} />)}
-      </div>
-    </div>
+    <span className={`platform-mark ${platform} ${size}`} aria-hidden="true" title={label ?? (platform === "antigravity" ? "Antigravity" : "Codex")}>
+      <img src={platformLogoUrl(platform)} alt="" />
+    </span>
   );
 }
 
-function SignalOrbit({ account }: { account: ManagedAccount | null }) {
-  const load = account ? used(account) : 0;
-  const tone = account ? meterTone(load) : "idle";
+function AccountPlatformMark({ account, size = "small" }: { account: ManagedAccount; size?: "small" | "large" }) {
+  const platform = accountPlatform(account);
+  return <PlatformMark platform={platform} size={size} label={platformLabel(account)} />;
+}
+
+type PlanBadgeTone = "free" | "go" | "standard" | "plus" | "team" | "pro" | "pro5" | "pro10" | "pro20" | "enterprise" | "unknown";
+
+function planBadgeMeta(planType: ManagedAccount["planType"]): { tone: PlanBadgeTone; label: string; title: string } {
+  const raw = String(planType ?? "unknown").trim();
+  const key = raw.toLowerCase().replace(/[\s_-]+/g, "");
+  if (key === "standard" || key === "standardtier" || key === "antigravitystandard") {
+    return { tone: "standard", label: "Code Assist", title: "Внутренний tier Code Assist. Это не подтверждённое название платной подписки Google." };
+  }
+  if (!raw || key === "unknown") return { tone: "unknown", label: "Не определён", title: "Тариф не определён" };
+  if (key === "free") return { tone: "free", label: "Free", title: "Code Assist сообщил free-tier как текущий доступ." };
+  if (key === "googleaipro") return { tone: "plus", label: "AI Pro", title: "Google AI Pro: подтверждено текущим tier Code Assist" };
+  if (key === "googleaiultra") return { tone: "pro10", label: "Ultra", title: "Google AI Ultra: подтверждено текущим tier Code Assist" };
+  if (key === "googleaiultrax20") return { tone: "pro20", label: "Ultra x20", title: "Google AI Ultra X20: подтверждено текущим tier Code Assist" };
+  if (key === "go") return { tone: "go", label: "Go", title: "Go: начальный платный уровень" };
+  if (key === "plus") return { tone: "plus", label: "Plus", title: "Plus: повышенный персональный уровень" };
+  if (key === "team" || key === "business") return { tone: "team", label: key === "business" ? "Business" : "Team", title: "Командный тариф" };
+  if (key === "enterprise" || key === "edu") return { tone: "enterprise", label: raw, title: "Enterprise/Edu: организационный уровень" };
+  if (key.includes("20")) return { tone: "pro20", label: "Pro X20", title: "Pro X20: подтверждённый максимальный уровень" };
+  if (key.includes("10") || key === "prolite") return { tone: "pro10", label: key === "prolite" ? "Pro Lite" : "Pro X10", title: "Профессиональный уровень" };
+  if (key.includes("5")) return { tone: "pro5", label: "Pro X5", title: "Pro X5: подтверждённый профессиональный уровень" };
+  if (key === "pro") return { tone: "pro", label: "Pro", title: "Codex Pro: профессиональный тариф" };
+  return { tone: "unknown", label: raw, title: `Тариф: ${raw}` };
+}
+
+function PlanBadge({ planType }: { planType: ManagedAccount["planType"] }) {
+  const meta = planBadgeMeta(planType);
   return (
-    <div className={`signal-orbit ${tone}`} aria-hidden="true">
-      <div className="orbit-core">
-        <Bot />
-        <strong>{account ? `${Math.round(load)}%` : "--"}</strong>
-      </div>
-      <span className="orbit-node node-a" />
-      <span className="orbit-node node-b" />
-      <span className="orbit-node node-c" />
-      <i className="orbit-ring ring-a" />
-      <i className="orbit-ring ring-b" />
-    </div>
+    <span className={`plan plan-badge plan-${meta.tone}`} title={meta.title}>
+      <span className="plan-glyph" aria-hidden="true" />
+      <span>{meta.label}</span>
+    </span>
   );
 }
 
 function AccountRow({
   account,
   selected,
+  privacyMode,
   busy,
   onRefresh,
   onSwitch,
   onReauth,
+  onRepair,
   onOpenFolder,
   onSelect,
   onDelete
 }: {
   account: ManagedAccount;
   selected: boolean;
+  privacyMode: boolean;
   busy: string | null;
   onRefresh: (id: string) => void;
   onSwitch: (id: string) => void;
   onReauth: (id: string) => void;
+  onRepair: (id: string) => void;
   onOpenFolder: (id: string) => void;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
+  const isAntigravity = accountPlatform(account) === "antigravity";
+  const needsRepair = hasCurrentQuotaRefreshFailure(account) || account.credentialState !== "ready";
+  const limits = accountLimitDisplay(account);
   return (
     <tr className={`${account.isActive ? "account-row is-active" : "account-row"} ${selected ? "is-selected" : ""}`}>
       <td onClick={() => onSelect(account.id)}>
         <div className="account-cell">
-          <div className="avatar">{account.label.slice(0, 2).toUpperCase()}</div>
+          <AccountPlatformMark account={account} />
           <div className="account-copy">
             <div className="name">
-              {account.label}
+              <span className="account-label">{account.label}</span>
               {account.favorite ? <Star className="inline-mark" /> : null}
               {account.archived ? <span className="badge compact">архив</span> : null}
               {account.isActive ? <span className="badge active compact">активен</span> : null}
             </div>
-            <div className="email">{account.email}</div>
+            <div className="email">{privacyMode ? maskEmailForPrivacy(account.email) : account.email}</div>
           </div>
         </div>
       </td>
       <td onClick={() => onSelect(account.id)}>
-        <span className="plan">{account.planType}</span>
+        <PlanBadge planType={account.planType} />
       </td>
       <td onClick={() => onSelect(account.id)}>
-        <LimitMeter label="5 часов" usedPercent={account.fiveHourUsedPercent} resetsAt={account.fiveHourResetsAt} />
+        <LimitMeter label={limits.primaryLabel} usedPercent={limits.primaryUsedPercent} resetsAt={limits.primaryResetsAt} unavailableReason={limits.primaryUnavailableReason} />
       </td>
       <td onClick={() => onSelect(account.id)}>
-        <LimitMeter label="неделя" usedPercent={account.weeklyUsedPercent} resetsAt={account.weeklyResetsAt} />
+        <LimitMeter label={limits.secondaryLabel} usedPercent={limits.secondaryUsedPercent} resetsAt={limits.secondaryResetsAt} unavailableReason={limits.secondaryUnavailableReason} />
       </td>
       <td onClick={() => onSelect(account.id)}>
-        <span className={`badge ${statusClass(account)}`}>{statusLabel(account)}</span>
-        <div className="reset">проверен {formatTime(account.lastRefreshAt)}</div>
+        <div className="account-status-stack">
+          <div className="account-status-badges">
+            <CredentialStateChip account={account} />
+            <QuotaFreshnessChip account={account} />
+          </div>
+          <div className="reset">проверен {formatTime(account.lastRefreshAt)}</div>
+        </div>
       </td>
       <td>
         <div className="row-actions">
-          <button className="icon-btn" disabled={busy !== null} onClick={() => onRefresh(account.id)} title="Обновить лимиты">
+          <button className="icon-btn" disabled={busy !== null} onClick={() => onRefresh(account.id)} title={isAntigravity ? "Обновить лимиты Antigravity" : "Обновить лимиты"}>
             {busy === `refresh:${account.id}` ? <Loader2 className="spin" /> : <RefreshCcw />}
           </button>
-          <button className="icon-btn" disabled={busy !== null} onClick={() => onReauth(account.id)} title="Повторно авторизовать профиль">
-            {busy === `reauth:${account.id}` ? <Loader2 className="spin" /> : <KeyRound />}
+          <button className={`icon-btn ${needsRepair ? "repair-action" : ""}`} aria-label={needsRepair ? "Диагностировать и починить аккаунт" : isAntigravity ? "Открыть авторизацию Antigravity" : "Повторно авторизовать профиль"} disabled={busy !== null} onClick={() => needsRepair ? onRepair(account.id) : onReauth(account.id)} title={needsRepair ? "Диагностировать и починить аккаунт" : isAntigravity ? "Открыть авторизацию Antigravity" : "Повторно авторизовать профиль"}>
+            {busy === `repair:${account.id}` || busy === `reauth:${account.id}` ? <Loader2 className="spin" /> : <KeyRound />}
           </button>
           <button className="icon-btn" disabled={busy !== null} onClick={() => onOpenFolder(account.id)} title="Открыть папку профиля">
             <FolderOpen />
           </button>
-          <button className="icon-btn primary" disabled={busy !== null || account.isActive} onClick={() => onSwitch(account.id)} title="Сделать активным и перезапустить Codex">
+          <button className="icon-btn primary" disabled={busy !== null || account.isActive} onClick={() => onSwitch(account.id)} title="Сделать активным">
             {busy === `switch:${account.id}` ? <Loader2 className="spin" /> : <Zap />}
           </button>
-          <button className="icon-btn" disabled={busy !== null} onClick={() => onDelete(account.id)} title="Удалить профиль">
+          <button className="icon-btn" disabled={busy !== null || account.isActive} onClick={() => onDelete(account.id)} title={account.isActive ? "Сначала переключись на другой аккаунт" : "Удалить профиль"}>
             <Trash2 />
           </button>
         </div>
@@ -437,64 +1021,86 @@ function AccountRow({
 function AccountCard({
   account,
   selected,
+  privacyMode,
   busy,
   onRefresh,
   onSwitch,
   onReauth,
-  onOpenFolder,
+  onRepair,
   onSelect,
-  onDelete
+  onInspect
 }: {
   account: ManagedAccount;
   selected: boolean;
+  privacyMode: boolean;
   busy: string | null;
   onRefresh: (id: string) => void;
   onSwitch: (id: string) => void;
   onReauth: (id: string) => void;
-  onOpenFolder: (id: string) => void;
+  onRepair: (id: string) => void;
   onSelect: (id: string) => void;
-  onDelete: (id: string) => void;
+  onInspect: (id: string, trigger: HTMLButtonElement) => void;
 }) {
+  const isAntigravity = accountPlatform(account) === "antigravity";
+  const needsRepair = hasCurrentQuotaRefreshFailure(account) || account.credentialState !== "ready";
+  const limits = accountLimitDisplay(account);
   return (
-    <article className={`profile-card ${selected ? "is-selected" : ""} ${account.isActive ? "is-active" : ""}`} onClick={() => onSelect(account.id)}>
+    <article
+      className={`profile-card ${selected ? "is-selected" : ""} ${account.isActive ? "is-active" : ""}`}
+      tabIndex={0}
+      aria-label={`${account.label}, ${account.planType ?? "ChatGPT"}${account.isActive ? ", активный профиль" : ""}`}
+      onClick={() => onSelect(account.id)}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        onSelect(account.id);
+      }}
+    >
       <div className="profile-card-head">
         <div className="account-cell">
-          <div className="avatar">{account.label.slice(0, 2).toUpperCase()}</div>
+          <AccountPlatformMark account={account} />
           <div className="account-copy">
             <div className="name">
-              {account.label}
+              <span className="account-label" title={account.label}>{account.label}</span>
               {account.favorite ? <Star className="inline-mark" /> : null}
               {account.archived ? <span className="badge compact">архив</span> : null}
               {account.isActive ? <span className="badge active compact">активен</span> : null}
             </div>
-            <div className="email">{account.email}</div>
+            <div className="email" title={privacyMode ? undefined : account.email}>{privacyMode ? maskEmailForPrivacy(account.email) : account.email}</div>
           </div>
         </div>
-        <span className={`badge ${statusClass(account)}`}>{statusLabel(account)}</span>
+        <div className="profile-card-status">
+          <PlanBadge planType={account.planType} />
+          <CredentialStateChip account={account} />
+        </div>
       </div>
       <div className="profile-card-body">
-        <LimitMeter label="5 часов" usedPercent={account.fiveHourUsedPercent} resetsAt={account.fiveHourResetsAt} />
-        <LimitMeter label="неделя" usedPercent={account.weeklyUsedPercent} resetsAt={account.weeklyResetsAt} />
+        <LimitMeter label={limits.primaryLabel} usedPercent={limits.primaryUsedPercent} resetsAt={limits.primaryResetsAt} unavailableReason={limits.primaryUnavailableReason} />
+        <LimitMeter label={limits.secondaryLabel} usedPercent={limits.secondaryUsedPercent} resetsAt={limits.secondaryResetsAt} unavailableReason={limits.secondaryUnavailableReason} />
       </div>
       <div className="profile-card-foot">
-        <span>{account.planType}</span>
-        <span>{relativeRefresh(account)}</span>
+        <QuotaFreshnessChip account={account} />
+        <span className="profile-refresh-age">{relativeRefresh(account)}</span>
       </div>
-      <div className="row-actions card-actions" onClick={(event) => event.stopPropagation()}>
-        <button className="icon-btn" disabled={busy !== null} onClick={() => onRefresh(account.id)} title="Обновить лимиты">
+      <div className={`row-actions card-actions ${needsRepair ? "needs-repair" : ""}`} onClick={(event) => event.stopPropagation()}>
+        <button className="icon-btn" aria-label={isAntigravity ? "Обновить лимиты Antigravity" : "Обновить лимиты"} disabled={busy !== null} onClick={() => onRefresh(account.id)} title={isAntigravity ? "Обновить лимиты Antigravity" : "Обновить лимиты"}>
           {busy === `refresh:${account.id}` ? <Loader2 className="spin" /> : <RefreshCcw />}
         </button>
-        <button className="icon-btn" disabled={busy !== null} onClick={() => onReauth(account.id)} title="Повторно авторизовать профиль">
-          {busy === `reauth:${account.id}` ? <Loader2 className="spin" /> : <KeyRound />}
+        <button
+          className={`icon-btn ${needsRepair ? "repair-action" : ""}`}
+          aria-label={needsRepair ? "Диагностировать и восстановить аккаунт" : isAntigravity ? "Открыть авторизацию Antigravity" : "Повторно авторизовать профиль"}
+          disabled={busy !== null}
+          onClick={() => needsRepair ? onRepair(account.id) : onReauth(account.id)}
+          title={needsRepair ? "Проверить вход, обновить лимиты и при необходимости восстановить авторизацию" : isAntigravity ? "Открыть авторизацию Antigravity" : "Повторно авторизовать профиль"}
+        >
+          {busy === `repair:${account.id}` || busy === `reauth:${account.id}` ? <Loader2 className="spin" /> : <KeyRound />}
         </button>
-        <button className="icon-btn" disabled={busy !== null} onClick={() => onOpenFolder(account.id)} title="Открыть папку профиля">
-          <FolderOpen />
+        <button className="icon-btn" aria-label="Подробнее о профиле" disabled={busy !== null} onClick={(event) => onInspect(account.id, event.currentTarget)} title="Подробнее о профиле">
+          <MoreHorizontal />
         </button>
-        <button className="icon-btn primary" disabled={busy !== null || account.isActive} onClick={() => onSwitch(account.id)} title="Сделать активным и перезапустить Codex">
-          {busy === `switch:${account.id}` ? <Loader2 className="spin" /> : <Zap />}
-        </button>
-        <button className="icon-btn" disabled={busy !== null} onClick={() => onDelete(account.id)} title="Удалить профиль">
-          <Trash2 />
+        <button className="profile-switch-action" disabled={busy !== null || account.isActive} onClick={() => onSwitch(account.id)} title="Сделать активным">
+          {busy === `switch:${account.id}` ? <Loader2 className="spin" /> : account.isActive ? <CheckCircle2 /> : <Zap />}
+          <span>{account.isActive ? "Активен" : "Переключить"}</span>
         </button>
       </div>
     </article>
@@ -503,143 +1109,174 @@ function AccountCard({
 
 function AccountInspector({
   account,
+  privacyMode,
+  language,
   busy,
   onRefresh,
+  onValidateAuth,
+  onRepair,
   onSwitch,
   onReauth,
   onOpenFolder,
-  onMetadata
+  onMetadata,
+  onDelete
 }: {
   account: ManagedAccount | null;
+  privacyMode: boolean;
+  language: AppSettings["language"];
   busy: string | null;
   onRefresh: (id: string) => void;
+  onValidateAuth: (id: string) => void;
+  onRepair: (id: string) => void;
   onSwitch: (id: string) => void;
   onReauth: (id: string) => void;
   onOpenFolder: (id: string) => void;
   onMetadata: (id: string, input: { tags?: string[]; favorite?: boolean; archived?: boolean }) => void;
+  onDelete: (id: string) => void;
 }) {
+  const isEnglish = language === "en";
+  const text = getUiText(language);
   if (!account) {
     return (
       <aside className="inspector empty-inspector">
         <TerminalSquare />
-        <strong>Профиль не выбран</strong>
-        <span>Выбери аккаунт в списке, чтобы увидеть живой снимок лимитов и быстрые команды.</span>
+        <strong>{text.inspector.noProfileSelected}</strong>
+        <span>{text.inspector.noProfileHelp}</span>
       </aside>
     );
   }
+  const isAntigravity = accountPlatform(account) === "antigravity";
+  const limits = accountLimitDisplay(account);
+  const switchDisabled = busy !== null || account.isActive;
+  const tags = account.tags ?? [];
+  const visibleTags = tags.slice(0, 2);
+  const hiddenTagCount = Math.max(0, tags.length - visibleTags.length);
+  const antigravityProject = account.antigravity?.googleProjectId ?? (isEnglish ? "no project" : "нет проекта");
+  const antigravityFingerprint = account.antigravity?.fingerprintId ?? (isEnglish ? "not linked" : "не привязан");
+  const currentQuotaFailure = hasCurrentQuotaRefreshFailure(account);
 
   return (
     <aside className={`inspector ${statusClass(account)}`}>
-      <div className="inspector-top">
-        <span className="caption">выбранный профиль</span>
-        <span className={`badge ${statusClass(account)}`}>{statusLabel(account)}</span>
-      </div>
-      <div className="inspector-identity">
-        <div className="avatar large">{account.label.slice(0, 2).toUpperCase()}</div>
-        <div>
-          <strong>{account.label}</strong>
-          <span>{account.email}</span>
+      <div className="inspector-profile-row">
+        <div className="inspector-identity">
+          <AccountPlatformMark account={account} size="large" />
+          <div>
+            <strong>{account.label}</strong>
+            <span>{privacyMode ? maskEmailForPrivacy(account.email) : account.email}</span>
+          </div>
+        </div>
+        <div className="inspector-meta-chips inspector-meta-line">
+          <PlanBadge planType={account.planType} />
+          <CredentialStateChip account={account} />
+          <QuotaFreshnessChip account={account} />
+          <span className="inspector-refresh-age">{relativeRefresh(account)}</span>
         </div>
       </div>
-      <div className="inspector-grid">
-        <div>
-          <span>План</span>
-          <strong>{account.planType}</strong>
+      <div className="inspector-tag-section">
+        <div className="metadata-strip">
+          <button className={`meta-toggle ${account.favorite ? "is-on" : ""}`} disabled={busy !== null} onClick={() => onMetadata(account.id, { favorite: !account.favorite })}>
+            <Star />
+            {isEnglish ? "Favorite" : "Избранное"}
+          </button>
+          <button className={`meta-toggle ${account.archived ? "is-on" : ""}`} disabled={busy !== null} onClick={() => onMetadata(account.id, { archived: !account.archived })}>
+            <Archive />
+            {isEnglish ? "Archive" : "Архив"}
+          </button>
+          {visibleTags.length > 0 ? (
+            <div className="tag-row compact-tag-row">
+              {visibleTags.map((tag) => <span key={tag}><Tag />{tag}</span>)}
+              {hiddenTagCount > 0 ? <span className="tag-more">+{hiddenTagCount}</span> : null}
+            </div>
+          ) : null}
         </div>
-        <div>
-          <span>Снимок</span>
-          <strong>{relativeRefresh(account)}</strong>
+      </div>
+      <div className="inspector-limit-grid">
+        <LimitMeter label={limits.primaryLabel} usedPercent={limits.primaryUsedPercent} resetsAt={limits.primaryResetsAt} unavailableReason={limits.primaryUnavailableReason} />
+        <LimitMeter label={limits.secondaryLabel} usedPercent={limits.secondaryUsedPercent} resetsAt={limits.secondaryResetsAt} unavailableReason={limits.secondaryUnavailableReason} />
+      </div>
+      {currentQuotaFailure ? (
+        <div className="quota-refresh-warning" title={account.lastRefreshError ?? undefined}>
+          <AlertTriangle />
+          <span><strong>{isEnglish ? "Latest refresh failed" : "Последнее обновление не удалось"}</strong>{isEnglish ? "The last correct quota snapshot is preserved." : "Последний корректный снимок лимитов сохранён."}</span>
+          <button className="repair-inline" disabled={busy !== null} onClick={() => onRepair(account.id)}>
+            {busy === `repair:${account.id}` ? <Loader2 className="spin" /> : <Wrench />}
+            {isEnglish ? "Repair" : "Починить"}
+          </button>
         </div>
-      </div>
-      <div className="metadata-strip">
-        <button className={`meta-toggle ${account.favorite ? "is-on" : ""}`} disabled={busy !== null} onClick={() => onMetadata(account.id, { favorite: !account.favorite })}>
-          <Star />
-          Избранное
-        </button>
-        <button className={`meta-toggle ${account.archived ? "is-on" : ""}`} disabled={busy !== null} onClick={() => onMetadata(account.id, { archived: !account.archived })}>
-          <Archive />
-          Архив
-        </button>
-      </div>
-      <div className="tag-row">
-        {(account.tags ?? []).slice(0, 5).map((tag) => <span key={tag}><Tag />{tag}</span>)}
-        {(account.tags ?? []).length === 0 ? <span><Tag />без тегов</span> : null}
-      </div>
-      <div className="quick-tags">
-        {["work", "personal", "client", "backup"].map((tag) => {
-          const tags = account.tags ?? [];
-          const active = tags.includes(tag);
-          return (
-            <button
-              key={tag}
-              className={active ? "is-selected" : ""}
-              disabled={busy !== null}
-              onClick={() => onMetadata(account.id, { tags: active ? tags.filter((item) => item !== tag) : [...tags, tag] })}
-            >
-              {tag}
-            </button>
-          );
-        })}
-      </div>
-      <LimitMeter label="5 часов" usedPercent={account.fiveHourUsedPercent} resetsAt={account.fiveHourResetsAt} />
-      <LimitMeter label="Неделя" usedPercent={account.weeklyUsedPercent} resetsAt={account.weeklyResetsAt} />
-      <div className="inspector-path" title={account.profileDir}>
+      ) : null}
+      {accountPlatform(account) === "antigravity" ? (
+        <div className="antigravity-compact-details" aria-label={isEnglish ? "Antigravity diagnostics" : "Диагностика Antigravity"}>
+          <span title={antigravityProject}><strong>Project</strong>{antigravityProject}</span>
+          <span title={antigravityFingerprint}><strong>FP</strong>{antigravityFingerprint}</span>
+          <span><strong>IDE</strong>{account.antigravity?.ideStateDetected ? (isEnglish ? "found" : "найден") : (isEnglish ? "missing" : "не найден")}</span>
+          <span><strong>{isEnglish ? "Access" : "Доступ"}</strong>{antigravityAccessLabel(account, language)}</span>
+        </div>
+      ) : null}
+      <div className="inspector-path" title={privacyMode ? (isEnglish ? "Path hidden" : "Путь скрыт") : account.profileDir}>
         <Database />
-        <span>{account.profileDir}</span>
+        <span>{privacyMode ? maskPathForPrivacy(account.profileDir) : account.profileDir}</span>
       </div>
-      <div className="inspector-actions">
-        <button className="button" disabled={busy !== null || account.isActive} onClick={() => onSwitch(account.id)}>
+      <section className="inspector-management" aria-label={isEnglish ? "Profile management" : "Управление профилем"}>
+        <div className="inspector-management-head">
+          <strong>{isEnglish ? "Profile management" : "Управление профилем"}</strong>
+          <span>{isEnglish ? "All actions are available here" : "Все действия доступны сразу"}</span>
+        </div>
+        <div className="inspector-action-grid">
+        <button
+          className="button"
+          aria-label={isEnglish ? "Activate account" : "Активировать аккаунт"}
+          disabled={switchDisabled}
+          onClick={() => onSwitch(account.id)}
+          title={isAntigravity ? (isEnglish ? "Apply through Antigravity Credential Manager and restart Antigravity" : "Применить аккаунт через Antigravity Credential Manager и перезапустить Antigravity") : (isEnglish ? "Activate account" : "Активировать аккаунт")}
+        >
           <Zap />
-          Активировать
+          <span className="action-label">{isEnglish ? "Activate" : "Активировать"}</span>
         </button>
-        <button className="button secondary" disabled={busy !== null} onClick={() => onRefresh(account.id)}>
+        <button className="button secondary" aria-label={isEnglish ? "Refresh limits" : "Обновить лимиты"} disabled={busy !== null} onClick={() => onRefresh(account.id)} title={isAntigravity ? (isEnglish ? "Refresh Antigravity limits" : "Обновить лимиты Antigravity") : (isEnglish ? "Refresh limits" : "Обновить лимиты")}>
           <RefreshCcw />
-          Обновить
+          <span className="action-label">{isEnglish ? "Refresh" : "Обновить"}</span>
         </button>
-        <button className="button secondary" disabled={busy !== null} onClick={() => onReauth(account.id)}>
-          <KeyRound />
-          Авторизация
+        <button className="button secondary" aria-label={isEnglish ? "Check sign-in" : "Проверить вход"} disabled={busy !== null} onClick={() => onValidateAuth(account.id)}>
+          {busy === `auth:${account.id}` ? <Loader2 className="spin" /> : <ShieldCheck />}
+          <span className="action-label">{isEnglish ? "Check" : "Проверить вход"}</span>
         </button>
-        <button className="button secondary" disabled={busy !== null} onClick={() => onOpenFolder(account.id)}>
-          <FolderOpen />
-          Папка
-        </button>
-      </div>
+        <button className="button secondary" aria-label={isEnglish ? "Authorize" : "Авторизация"} disabled={busy !== null} onClick={() => onReauth(account.id)}><KeyRound />{isEnglish ? "Authorize again" : "Авторизовать заново"}</button>
+        <button className="button secondary" aria-label={isEnglish ? "Open folder" : "Открыть папку"} disabled={busy !== null} onClick={() => onOpenFolder(account.id)}><FolderOpen />{isEnglish ? "Open profile folder" : "Открыть папку профиля"}</button>
+        <button className="button danger-action" aria-label={isEnglish ? "Delete profile" : "Удалить профиль"} disabled={busy !== null || account.isActive} onClick={() => onDelete(account.id)} title={account.isActive ? (isEnglish ? "Activate another profile first" : "Сначала переключись на другой аккаунт") : undefined}><Trash2 />{isEnglish ? "Delete profile" : "Удалить профиль"}</button>
+        </div>
+      </section>
     </aside>
   );
 }
 
-function LoginPanel({ login, onOpen }: { login: LoginStartResult | null; onOpen: (url: string) => void }) {
-  if (!login) return null;
-  return (
-    <section className="login-panel">
-      <div>
-        <div className="panel-title">Авторизация запущена</div>
-        {login.type === "chatgpt" ? (
-          <p className="muted">Открой браузер, войди в ChatGPT и вернись сюда после подтверждения.</p>
-        ) : (
-          <div className="device-code">
-            <span>Код устройства</span>
-            <strong>{login.userCode}</strong>
-          </div>
-        )}
-      </div>
-      <button className="button" onClick={() => onOpen(login.authUrl ?? login.verificationUrl ?? "")}>
-        <ExternalLink />
-        Открыть
-      </button>
-    </section>
-  );
-}
-
 type TransferMode = "export" | "import";
-type ViewKey = "dashboard" | "accounts" | "limits" | "vault" | "health" | "settings";
+type ViewKey = AppViewKey;
+type NavItem = { key: ViewKey; label: string; description: string; icon: LucideIcon };
+type PlatformFilter = "all" | "codex" | "antigravity";
+type AntigravityExternalImportSource = Exclude<AntigravityCredentialImportSource, "token_json" | "local_files">;
 type LoginWizardState = {
   open: boolean;
   phase: "method" | "starting" | "waiting" | "done" | "error";
-  type: "chatgpt" | "chatgptDeviceCode" | null;
+  type: CodexLoginRequest["type"] | null;
   result: LoginStartResult | null;
   error: string | null;
+};
+
+const ANTIGRAVITY_CLI_DOCS_URL = "https://www.antigravity.google/docs/cli-getting-started";
+
+const antigravityOAuthStepMessage: Record<string, string> = {
+  callback_server_ready: "Готовлю локальный callback для Google входа Antigravity",
+  browser_opened: "Открыл Google вход для Antigravity в браузере",
+  callback_received: "Код Google получен, обмениваю его на токен",
+  token_exchange_started: "Обмениваю Google код на токен Antigravity",
+  token_exchange_completed: "Токен получен, проверяю Google профиль",
+  userinfo_started: "Проверяю Google профиль",
+  userinfo_completed: "Google профиль подтверждён, сохраняю Antigravity аккаунт",
+  project_context_started: "Проверяю Code Assist контекст",
+  project_context_completed: "Code Assist контекст получен",
+  project_context_unavailable: "Code Assist контекст недоступен, лимиты обновятся позже",
+  callback_failed: "Google callback не получен, попробуй начать вход заново",
+  failed: "Antigravity Google вход не завершился"
 };
 type ConfirmState = {
   title: string;
@@ -650,7 +1287,7 @@ type ConfirmState = {
 };
 
 function passwordStrength(value: string): { label: string; className: string } {
-  const score = Number(value.length >= 8) + Number(value.length >= 14) + Number(/[A-ZА-Я]/.test(value)) + Number(/\d/.test(value)) + Number(/[^\dA-Za-zА-Яа-я]/.test(value));
+  const score = Number(value.length >= 8) + Number(value.length >= 14) + Number(/\p{Lu}/u.test(value)) + Number(/\d/.test(value)) + Number(/[^\p{L}\d]/u.test(value));
   if (!value) return { label: "Введите пароль", className: "idle" };
   if (score <= 2) return { label: "Слабый пароль", className: "weak" };
   if (score <= 4) return { label: "Нормальный пароль", className: "medium" };
@@ -660,18 +1297,81 @@ function passwordStrength(value: string): { label: string; className: string } {
 function AddAccountWizard({
   state,
   busy,
+  capabilities,
   onStart,
   onOpen,
+  onCopyDeviceCode,
+  onOpenDeviceLogin,
   onClose
 }: {
   state: LoginWizardState;
   busy: string | null;
-  onStart: (type: "chatgpt" | "chatgptDeviceCode") => void;
+  capabilities: AppDiagnostics["codexCapabilities"] | null | undefined;
+  onStart: (input: CodexLoginRequest) => void;
   onOpen: (url: string) => void;
+  onCopyDeviceCode: (userCode: string) => Promise<unknown>;
+  onOpenDeviceLogin: (url: string, userCode: string) => Promise<unknown>;
   onClose: () => void;
 }) {
+  const [credentialType, setCredentialType] = useState<"apiKey" | "enterpriseAccessToken" | null>(null);
+  const [credential, setCredential] = useState("");
+  const [showCredential, setShowCredential] = useState(false);
+  const [deviceCodeAction, setDeviceCodeAction] = useState<"idle" | "copying" | "copied" | "opening" | "opened" | "error">("idle");
+  useEffect(() => {
+    if (state.open) return;
+    setCredential("");
+    setCredentialType(null);
+    setShowCredential(false);
+    setDeviceCodeAction("idle");
+  }, [state.open]);
+  useEffect(() => {
+    if (state.phase !== "waiting" || !state.result?.userCode) return;
+    setDeviceCodeAction(
+      state.result.loginPageOpened && state.result.deviceCodeCopied
+        ? "opened"
+        : state.result.deviceCodeCopied
+          ? "copied"
+          : state.result.loginPageOpened
+            ? "error"
+            : "idle"
+    );
+  }, [state.phase, state.result?.userCode, state.result?.deviceCodeCopied, state.result?.loginPageOpened]);
   if (!state.open) return null;
   const url = state.result?.authUrl ?? state.result?.verificationUrl ?? "";
+  const methodAvailable = (id: CodexLoginMethodId) =>
+    capabilities?.loginMethods.find((method) => method.id === id)?.available !== false;
+  const submitCredential = () => {
+    if (!credentialType || !credential.trim()) return;
+    onStart({ type: credentialType, credential: credential.trim() });
+    setCredential("");
+    setShowCredential(false);
+  };
+  const copyDeviceCode = async () => {
+    const userCode = state.result?.userCode;
+    if (!userCode) return;
+    setDeviceCodeAction("copying");
+    try {
+      await onCopyDeviceCode(userCode);
+      setDeviceCodeAction("copied");
+    } catch {
+      setDeviceCodeAction("error");
+    }
+  };
+  const openLoginPage = async () => {
+    if (!url) return;
+    const userCode = state.result?.userCode;
+    if (!userCode) {
+      onOpen(url);
+      return;
+    }
+    setDeviceCodeAction("opening");
+    try {
+      await onOpenDeviceLogin(url, userCode);
+      setDeviceCodeAction("opened");
+    } catch {
+      setDeviceCodeAction("error");
+    }
+  };
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Добавление аккаунта">
       <div className="workflow-modal">
@@ -686,17 +1386,64 @@ function AddAccountWizard({
         </div>
 
         {state.phase === "method" ? (
-          <div className="choice-grid">
-            <button className="choice-card" disabled={busy !== null} onClick={() => onStart("chatgptDeviceCode")}>
+          <div className="codex-onboarding-layout">
+            <section className="codex-official-login-intro" aria-label="Официальная авторизация Codex">
+              <div className="codex-section-heading">
+                <span>ОФИЦИАЛЬНАЯ АВТОРИЗАЦИЯ</span>
+                <strong>Выберите подходящий способ входа</strong>
+              </div>
+              <p>Каждый профиль создаётся в отдельном локальном <code>CODEX_HOME</code>, проверяется официальным app-server и сохраняется в зашифрованном Windows vault.</p>
+            </section>
+            <div className="choice-grid codex-login-choice-grid">
+            <button className="choice-card" disabled={busy !== null || !methodAvailable("chatgptDeviceCode")} onClick={() => onStart({ type: "chatgptDeviceCode" })}>
               <KeyRound />
               <strong>Код устройства</strong>
               <span>Надёжный вариант, если браузерный callback недоступен.</span>
             </button>
-            <button className="choice-card" disabled={busy !== null} onClick={() => onStart("chatgpt")}>
+            <button className="choice-card" disabled={busy !== null || !methodAvailable("chatgpt")} onClick={() => onStart({ type: "chatgpt" })}>
               <LogIn />
               <strong>Браузерный вход</strong>
               <span>Откроет ChatGPT и вернёт профиль после подтверждения.</span>
             </button>
+            <button className="choice-card" disabled={busy !== null || !methodAvailable("apiKey")} onClick={() => setCredentialType("apiKey")}>
+              <KeyRound />
+              <strong>OpenAI API key</strong>
+              <span>Ключ передаётся локальному Codex app-server и сразу удаляется из формы.</span>
+            </button>
+            <button className="choice-card" disabled={busy !== null || !methodAvailable("enterpriseAccessToken")} onClick={() => setCredentialType("enterpriseAccessToken")}>
+              <ShieldCheck />
+              <strong>Enterprise access token</strong>
+              <span>Официальный CLI-вход через stdin, без токена в аргументах процесса и логах.</span>
+            </button>
+            {credentialType ? (
+              <div className="credential-login-form">
+                <label htmlFor="codex-credential">
+                  {credentialType === "apiKey" ? "OpenAI API key" : "Enterprise access token"}
+                </label>
+                <div className="credential-input-row">
+                  <input
+                    id="codex-credential"
+                    type={showCredential ? "text" : "password"}
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={credential}
+                    onChange={(event) => setCredential(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") submitCredential();
+                    }}
+                    placeholder={credentialType === "apiKey" ? "sk-…" : "eyJ…"}
+                  />
+                  <button className="button secondary" type="button" onClick={() => setShowCredential((value) => !value)}>
+                    {showCredential ? "Скрыть" : "Показать"}
+                  </button>
+                  <button className="button" type="button" disabled={!credential.trim() || busy !== null} onClick={submitCredential}>
+                    Войти
+                  </button>
+                </div>
+                <small>Секрет существует только в памяти формы до отправки в локальный main process.</small>
+              </div>
+            ) : null}
+            </div>
           </div>
         ) : null}
 
@@ -712,12 +1459,27 @@ function AddAccountWizard({
           <div className="workflow-state">
             <CheckCircle2 />
             <strong>{state.type === "chatgptDeviceCode" ? "Введите код устройства" : "Завершите вход в браузере"}</strong>
-            {state.result.userCode ? <div className="device-code compact-code"><span>Код</span><strong>{state.result.userCode}</strong></div> : null}
-            <span>После подтверждения приложение само сохранит профиль и обновит список.</span>
+            {state.result.userCode ? (
+              <div className="device-code-panel">
+                <div className="device-code-caption"><span>Одноразовый код</span><small>действует 15 минут</small></div>
+                <code>{state.result.userCode}</code>
+                <button className="device-code-copy" type="button" disabled={deviceCodeAction === "copying"} onClick={() => void copyDeviceCode()} title="Скопировать код устройства">
+                  {deviceCodeAction === "copying" ? <Loader2 className="spin" /> : deviceCodeAction === "copied" || deviceCodeAction === "opened" ? <CheckCircle2 /> : <Copy />}
+                  <span>{deviceCodeAction === "copied" || deviceCodeAction === "opened" ? "Скопировано" : "Копировать"}</span>
+                </button>
+              </div>
+            ) : null}
+            <span className={`device-code-guidance ${deviceCodeAction === "error" ? "is-error" : ""}`} role="status">
+              {state.result.userCode
+                ? deviceCodeAction === "error"
+                  ? "Не удалось передать код. Нажмите «Копировать» и откройте страницу ещё раз."
+                  : "Код уже в буфере. После выбора аккаунта вставьте его в поле сочетанием Ctrl+V."
+                : "После подтверждения приложение само сохранит профиль и обновит список."}
+            </span>
             {url ? (
-              <button className="button" onClick={() => onOpen(url)}>
-                <ExternalLink />
-                Открыть страницу входа
+              <button className="button device-login-open" disabled={deviceCodeAction === "opening"} onClick={() => void openLoginPage()}>
+                {deviceCodeAction === "opening" ? <Loader2 className="spin" /> : <ExternalLink />}
+                {state.result.userCode ? "Открыть и подготовить код" : "Открыть страницу входа"}
               </button>
             ) : null}
           </div>
@@ -737,7 +1499,7 @@ function AddAccountWizard({
             <AlertTriangle />
             <strong>Не удалось добавить аккаунт</strong>
             <span>{state.error ?? "Подробности доступны в журнале диагностики."}</span>
-            <button className="button secondary" onClick={() => onStart("chatgptDeviceCode")}>Повторить через код</button>
+            <button className="button secondary" onClick={() => onStart({ type: "chatgptDeviceCode" })}>Повторить через код</button>
           </div>
         ) : null}
       </div>
@@ -801,7 +1563,7 @@ function CommandPalette({
   const groups = Array.from(new Set(visible.map((command) => command.group)));
 
   return (
-    <div className="modal-backdrop command-backdrop" role="dialog" aria-modal="true" aria-label="Командная палитра">
+    <div className="modal-backdrop command-backdrop" role="dialog" aria-modal="true" aria-label="Командный центр">
       <div className="command-palette">
         <div className="command-search">
           <Command />
@@ -811,6 +1573,10 @@ function CommandPalette({
             onChange={(event) => onQuery(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Escape") onClose();
+              if (event.key === "Enter") {
+                const first = visible.find((command) => !command.disabled);
+                if (first) onRun(first);
+              }
             }}
             placeholder="Найти команду, аккаунт или действие"
             aria-label="Поиск команды"
@@ -841,75 +1607,256 @@ function CommandPalette({
   );
 }
 
-function OperationsTimeline({
-  history,
-  onOpenHealth
+function AntigravityImportModal({
+  busy,
+  profileStatus,
+  oauthSession,
+  callbackUrl,
+  onCallbackUrl,
+  tokenPayload,
+  onTokenPayload,
+  result,
+  displayEmail,
+  onClose,
+  onStartOAuth,
+  onFinishOAuth,
+  onImportToken,
+  onImportFiles,
+  onImportSource,
+  onImportLocalProfile,
+  onInspect,
+  onOpenDocs
 }: {
-  history: SwitchHistoryItem[];
-  onOpenHealth: () => void;
+  busy: string | null;
+  profileStatus: AntigravityProfileStatus | null;
+  oauthSession: AntigravityOAuthStartResult | null;
+  callbackUrl: string;
+  onCallbackUrl: (value: string) => void;
+  tokenPayload: string;
+  onTokenPayload: (value: string) => void;
+  result: AntigravityCredentialBatchImportResult | null;
+  displayEmail: (email: string) => string;
+  onClose: () => void;
+  onStartOAuth: () => void;
+  onFinishOAuth: (manualCallback: boolean) => void;
+  onImportToken: () => void;
+  onImportFiles: () => void;
+  onImportSource: (source: AntigravityExternalImportSource) => void;
+  onImportLocalProfile: () => void;
+  onInspect: () => void;
+  onOpenDocs: () => void;
 }) {
+  const sources: Array<[AntigravityExternalImportSource, string, LucideIcon]> = [
+    ["plugin", "Плагин", KeyRound],
+    ["local_db", "Локальная БД", Database],
+    ["antigravity_tools", "Antigravity Tools", Zap],
+    ["cockpit", "Cockpit", Layers3]
+  ];
+
   return (
-    <section className="page-panel ops-timeline" aria-label="Лента операций">
-      <div className="page-header">
-        <span>Аудит</span>
-        <h2>Последние действия</h2>
-      </div>
-      <div className="timeline-list">
-        {history.length ? history.slice(0, 8).map((event) => (
-          <article key={event.id} className={`timeline-item ${event.status}`}>
-            <div>
-              <strong>{event.accountLabel ?? event.accountEmail ?? event.accountId}</strong>
-              <span>{event.status === "completed" ? "переключение выполнено" : event.status === "failed" ? "переключение с ошибкой" : event.status}</span>
-            </div>
-            <time>{formatTime(event.startedAt)}</time>
-          </article>
-        )) : (
-          <div className="empty compact-empty">
-            <strong>История пока пустая</strong>
-            <span>После первого переключения здесь появится audit timeline.</span>
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Добавить Antigravity">
+      <div className="transfer-modal antigravity-import-modal">
+        <div className="modal-head">
+          <div>
+            <div className="panel-title">Добавить Antigravity</div>
+            <p className="muted">Выберите обычный Google-вход, уже настроенную IDE или локальный JSON. Секреты остаются в защищённом main process.</p>
           </div>
-        )}
+          <button className="icon-btn" onClick={onClose} title="Закрыть">
+            <X />
+          </button>
+        </div>
+
+        <section className="antigravity-primary-flow">
+          <div className="antigravity-status-strip">
+            <span className={`status-dot ${profileStatus?.detected ? "is-ready" : ""}`} />
+            <div><strong>{profileStatus?.detected ? "Локальный профиль найден" : "Локальный профиль не найден"}</strong><small>{profileStatus?.detected ? "Можно импортировать вход из установленной Antigravity IDE." : "Google-вход создаст новый защищённый профиль."}</small></div>
+            <button className="button secondary compact-button" disabled={busy !== null} onClick={onInspect}><ShieldCheck />Проверить</button>
+          </div>
+          <div className="antigravity-primary-grid">
+            <button className="antigravity-method-card is-recommended" disabled={busy !== null} onClick={onStartOAuth}>
+              <span className="method-card-icon">{busy === "antigravity-oauth-start" ? <Loader2 className="spin" /> : <ExternalLink />}</span>
+              <span><strong>Войти через Google</strong><small>Рекомендуется · автоматический callback и проверка профиля</small></span>
+              <em>Основной</em>
+            </button>
+            <button className="antigravity-method-card" disabled={busy !== null || !profileStatus?.detected} onClick={onImportLocalProfile}>
+              <span className="method-card-icon">{busy === "antigravity-import-local" ? <Loader2 className="spin" /> : <Database />}</span>
+              <span><strong>Из локальной IDE</strong><small>Считать уже сохранённый вход и контекст Code Assist</small></span>
+              <em>{profileStatus?.detected ? "Найден" : "Нет данных"}</em>
+            </button>
+            <button className="antigravity-method-card" disabled={busy !== null} onClick={onImportFiles}>
+              <span className="method-card-icon">{busy === "antigravity-file-import" ? <Loader2 className="spin" /> : <FileDown />}</span>
+              <span><strong>Выбрать JSON</strong><small>Проверить локальные credential-файлы перед импортом</small></span>
+              <em>Файл</em>
+            </button>
+          </div>
+          {oauthSession ? (
+            <div className="antigravity-session-line">
+              <span>Ожидаю callback</span>
+              <strong>{oauthSession.redirectUri}</strong>
+              <em>до {formatTime(oauthSession.expiresAt)}</em>
+            </div>
+          ) : null}
+        </section>
+
+        <details className="antigravity-advanced">
+          <summary>Перенос и восстановление</summary>
+          <div className="antigravity-import-source-row">
+            {sources.map(([source, title, Icon]) => {
+              const busyKey = "antigravity-source:" + source;
+              return (
+                <button
+                  key={source}
+                  className="button secondary compact-button"
+                  disabled={busy !== null}
+                  onClick={() => onImportSource(source)}
+                >
+                  {busy === busyKey ? <Loader2 className="spin" /> : <Icon />}
+                  {title}
+                </button>
+              );
+            })}
+          </div>
+
+          <label className="field compact-field">
+            <span>Токен или JSON</span>
+            <textarea
+              className="token-json-input"
+              value={tokenPayload}
+              onChange={(event) => onTokenPayload(event.target.value)}
+              placeholder={'[{"email":"user@example.com","refresh_token":"1//..."}] или raw refresh_token'}
+              spellCheck={false}
+            />
+          </label>
+          <div className="antigravity-inline-actions">
+            <button className="button secondary" disabled={busy !== null} onClick={() => onTokenPayload("")}>Очистить</button>
+            <button className="button" disabled={busy !== null || tokenPayload.trim().length < 20} onClick={onImportToken}>
+              {busy === "antigravity-token-import" ? <Loader2 className="spin" /> : <KeyRound />}
+              Импортировать токен
+            </button>
+          </div>
+
+          <div className="antigravity-local-flow">
+            <button className="button secondary" disabled={busy !== null} onClick={onOpenDocs}>
+              <ExternalLink />
+              Документация CLI
+            </button>
+          </div>
+
+          <label className="field compact-field">
+            <span>Ручной callback URL</span>
+            <div className="inline-copy-field">
+              <input value={callbackUrl} onChange={(event) => onCallbackUrl(event.target.value)} placeholder="http://localhost:36742/oauth-callback?code=...&state=..." />
+              <button className="button secondary inline-action" disabled={busy !== null || !oauthSession || !callbackUrl.trim()} onClick={() => onFinishOAuth(true)}>
+                Завершить
+              </button>
+            </div>
+          </label>
+        </details>
+
+        {result ? (
+          <div className="antigravity-import-result">
+            <strong>{result.importedCount > 0 ? "Импортировано: " + result.importedCount : "Новые аккаунты не найдены"}</strong>
+            {result.failures.slice(0, 3).map((failure) => (
+              <span key={failure.source + "-" + (failure.email ?? "unknown")}>{failure.email ? displayEmail(failure.email) : failure.source}: {failure.reason}</span>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="modal-actions">
+          <button className="button secondary" onClick={onClose}>Закрыть</button>
+        </div>
       </div>
-      <button className="button secondary" onClick={onOpenHealth}>
-        <Activity />
-        Открыть диагностику
-      </button>
-    </section>
+    </div>
   );
 }
 
 function App() {
   const [accounts, setAccounts] = useState<ManagedAccount[]>([]);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [login, setLogin] = useState<LoginStartResult | null>(null);
-  const [message, setMessage] = useState<string>("Готов к работе");
-  const [diagnostics, setDiagnostics] = useState<AppDiagnostics | null>(null);
-  const [healthReport, setHealthReport] = useState<HealthReport | null>(null);
-  const [profileIntegrity, setProfileIntegrity] = useState<ProfileIntegrityReport | null>(null);
-  const [releaseReadiness, setReleaseReadiness] = useState<ReleaseReadinessReport | null>(null);
-  const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
-  const [settingsData, setSettingsData] = useState<AppSettings | null>(null);
-  const [workspaceBinding, setWorkspaceBinding] = useState<WorkspaceBinding | null>(null);
+  const [switchTransactions, setSwitchTransactions] = useState<SwitchTransaction[]>([]);
   const [switchHistory, setSwitchHistory] = useState<SwitchHistoryItem[]>([]);
-  const [limitHistory, setLimitHistory] = useState<LimitHistoryPoint[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState<string>("Готов к работе");
+  const [processNotice, setProcessNotice] = useState<ProcessNotice | null>(null);
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "degraded" | "error">("loading");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<AppDiagnostics | null>(null);
+  const [settingsData, setSettingsData] = useState<AppSettings | null>(null);
+  const [antigravityProfileStatus, setAntigravityProfileStatus] = useState<AntigravityProfileStatus | null>(null);
+  const [workspaceBinding, setWorkspaceBinding] = useState<WorkspaceBinding | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [showLogViewer, setShowLogViewer] = useState(false);
   const [showReleaseNotes, setShowReleaseNotes] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<UpdateCheckResult | null>(null);
   const [transferMode, setTransferMode] = useState<TransferMode | null>(null);
   const [transferPassword, setTransferPassword] = useState("");
   const [transferConfirm, setTransferConfirm] = useState("");
   const [transferError, setTransferError] = useState<string | null>(null);
+  const [antigravityImportOpen, setAntigravityImportOpen] = useState(false);
+  const [antigravityOAuthSession, setAntigravityOAuthSession] = useState<AntigravityOAuthStartResult | null>(null);
+  const [antigravityCallbackUrl, setAntigravityCallbackUrl] = useState("");
+  const [antigravityTokenPayload, setAntigravityTokenPayload] = useState("");
+  const [antigravityImportResult, setAntigravityImportResult] = useState<AntigravityCredentialBatchImportResult | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "usable" | "risk">("all");
-  const [viewMode, setViewMode] = useState<"table" | "cards">("table");
+  const [platformFilter, setPlatformFilter] = useState<PlatformFilter>("codex");
+  const [viewMode] = useState<"table" | "cards">("cards");
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<ViewKey>("dashboard");
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const inspectorTriggerRef = useRef<HTMLElement | null>(null);
+  const inspectorCloseButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [activeView, setActiveView] = useState<ViewKey>("overview");
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandSearch, setCommandSearch] = useState("");
   const [loginWizard, setLoginWizard] = useState<LoginWizardState>({ open: false, phase: "method", type: null, result: null, error: null });
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
   const transferResolveRef = useRef<((value: string | null) => void) | null>(null);
   const confirmResolveRef = useRef<((confirmed: boolean) => void) | null>(null);
+  const reloadSequenceRef = useRef(0);
+  const language = settingsData?.language ?? "ru";
+  const languageRef = useRef(language);
+  const uiText = getUiText(language);
+  const isEnglish = language === "en";
+  const shellText = {
+    platformFilter: isEnglish ? "Platform filter" : "Фильтр платформы",
+    platform: isEnglish ? "Platform" : "Платформа",
+    actionCenter: isEnglish ? "Action center" : "Центр действий",
+    actions: isEnglish ? "Actions" : "Действия",
+    addCodex: isEnglish ? "Add Codex" : "Добавить Codex",
+    addAntigravity: isEnglish ? "Add Antigravity" : "Добавить Antigravity",
+    commands: isEnglish ? "Commands" : "Команды",
+    deviceCode: isEnglish ? "Device code" : "Код устройства",
+    consoleSections: isEnglish ? "Console sections" : "Разделы консоли",
+    windowControls: isEnglish ? "Window controls" : "Управление окном",
+    minimize: isEnglish ? "Minimize" : "Свернуть",
+    maximize: isEnglish ? "Maximize" : "Развернуть",
+    close: isEnglish ? "Close" : "Закрыть",
+    noRefreshableAccounts: isEnglish ? "No accounts to refresh" : "Нет аккаунтов для обновления",
+    refreshLimits: isEnglish ? "Refresh limits" : "Обновить лимиты"
+  };
+  const accountsText = {
+    title: platformFilter === "antigravity" ? (isEnglish ? "Antigravity accounts" : "Аккаунты Antigravity") : (isEnglish ? "Codex accounts" : "Аккаунты Codex"),
+    searchProfile: isEnglish ? "Search profile" : "Поиск профиля",
+    accountFilter: isEnglish ? "Account filter" : "Фильтр аккаунтов",
+    viewMode: isEnglish ? "Account view" : "Вид аккаунтов",
+    all: isEnglish ? "All" : "Все",
+    ready: isEnglish ? "Ready" : "Готовые",
+    risk: isEnglish ? "Risk" : "Риск",
+    table: isEnglish ? "Table" : "Таблица",
+    cards: isEnglish ? "Cards" : "Карточки",
+    export: isEnglish ? "Export" : "Экспорт",
+    import: isEnglish ? "Import" : "Импорт",
+    account: isEnglish ? "Account" : "Аккаунт",
+    plan: isEnglish ? "Plan" : "План",
+    fiveHours: isEnglish ? "5 hours" : "5 часов",
+    week: isEnglish ? "Week" : "Неделя",
+    status: isEnglish ? "Status" : "Статус",
+    emptyFiltered: isEnglish ? "No accounts match this filter." : "Под этот фильтр аккаунтов нет."
+  };
+  const privacyMode = settingsData?.privacyMode === true;
+  const displayEmail = (email: string): string => privacyMode ? maskEmailForPrivacy(email) : email;
+  const displayPath = (value: string | null | undefined, fallback = "не выбран"): string => {
+    return privacyMode ? maskPathForPrivacy(value, fallback) : (value ?? fallback);
+  };
 
   const stats = useMemo(() => {
     const active = accounts.find((account) => account.isActive);
@@ -917,7 +1864,9 @@ function App() {
     const avg = accounts.length ? accounts.reduce((sum, account) => sum + used(account), 0) / accounts.length : 0;
     const usable = accounts.filter(isUsable).length;
     const stale = accounts.filter((account) => !account.lastRefreshAt || nowSeconds() - account.lastRefreshAt > 15 * 60).length;
-    return { active, low, avg, usable, stale };
+    const codex = accounts.filter((account) => accountPlatform(account) === "codex").length;
+    const antigravity = accounts.filter((account) => accountPlatform(account) === "antigravity").length;
+    return { active, low, avg, usable, stale, codex, antigravity };
   }, [accounts]);
 
   const smartRecommendation = useMemo(() => selectSmartAccount(accounts, workspaceBinding), [accounts, workspaceBinding]);
@@ -927,16 +1876,28 @@ function App() {
   const commandPalette = useMemo(() => buildCommandPalette({
     accounts,
     activeView,
-    smartRecommendation
-  }), [accounts, activeView, smartRecommendation]);
+    smartRecommendation,
+    privacyMode
+  }), [accounts, activeView, privacyMode, smartRecommendation]);
+  const showUpdateBanner = updateStatus?.status === "available";
+  const updateButtonDisabled = busy !== null;
+  const updateButtonLabel = isEnglish ? "Open GitHub" : "Открыть GitHub";
+
+  const scopedAccounts = useMemo(() => {
+    return platformFilter === "all" ? accounts : accounts.filter((account) => accountPlatform(account) === platformFilter);
+  }, [accounts, platformFilter]);
 
   const selectedAccount = useMemo(() => {
-    return accounts.find((account) => account.id === selectedAccountId) ?? stats.active ?? bestAccount ?? accounts[0] ?? null;
-  }, [accounts, bestAccount, selectedAccountId, stats.active]);
+    return scopedAccounts.find((account) => account.id === selectedAccountId) ??
+      scopedAccounts.find((account) => account.isActive) ??
+      (bestAccount && scopedAccounts.some((account) => account.id === bestAccount.id) ? bestAccount : null) ??
+      scopedAccounts[0] ??
+      null;
+  }, [bestAccount, scopedAccounts, selectedAccountId]);
 
   const visibleAccounts = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return accounts
+    return scopedAccounts
       .filter((account) => {
         if (statusFilter === "usable" && (!isUsable(account) || account.archived)) return false;
         if (statusFilter === "risk" && account.status !== "near_limit" && account.status !== "limited" && account.status !== "error") return false;
@@ -945,39 +1906,88 @@ function App() {
       })
       .slice()
       .sort((a, b) => Number(b.isActive) - Number(a.isActive) || Number(b.favorite) - Number(a.favorite) || Number(a.archived) - Number(b.archived) || accountScore(a) - accountScore(b) || a.label.localeCompare(b.label));
-  }, [accounts, search, statusFilter]);
-  const tableScrollable = visibleAccounts.length > 5;
-  const navItems: Array<{ key: ViewKey; label: string }> = [
-    { key: "dashboard", label: "Панель" },
-    { key: "accounts", label: "Аккаунты" },
-    { key: "limits", label: "Лимиты" },
-    { key: "vault", label: "Перенос" },
-    { key: "health", label: "Диагностика" },
-    { key: "settings", label: "Настройки" }
+  }, [scopedAccounts, search, statusFilter]);
+  const scopedProtectedCount = scopedAccounts.filter((account) => account.credentialState === "ready").length;
+  const scopedAttentionCount = scopedAccounts.filter((account) => account.credentialState !== "ready" || hasCurrentQuotaRefreshFailure(account)).length;
+  const refreshableAccountCount = accounts.length;
+  const tableScrollable = false;
+  const navItems: NavItem[] = [
+    { key: "overview", label: isEnglish ? "Overview" : "Обзор", description: isEnglish ? "Session and readiness" : "Сессия и готовность", icon: LayoutDashboard },
+    { key: "accounts", label: uiText.nav.accounts, description: platformFilter === "antigravity" ? "Antigravity" : "Codex", icon: Layers3 },
+    { key: "activity", label: isEnglish ? "Activity" : "Активность", description: isEnglish ? "Switch journal" : "Журнал переключений", icon: Activity },
+    { key: "settings", label: uiText.nav.settings, description: isEnglish ? "App behavior" : "Поведение приложения", icon: SlidersHorizontal }
+  ];
+  const activeNav = navItems.find((item) => item.key === activeView) ?? navItems[0];
+  const platformSummaries = [
+    {
+      id: "codex",
+      label: "Codex",
+      count: stats.codex,
+      state: platformFilter === "codex" ? "выбран" : diagnostics?.codexPath ? "готов" : "нужен CLI",
+      tone: diagnostics?.codexPath ? "ready" : "warn"
+    },
+    {
+      id: "antigravity",
+      label: "Antigravity",
+      count: stats.antigravity,
+      state: platformFilter === "antigravity" ? "выбран" : antigravityProfileStatus?.detected ? "профиль найден" : "ожидает вход",
+      tone: antigravityProfileStatus?.detected ? "ready" : "warn"
+    }
   ];
 
   useEffect(() => {
-    if (selectedAccountId && accounts.some((account) => account.id === selectedAccountId)) return;
-    setSelectedAccountId(stats.active?.id ?? bestAccount?.id ?? accounts[0]?.id ?? null);
-  }, [accounts, bestAccount, selectedAccountId, stats.active]);
+    if (selectedAccountId && scopedAccounts.some((account) => account.id === selectedAccountId)) return;
+    const bestScopedAccountId = bestAccount && scopedAccounts.some((account) => account.id === bestAccount.id) ? bestAccount.id : null;
+    setSelectedAccountId(scopedAccounts.find((account) => account.isActive)?.id ?? bestScopedAccountId ?? scopedAccounts[0]?.id ?? null);
+  }, [bestAccount, scopedAccounts, selectedAccountId]);
 
   useEffect(() => {
-    if (!selectedAccount?.id) {
-      setLimitHistory([]);
-      return;
-    }
-    let cancelled = false;
-    cam.getLimitHistory(selectedAccount.id)
-      .then((history) => {
-        if (!cancelled) setLimitHistory(history);
-      })
-      .catch(() => {
-        if (!cancelled) setLimitHistory([]);
-      });
-    return () => {
-      cancelled = true;
+    document.documentElement.lang = language;
+    languageRef.current = language;
+  }, [language]);
+
+  useEffect(() => {
+    if (!processNotice?.terminal || processNotice.tone === "error") return;
+    const timer = window.setTimeout(() => setProcessNotice((current) => current?.id === processNotice.id ? null : current), 6500);
+    return () => window.clearTimeout(timer);
+  }, [processNotice]);
+
+  useEffect(() => {
+    if (!inspectorOpen) return;
+    const trigger = inspectorTriggerRef.current;
+    const focusCloseButton = window.requestAnimationFrame(() => inspectorCloseButtonRef.current?.focus());
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setInspectorOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const dialog = inspectorCloseButtonRef.current?.closest<HTMLElement>("[role='dialog']");
+      if (!dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"
+      )).filter((element) => element.offsetParent !== null);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
-  }, [selectedAccount?.id]);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusCloseButton);
+      document.removeEventListener("keydown", onKeyDown);
+      window.requestAnimationFrame(() => {
+        if (trigger?.isConnected) trigger.focus();
+      });
+    };
+  }, [inspectorOpen]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -998,27 +2008,40 @@ function App() {
   }, [commandOpen]);
 
   async function reload() {
+    const requestId = ++reloadSequenceRef.current;
     try {
-      const [nextAccounts, nextDiagnostics, nextHealth, nextIntegrity, nextRelease, nextSettings, nextBinding, nextSwitchHistory] = await Promise.all([
+      const [
+        nextAccounts,
+        nextDiagnostics,
+        nextSettings,
+        nextAntigravityProfileStatus,
+        nextBinding,
+        nextSwitchTransactions,
+        nextSwitchHistory
+      ] = await Promise.all([
         cam.listAccounts(),
         cam.getDiagnostics(),
-        cam.getHealth().catch(() => null),
-        cam.getProfileIntegrity().catch(() => null),
-        cam.getReleaseReadiness().catch(() => null),
         cam.getSettings().catch(() => null),
+        cam.getAntigravityProfileStatus().catch(() => null),
         cam.getWorkspaceBinding().catch(() => null),
+        cam.listSwitchTransactions().catch(() => []),
         cam.getSwitchHistory().catch(() => [])
       ]);
+      if (requestId !== reloadSequenceRef.current) return;
       setAccounts(nextAccounts);
       setDiagnostics(nextDiagnostics);
-      setHealthReport(nextHealth);
-      setProfileIntegrity(nextIntegrity);
-      setReleaseReadiness(nextRelease);
       setSettingsData(nextSettings);
+      setAntigravityProfileStatus(nextAntigravityProfileStatus);
       setWorkspaceBinding(nextBinding);
+      setSwitchTransactions(nextSwitchTransactions);
       setSwitchHistory(nextSwitchHistory);
+      setLoadError(nextDiagnostics.startupError ?? null);
+      setLoadState(nextDiagnostics.startupError ? "degraded" : "ready");
       if (nextDiagnostics.startupError) setMessage(uiErrorMessage("Сервисы приложения требуют внимания"));
-    } catch {
+    } catch (error) {
+      if (requestId !== reloadSequenceRef.current) return;
+      setLoadError(error instanceof Error ? error.message : "Desktop bridge did not return data");
+      setLoadState("error");
       setMessage(uiErrorMessage("Не удалось загрузить список аккаунтов"));
       try {
         setDiagnostics(await cam.getDiagnostics());
@@ -1034,8 +2057,8 @@ function App() {
       setShowReleaseNotes(true);
     }
     const offAuth = cam.onAuthEvent((event: AuthEvent) => {
-      setMessage(event.success ? `Аккаунт добавлен: ${event.account?.email ?? event.profileId}` : uiErrorMessage("Не удалось завершить вход"));
-      setLogin(null);
+      setMessage(event.success ? "Аккаунт добавлен" : uiErrorMessage("Не удалось завершить вход"));
+      setProcessNotice(buildAuthProcessNotice(event, languageRef.current === "en"));
       setLoginWizard((current) => ({
         ...current,
         open: true,
@@ -1045,26 +2068,112 @@ function App() {
       void reload();
     });
     const offAccountsUpdated = cam.onAccountsUpdated(() => {
-      setMessage("Лимиты автоматически обновлены");
+      setMessage("Данные аккаунтов обновлены");
       void reload();
+    });
+    const offSwitchTransaction = cam.onSwitchTransaction(({ transaction }) => {
+      setSwitchTransactions((current) => [
+        transaction,
+        ...current.filter((item) => item.id !== transaction.id)
+      ].sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 30));
+      const phaseMessage: Record<string, string> = {
+        preparing: "Готовлю безопасное переключение",
+        validating_previous: "Проверяю текущий профиль",
+        validating_target: "Проверяю целевой профиль",
+        ready: "Проверка завершена — можно переключать",
+        quiescing: "Закрываю активный Codex",
+        activating: "Активирую выбранную авторизацию",
+        launching: "Запускаю Codex с новым профилем",
+        verifying: "Проверяю запущенный аккаунт",
+        committed: "Переключение подтверждено",
+        rolling_back: "Возвращаю предыдущий профиль",
+        rolled_back: "Предыдущий профиль восстановлен",
+        aborted: "Переключение отменено до изменения авторизации",
+        failed: "Переключение завершилось ошибкой",
+        recovery_required: "Требуется восстановление переключения"
+      };
+      setMessage(phaseMessage[transaction.phase] ?? `Переключение: ${transaction.phase}`);
+      setProcessNotice(buildSwitchProcessNotice(transaction, languageRef.current === "en"));
+      if (["committed", "rolled_back", "failed", "recovery_required"].includes(transaction.status)) {
+        void reload();
+      }
+    });
+    const offAntigravityOAuthStep = cam.onAntigravityOAuthStep((step) => {
+      setMessage(antigravityOAuthStepMessage[step] ?? `Antigravity OAuth: ${step}`);
+    });
+    const offAntigravityOAuthResult = cam.onAntigravityOAuthResult((result) => {
+      setAntigravityProfileStatus(result.status);
+      setAntigravityOAuthSession(null);
+      setAntigravityCallbackUrl("");
+      if (result.imported && result.account) {
+        setAccounts((current) => {
+          const rest = current.filter((account) => account.id !== result.account!.id);
+          return [result.account!, ...rest];
+        });
+        setSelectedAccountId(result.account.id);
+        setPlatformFilter("antigravity");
+        setMessage(result.reason);
+        setAntigravityImportOpen(false);
+        void reload();
+        return;
+      }
+      setMessage(uiErrorMessage(result.reason));
+    });
+    const offAntigravityOAuthError = cam.onAntigravityOAuthError((reason) => {
+      setBusy(null);
+      setMessage(uiErrorMessage(reason));
+    });
+    const offUpdateStatus = cam.onUpdateStatus((result) => {
+      setUpdateStatus(result);
+      setMessage(result.message);
     });
     return () => {
       offAuth();
       offAccountsUpdated();
+      offSwitchTransaction();
+      offAntigravityOAuthStep();
+      offAntigravityOAuthResult();
+      offAntigravityOAuthError();
+      offUpdateStatus();
     };
   }, []);
 
-  async function startLogin(type: "chatgpt" | "chatgptDeviceCode") {
+  async function startLogin(input: CodexLoginRequest) {
+    const type = input.type;
     setLoginWizard({ open: true, phase: "starting", type, result: null, error: null });
     setBusy(`login:${type}`);
-    setMessage(type === "chatgpt" ? "Открываю браузер для входа в ChatGPT" : "Открываю device-code вход");
+    setMessage(
+      type === "chatgpt"
+        ? "Открываю браузер для входа в ChatGPT"
+        : type === "chatgptDeviceCode"
+          ? "Открываю device-code вход"
+          : "Проверяю локальные учётные данные через установленный Codex"
+    );
     try {
-      const result = await cam.startLogin(type);
-      setLogin(result);
-      setLoginWizard({ open: true, phase: "waiting", type, result, error: null });
-      setMessage("Браузер открыт. Заверши вход, затем вернись в приложение");
-    } catch {
-      setLoginWizard({ open: true, phase: "error", type, result: null, error: "Не удалось начать вход. Проверь диагностику Codex CLI." });
+      const result = await cam.startLogin(input);
+      if (result.completed) {
+        setLoginWizard({ open: true, phase: "done", type, result, error: null });
+        if (result.account) setSelectedAccountId(result.account.id);
+        await reload();
+        setMessage("Аккаунт проверен и сохранён в локальном защищённом профиле");
+      } else {
+        setLoginWizard({ open: true, phase: "waiting", type, result, error: null });
+        setMessage(
+          result.userCode && result.deviceCodeCopied
+            ? "Страница входа открыта, одноразовый код скопирован в буфер"
+            : result.loginPageOpened
+              ? "Браузер открыт. Заверши вход, затем вернись в приложение"
+              : "Авторизация запущена. Открой страницу входа из окна добавления аккаунта"
+        );
+      }
+    } catch (error) {
+      setLoginWizard({
+        open: true,
+        phase: "error",
+        type,
+        result: null,
+        error: uiErrorMessage(error instanceof Error ? error.message : "Не удалось начать вход. Проверь диагностику Codex CLI.")
+      });
       setMessage(uiErrorMessage("Не удалось начать вход"));
     } finally {
       setBusy(null);
@@ -1096,24 +2205,108 @@ function App() {
   async function refreshAccount(id: string) {
     setBusy(`refresh:${id}`);
     try {
-      await cam.refreshAccount(id);
-      setMessage("Лимиты обновлены");
+      const refreshed = await cam.refreshAccount(id);
+      const quotaState = buildProviderQuotaState(refreshed);
+      setMessage(buildQuotaRefreshAccountMessage({
+        platform: accountPlatform(refreshed),
+        status: refreshed.status,
+        statusReason: refreshed.statusReason,
+        lastRefreshError: refreshed.lastRefreshError,
+        source: quotaState.source,
+        confidence: quotaState.confidence
+      }));
       await reload();
+    } catch (error) {
+      setMessage(buildQuotaRefreshErrorMessage("Не удалось обновить лимиты", error));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function validateAccountAuth(id: string) {
+    setBusy(`auth:${id}`);
+    try {
+      const result = await cam.validateAuth(id);
+      setMessage(`Статус входа: ${authValidationLabel(result.state)}`);
     } catch {
-      setMessage(uiErrorMessage("Не удалось обновить лимиты"));
+      setMessage(uiErrorMessage("Не удалось проверить вход"));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function repairAccount(id: string) {
+    const account = accounts.find((item) => item.id === id);
+    if (!account) return;
+    if (accountPlatform(account) === "antigravity") {
+      openAntigravityImport(account);
+      return;
+    }
+
+    setBusy(`repair:${id}`);
+    try {
+      const auth = await cam.validateAuth(id);
+      if (auth.state === "authorized") {
+        const refreshed = await cam.refreshAccount(id);
+        await reload();
+        if (refreshed.lastRefreshError) {
+          setMessage(buildQuotaRefreshErrorMessage("Вход исправен, но лимиты пока не обновились", refreshed.lastRefreshError));
+        } else {
+          setMessage(`Аккаунт ${displayEmail(refreshed.email)} проверен: вход и обновление лимитов работают`);
+        }
+        return;
+      }
+
+      const result = await cam.reauthenticateAccount(id, { type: "chatgptDeviceCode" });
+      setLoginWizard({ open: true, phase: "waiting", type: "chatgptDeviceCode", result, error: null });
+      setMessage("Сохранённый профиль не удалён. Заверши вход по коду устройства — аккаунт будет починен на месте");
+    } catch (error) {
+      setMessage(buildQuotaRefreshErrorMessage("Не удалось автоматически починить аккаунт", error));
     } finally {
       setBusy(null);
     }
   }
 
   async function refreshAllAccounts() {
+    if (refreshableAccountCount === 0) {
+      setMessage("Нет аккаунтов для обновления лимитов");
+      return;
+    }
     setBusy("refresh:all");
     try {
-      await cam.refreshAllAccounts();
-      setMessage("Лимиты всех аккаунтов обновлены");
+      const beforeRefresh = new Map(accounts.map((account) => [account.id, {
+        success: account.lastRefreshAt ?? null,
+        error: account.lastRefreshErrorAt ?? null
+      }]));
+      const refreshed = await cam.refreshAllAccounts();
+      const failedCount = refreshed.filter((account) => account.lastRefreshErrorAt != null && account.lastRefreshErrorAt !== beforeRefresh.get(account.id)?.error).length;
+      const updatedCount = refreshed.filter((account) => account.lastRefreshAt != null && account.lastRefreshAt !== beforeRefresh.get(account.id)?.success).length;
+      const skippedCount = Math.max(0, refreshed.length - failedCount - updatedCount);
+      if (failedCount > 0 || skippedCount > 0) {
+        setMessage(
+          `Обновление завершено: свежих ${updatedCount}, ошибок ${failedCount}, отложено ${skippedCount}. Последние корректные данные сохранены.`
+        );
+        await reload();
+        return;
+      }
+      const confirmed = refreshed.some((account) => {
+        const quotaState = buildProviderQuotaState(account);
+        return quotaState.source === "official_api" && quotaState.confidence === "confirmed";
+      });
+      const local = refreshed.some((account) => {
+        const quotaState = buildProviderQuotaState(account);
+        return quotaState.source !== "unknown" && quotaState.confidence !== "unknown";
+      });
+      setMessage(buildQuotaRefreshMessage({
+        platform: platformFilter === "all" ? "codex" : platformFilter,
+        scope: "all",
+        refreshedCount: refreshed.length,
+        source: confirmed ? "official_api" : local ? "local_status" : "unknown",
+        confidence: confirmed ? "confirmed" : local ? "inferred" : "unknown"
+      }));
       await reload();
-    } catch {
-      setMessage(uiErrorMessage("Не удалось обновить все аккаунты"));
+    } catch (error) {
+      setMessage(buildQuotaRefreshErrorMessage("Не удалось обновить все аккаунты", error));
     } finally {
       setBusy(null);
     }
@@ -1193,30 +2386,209 @@ function App() {
     }
   }
 
-  async function importAuthJson() {
-    setBusy("import-auth");
+  async function inspectAntigravityProfile() {
+    setBusy("antigravity-diagnostics");
     try {
-      const result = await cam.importAuthJson();
-      setAccounts(result.accounts);
-      setMessage(result.importedCount > 0 ? `Импортирован auth.json: ${result.importedCount}` : "Импорт auth.json отменён");
-      await reload();
+      const inspection = await cam.inspectAntigravityProfile();
+      const status = await cam.getAntigravityProfileStatus();
+      setAntigravityProfileStatus({ ...status, inspection });
+      setMessage("Диагностика Antigravity обновлена");
     } catch {
-      setMessage(uiErrorMessage("Не удалось импортировать auth.json"));
+      setMessage(uiErrorMessage("Не удалось выполнить диагностику Antigravity"));
     } finally {
       setBusy(null);
     }
   }
 
+  async function importAntigravityLocalProfile() {
+    setBusy("antigravity-import-local");
+    try {
+      const result = await cam.importAntigravityFromIde();
+      setAntigravityProfileStatus(result.status);
+      if (result.imported && result.account) {
+        setAccounts((current) => {
+          const rest = current.filter((account) => account.id !== result.account!.id);
+          return [result.account!, ...rest];
+        });
+        setSelectedAccountId(result.account.id);
+        setPlatformFilter("antigravity");
+        setMessage(result.reason);
+        await reload();
+        closeAntigravityImport();
+        return;
+      }
+      setMessage(uiErrorMessage(result.reason));
+    } catch {
+      setMessage(uiErrorMessage("Не удалось импортировать локальный профиль Antigravity"));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function startAntigravityOAuthAuthorization() {
+    setBusy("antigravity-oauth-start");
+    setAntigravityImportResult(null);
+    try {
+      const session = await cam.startAntigravityGoogleOAuth();
+      setAntigravityOAuthSession(session);
+      setMessage("Открыт Google вход для Antigravity. После callback приложение само сохранит аккаунт; ручной URL нужен только как fallback.");
+    } catch (error) {
+      const details = error instanceof Error ? error.message : String(error);
+      setMessage(uiErrorMessage(`Не удалось начать Google вход Antigravity: ${details}`));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function finishAntigravityOAuthAuthorization(useManualCallback: boolean) {
+    if (!antigravityOAuthSession) {
+      setMessage("Сначала запусти OAuth авторизацию Antigravity.");
+      return;
+    }
+    setBusy("antigravity-oauth-finish");
+    try {
+      const result = await cam.finishAntigravityGoogleOAuth({
+        sessionId: antigravityOAuthSession.sessionId,
+        callbackUrl: useManualCallback ? antigravityCallbackUrl : null
+      });
+      setAntigravityProfileStatus(result.status);
+      if (result.imported && result.account) {
+        setAccounts((current) => {
+          const rest = current.filter((account) => account.id !== result.account!.id);
+          return [result.account!, ...rest];
+        });
+        setSelectedAccountId(result.account.id);
+        setPlatformFilter("antigravity");
+        setMessage(result.reason);
+        setAntigravityOAuthSession(null);
+        setAntigravityCallbackUrl("");
+        await reload();
+        closeAntigravityImport();
+        return;
+      }
+      setMessage(uiErrorMessage(result.reason));
+    } catch (error) {
+      const details = error instanceof Error ? error.message : String(error);
+      setMessage(uiErrorMessage(`Не удалось завершить Google вход Antigravity: ${details}`));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function cancelAntigravityOAuthAuthorization() {
+    if (!antigravityOAuthSession) {
+      closeAntigravityImport();
+      return;
+    }
+    try {
+      await cam.cancelAntigravityGoogleOAuth(antigravityOAuthSession.sessionId);
+    } finally {
+      setAntigravityOAuthSession(null);
+      setAntigravityCallbackUrl("");
+      closeAntigravityImport();
+    }
+  }
+
+  function applyAntigravityBatchImportResult(result: AntigravityCredentialBatchImportResult): void {
+    setAntigravityImportResult(result);
+    setAccounts(result.accounts);
+    const importedLabel = result.importedCount > 0 ? `импортировано ${result.importedCount}` : "ничего не импортировано";
+    const failedLabel = result.failedCount > 0 ? `, ошибок ${result.failedCount}` : "";
+    setMessage(`Antigravity import: ${importedLabel}${failedLabel}.`);
+    if (result.importedCount > 0) {
+      setPlatformFilter("antigravity");
+      setSelectedAccountId(result.imported[0]?.accountId ?? null);
+    }
+  }
+
+  async function importAntigravityTokenPayload() {
+    if (antigravityTokenPayload.trim().length < 20) {
+      setMessage("Вставь refresh_token или JSON с refresh_token.");
+      return;
+    }
+    if (!window.confirm("Antigravity Beta: импорт содержит секрет авторизации. Продолжай только для аккаунта, которым ты вправе управлять. Секрет не будет показан в интерфейсе или логах.")) {
+      return;
+    }
+    setBusy("antigravity-token-import");
+    try {
+      const result = await cam.importAntigravityCredentialPayload({
+        payload: antigravityTokenPayload,
+        source: "token_json"
+      });
+      applyAntigravityBatchImportResult(result);
+      if (result.importedCount > 0) {
+        setAntigravityTokenPayload("");
+        await reload();
+      }
+    } catch (error) {
+      const details = error instanceof Error ? error.message : String(error);
+      setMessage(uiErrorMessage(`Не удалось импортировать Antigravity token/JSON: ${details}`));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function importAntigravityLocalFiles() {
+    if (!window.confirm("Antigravity Beta: будут прочитаны локальные credential-файлы текущего Windows-пользователя. Продолжить?")) {
+      return;
+    }
+    setBusy("antigravity-file-import");
+    try {
+      const result = await cam.importAntigravityFromLocalFiles();
+      applyAntigravityBatchImportResult(result);
+      if (result.importedCount > 0) await reload();
+    } catch (error) {
+      const details = error instanceof Error ? error.message : String(error);
+      setMessage(uiErrorMessage(`Не удалось импортировать Antigravity файлы: ${details}`));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function importAntigravityExternalSource(source: AntigravityExternalImportSource) {
+    if (!window.confirm("Antigravity Beta: импорт из внешнего источника может содержать секреты. Подтверди, что имеешь право управлять этими аккаунтами.")) {
+      return;
+    }
+    setBusy(`antigravity-source:${source}`);
+    try {
+      const result = await cam.importAntigravityFromExternalSource(source);
+      applyAntigravityBatchImportResult(result);
+      if (result.importedCount > 0) await reload();
+    } catch (error) {
+      const details = error instanceof Error ? error.message : String(error);
+      setMessage(uiErrorMessage(`Не удалось импортировать источник Antigravity: ${details}`));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function openAntigravityImport(_account?: ManagedAccount): void {
+    setAntigravityImportResult(null);
+    setAntigravityImportOpen(true);
+  }
+
+  function closeAntigravityImport(): void {
+    if (antigravityOAuthSession) {
+      void cam.cancelAntigravityGoogleOAuth(antigravityOAuthSession.sessionId);
+    }
+    setAntigravityOAuthSession(null);
+    setAntigravityCallbackUrl("");
+    setAntigravityImportOpen(false);
+  }
+
   async function reauthenticateAccount(id: string) {
     const account = accounts.find((item) => item.id === id);
+    if (account && accountPlatform(account) === "antigravity") {
+      openAntigravityImport(account);
+      return;
+    }
     setBusy(`reauth:${id}`);
     try {
-      const result = await cam.reauthenticateAccount(id, "chatgptDeviceCode");
-      setLogin(result);
+      const result = await cam.reauthenticateAccount(id, { type: "chatgptDeviceCode" });
       setLoginWizard({ open: true, phase: "waiting", type: "chatgptDeviceCode", result, error: null });
       setMessage("Открыл reauth. Заверши вход, профиль обновится без пересоздания списка");
     } catch {
-      setLoginWizard({ open: true, phase: "error", type: "chatgptDeviceCode", result: null, error: `Не удалось обновить авторизацию${account ? ` для ${account.email}` : ""}.` });
+      setLoginWizard({ open: true, phase: "error", type: "chatgptDeviceCode", result: null, error: `Не удалось обновить авторизацию${account ? ` для ${displayEmail(account.email)}` : ""}.` });
       setMessage(uiErrorMessage("Не удалось обновить авторизацию"));
     } finally {
       setBusy(null);
@@ -1237,22 +2609,49 @@ function App() {
 
   async function switchAccount(id: string) {
     const account = accounts.find((item) => item.id === id);
+    setBusy(`prepare-switch:${id}`);
+    let preparation;
+    try {
+      preparation = await cam.prepareSwitch(id);
+    } catch (error) {
+      setMessage(uiErrorMessage(error instanceof Error ? error.message : "Не удалось подготовить переключение"));
+      setBusy(null);
+      return;
+    }
+    setBusy(null);
     if (account && !account.isActive && settingsData?.confirmSwitch !== false) {
+      const isAntigravity = accountPlatform(account) === "antigravity";
       const confirmed = await requestConfirm({
         title: "Переключить аккаунт",
-        body: "Менеджер остановит Codex, сделает backup текущего auth.json, запишет выбранный профиль и запланирует перезапуск Codex.",
+        body: isAntigravity
+          ? "Менеджер применит подготовленный профиль Antigravity и сохранит резервную копию перед записью. Полная совместимость IDE-коннектора ещё проверяется."
+          : settingsData?.desktopClosePolicy === "graceful-only"
+            ? "Менеджер заменит активный Codex auth.json только после мягкого закрытия приложения. Если Codex не завершится, переключение будет отменено."
+            : "Менеджер сначала мягко закроет Codex, а затем при необходимости завершит только заранее проверенное дерево процессов установленного пакета. После активации он сразу запустит тот же Codex с выбранным профилем.",
         confirmLabel: "Переключить",
-        details: [`Профиль: ${account.label}`, `Email: ${account.email}`, `Текущий: ${stats.active?.label ?? "не выбран"}`]
+        details: [
+          `Платформа: ${platformLabel(account)}`,
+          `Профиль: ${account.label}`,
+          `Email: ${displayEmail(account.email)}`,
+          `Текущий: ${stats.active?.label ?? "не выбран"}`,
+          `Проверка: ${preparation.transaction.phase}`,
+          ...preparation.warnings
+        ]
       });
-      if (!confirmed) return;
+      if (!confirmed) {
+        await cam.cancelSwitch(preparation.transaction.id).catch(() => undefined);
+        return;
+      }
     }
     setBusy(`switch:${id}`);
     try {
-      await cam.switchAccount(id);
-      setMessage("Codex закрыт, аккаунт переключён, приложение запускается заново");
+      await cam.switchAccount(id, preparation.transaction.id);
+      setMessage(account && accountPlatform(account) === "antigravity"
+        ? "Antigravity профиль переключён, резервная копия сохранена"
+        : "Профиль Codex переключён. ChatGPT/Codex безопасно перезапускается с выбранным аккаунтом.");
       await reload();
-    } catch {
-      setMessage(uiErrorMessage("Не удалось переключить аккаунт"));
+    } catch (error) {
+      setMessage(switchErrorMessage(error));
     } finally {
       setBusy(null);
     }
@@ -1266,7 +2665,7 @@ function App() {
         body: "Профиль будет удалён из менеджера вместе с локальной папкой профиля. Активный auth.json Codex не удаляется.",
         confirmLabel: "Удалить",
         tone: "danger",
-        details: [`Профиль: ${account.label}`, `Email: ${account.email}`]
+        details: [`Профиль: ${account.label}`, `Email: ${displayEmail(account.email)}`]
       });
       if (!confirmed) return;
     }
@@ -1287,7 +2686,7 @@ function App() {
     try {
       const nextDiagnostics = await cam.selectWorkspace();
       setDiagnostics(nextDiagnostics);
-      setMessage(`Рабочая папка Codex: ${nextDiagnostics.workspacePath ?? "не выбрана"}`);
+      setMessage(`Рабочая папка Codex: ${displayPath(nextDiagnostics.workspacePath, "не выбрана")}`);
     } catch {
       setMessage(uiErrorMessage("Не удалось выбрать рабочую папку"));
     } finally {
@@ -1295,66 +2694,17 @@ function App() {
     }
   }
 
-  async function updateSettings(input: Partial<Omit<AppSettings, "language">>) {
+  async function updateSettings(input: Partial<AppSettings>) {
     setBusy("settings");
     try {
       const nextSettings = await cam.updateSettings(input);
       setSettingsData(nextSettings);
       setDiagnostics(await cam.getDiagnostics());
-      setMessage("Настройки обновлены");
+      setMessage(input.language
+        ? (input.language === "en" ? "Interface language changed" : "Язык интерфейса изменён")
+        : isEnglish ? "Settings updated" : "Настройки обновлены");
     } catch {
       setMessage(uiErrorMessage("Не удалось сохранить настройки"));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function bindSelectedToWorkspace() {
-    if (!selectedAccount) {
-      setMessage("Сначала выбери аккаунт");
-      return;
-    }
-    setBusy("workspace-bind");
-    try {
-      const binding = await cam.bindWorkspaceAccount(selectedAccount.id);
-      setWorkspaceBinding(binding);
-      setMessage(`Workspace привязан к ${selectedAccount.label}`);
-    } catch {
-      setMessage(uiErrorMessage("Не удалось закрепить аккаунт за workspace"));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function clearWorkspaceBinding() {
-    setBusy("workspace-bind");
-    try {
-      const binding = await cam.bindWorkspaceAccount(null);
-      setWorkspaceBinding(binding);
-      setMessage("Привязка workspace очищена");
-    } catch {
-      setMessage(uiErrorMessage("Не удалось очистить привязку workspace"));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function rollbackSwitch(event: SwitchHistoryItem) {
-    const confirmed = await requestConfirm({
-      title: "Откатить переключение",
-      body: "Будет восстановлен auth.json из backup-файла, созданного перед этим переключением. Текущий auth.json тоже будет сохранён как backup.",
-      confirmLabel: "Откатить",
-      details: [`Профиль: ${event.accountLabel ?? event.accountId}`, `Время: ${formatTime(event.startedAt)}`]
-    });
-    if (!confirmed) return;
-    setBusy(`rollback:${event.id}`);
-    try {
-      const history = await cam.rollbackSwitch(event.id);
-      setSwitchHistory(history);
-      setMessage("Откат выполнен. Codex auth.json восстановлен из резервной копии");
-      await reload();
-    } catch {
-      setMessage(uiErrorMessage("Не удалось выполнить откат переключения"));
     } finally {
       setBusy(null);
     }
@@ -1364,7 +2714,8 @@ function App() {
     setBusy("logs");
     try {
       const lines = await cam.readLogTail();
-      setLogLines(lines.length ? lines : ["Журнал пока пуст."]);
+      const visibleLines = lines.map(maskSensitiveDisplayText);
+      setLogLines(visibleLines.length ? visibleLines : ["Журнал пока пуст."]);
       setShowLogViewer(true);
       setMessage("Журнал диагностики открыт");
     } catch {
@@ -1398,51 +2749,27 @@ function App() {
     }
   }
 
-  async function refreshReleaseReadiness() {
-    setBusy("release-readiness");
-    try {
-      const report = await cam.getReleaseReadiness();
-      setReleaseReadiness(report);
-      setMessage(report.ready ? "Релизная проверка пройдена" : "Релизная проверка требует внимания");
-    } catch {
-      setMessage(uiErrorMessage("Не удалось проверить релиз"));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function checkUpdates() {
-    setBusy("update-check");
+  async function checkApplicationUpdates() {
+    setBusy("updates");
     try {
       const result = await cam.checkForUpdates();
-      setUpdateCheck(result);
+      setUpdateStatus(result);
       setMessage(result.message);
     } catch {
-      setMessage(uiErrorMessage("Не удалось проверить обновления"));
+      setMessage(uiErrorMessage(isEnglish ? "Could not check app updates" : "Не удалось проверить обновления приложения"));
     } finally {
       setBusy(null);
     }
   }
 
-  async function openReleaseFolder() {
-    setBusy("release-folder");
+  async function openApplicationUpdate() {
+    setBusy("updates");
     try {
-      await cam.openReleaseFolder();
-      setMessage("Папка релиза открыта");
+      const result = await cam.openUpdateRelease();
+      setUpdateStatus(result);
+      setMessage(result.message);
     } catch {
-      setMessage(uiErrorMessage("Не удалось открыть папку релиза"));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function openCrashReportsFolder() {
-    setBusy("crash-folder");
-    try {
-      await cam.openCrashReportsFolder();
-      setMessage("Папка crash-отчётов открыта");
-    } catch {
-      setMessage(uiErrorMessage("Не удалось открыть crash-отчёты"));
+      setMessage(uiErrorMessage(isEnglish ? "Could not open the GitHub release" : "Не удалось открыть релиз GitHub"));
     } finally {
       setBusy(null);
     }
@@ -1470,6 +2797,11 @@ function App() {
     if (command.disabled) return;
     setCommandOpen(false);
     setCommandSearch("");
+    if (command.action === "filterPlatform" && command.platform) {
+      setPlatformFilter(command.platform);
+      setActiveView(command.view ?? "accounts");
+      return;
+    }
     if (command.view) {
       setActiveView(command.view);
       return;
@@ -1490,10 +2822,6 @@ function App() {
       void switchAccount(command.accountId);
       return;
     }
-    if (command.action === "importAuth") {
-      void importAuthJson();
-      return;
-    }
     if (command.action === "exportVault") {
       void exportAccounts();
       return;
@@ -1509,87 +2837,39 @@ function App() {
 
   const pageContent = (() => {
     switch (activeView) {
-      case "dashboard":
+      case "overview":
         return (
-          <>
-            <section className="hero dashboard-hero">
-              <div className="hero-copy">
-                <div className="hero-kicker">
-                  <TerminalSquare />
-                  локальная панель Codex
-                </div>
-                <h2>Профили ChatGPT для Codex</h2>
-                <p>Компактная панель для управления аккаунтами, лимитами, переносом и диагностикой без длинной прокрутки.</p>
-                <div className="hero-actions">
-                  <button className="button" disabled={busy !== null} onClick={openLoginWizard}>
-                    <LogIn />
-                    Добавить аккаунт
-                  </button>
-                  <button className="button secondary" disabled={busy !== null || accounts.length === 0} onClick={refreshAllAccounts}>
-                    {busy === "refresh:all" ? <Loader2 className="spin" /> : <RefreshCcw />}
-                    Обновить лимиты
-                  </button>
-                </div>
-              </div>
-              <div className="hero-visual">
-                <SignalOrbit account={selectedAccount ?? bestAccount} />
-                {bestAccount ? (
-                  <div className="recommendation">
-                    <span>{settingsData?.smartSwitchMode === "auto" ? "Авто-режим" : "Умный выбор"}</span>
-                    <strong title={bestAccount.email}>{bestAccount.label}</strong>
-                    <small>{smartRecommendation?.reason ?? `${used(bestAccount).toFixed(0)}% · сброс ${formatTime(soonestReset(bestAccount))}`}</small>
-                    <button className="button subtle" disabled={busy !== null || bestAccount.isActive} onClick={() => void switchAccount(bestAccount.id)}>
-                      <ArrowUpRight />
-                      Переключить
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            </section>
-            <section className="dashboard-core">
-              <DashboardPage accounts={accounts} />
-              <OperationsTimeline history={switchHistory} onOpenHealth={() => setActiveView("health")} />
-            </section>
-            <section className="ops-strip">
-              <div className="workspace-card">
-                <div className="workspace-meta">
-                  <div className="workspace-status"><i />локальное хранилище</div>
-                  <span>Рабочая папка</span>
-                  <strong>{diagnostics?.workspacePath ?? "не выбрана"}</strong>
-                </div>
-                <button className="button secondary" disabled={busy !== null} onClick={selectWorkspace}>
-                  <FolderOpen />
-                  Выбрать
-                </button>
-              </div>
-              <div className="health-card">
-                <div>
-                  <span>Готовы к работе</span>
-                  <strong>{stats.usable}/{accounts.length || 0}</strong>
-                </div>
-                <div>
-                  <span>Устарели</span>
-                  <strong>{stats.stale}</strong>
-                </div>
-                <div>
-                  <span>Автообновление</span>
-                  <strong>{autoRefreshLabel(diagnostics?.rateLimitRefreshIntervalMs)}</strong>
-                </div>
-              </div>
-            </section>
-          </>
+          <OverviewPage
+            accounts={accounts}
+            diagnostics={diagnostics}
+            latestTransaction={switchTransactions[0] ?? null}
+            busy={busy}
+            autoRefreshIntervalMs={settingsData?.autoRefreshIntervalMs ?? 180_000}
+            smartSwitchThresholdPercent={settingsData?.smartSwitchThresholdPercent ?? 10}
+            isEnglish={isEnglish}
+            displayEmail={displayEmail}
+            onAdd={openLoginWizard}
+            onRefresh={() => void refreshAllAccounts()}
+            onSwitch={(accountId) => void switchAccount(accountId)}
+            onOpenAccounts={() => setActiveView("accounts")}
+            onOpenActivity={() => setActiveView("activity")}
+          />
         );
       case "accounts":
         return (
           <>
             <section className="panel workbench-panel account-panel">
               <div className="panel-head">
-                <div>
+                <div className="account-panel-intro">
                   <div className="panel-title-row">
-                    <h3>Аккаунты</h3>
-                    <span className="badge compact">панель команд</span>
+                    <h3>{accountsText.title}</h3>
+                    <span className="badge compact">{visibleAccounts.length}/{platformFilter === "antigravity" ? stats.antigravity : stats.codex}</span>
                   </div>
-                  <p className="muted">{message}</p>
+                  <p>
+                    {isEnglish
+                      ? `${scopedProtectedCount} protected · ${scopedAttentionCount} need attention`
+                      : `${scopedProtectedCount} с сохранённым входом · ${scopedAttentionCount} ${scopedAttentionCount === 1 ? "требует" : "требуют"} внимания`}
+                  </p>
                 </div>
                 <div className="panel-actions">
                   <label className="search-wrap">
@@ -1598,42 +2878,26 @@ function App() {
                       className="search"
                       value={search}
                       onChange={(event) => setSearch(event.target.value)}
-                      placeholder="Поиск профиля"
-                      aria-label="Поиск профиля"
+                      placeholder={accountsText.searchProfile}
+                      aria-label={accountsText.searchProfile}
                     />
                   </label>
-                  <div className="segmented" aria-label="Фильтр аккаунтов">
-                    <button className={statusFilter === "all" ? "is-selected" : ""} onClick={() => setStatusFilter("all")}>Все</button>
-                    <button className={statusFilter === "usable" ? "is-selected" : ""} onClick={() => setStatusFilter("usable")}>Готовые</button>
-                    <button className={statusFilter === "risk" ? "is-selected" : ""} onClick={() => setStatusFilter("risk")}>Риск</button>
+                  <div className="segmented" aria-label={accountsText.accountFilter}>
+                    <button className={statusFilter === "all" ? "is-selected" : ""} onClick={() => setStatusFilter("all")}>{accountsText.all}</button>
+                    <button className={statusFilter === "usable" ? "is-selected" : ""} onClick={() => setStatusFilter("usable")}>{accountsText.ready}</button>
+                    <button className={statusFilter === "risk" ? "is-selected" : ""} onClick={() => setStatusFilter("risk")}>{accountsText.risk}</button>
                   </div>
-                  <div className="segmented view-mode" aria-label="Вид аккаунтов">
-                    <button className={viewMode === "table" ? "is-selected" : ""} onClick={() => setViewMode("table")}>
-                      <SlidersHorizontal />
-                      Таблица
-                    </button>
-                    <button className={viewMode === "cards" ? "is-selected" : ""} onClick={() => setViewMode("cards")}>
-                      <Layers3 />
-                      Карточки
-                    </button>
-                  </div>
-                  <button className="button secondary" disabled={busy !== null || accounts.length === 0} onClick={exportAccounts}>
-                    {busy === "export" ? <Loader2 className="spin" /> : <FileDown />}
-                    Экспорт
-                  </button>
-                  <button className="button secondary" disabled={busy !== null} onClick={importAccounts}>
-                    {busy === "import" ? <Loader2 className="spin" /> : <FileUp />}
-                    Импорт
-                  </button>
-                  <button className="button secondary" disabled={busy !== null} onClick={importAuthJson}>
-                    {busy === "import-auth" ? <Loader2 className="spin" /> : <FileUp />}
-                    auth.json
-                  </button>
-                  <button className="button secondary" disabled={busy !== null || accounts.length === 0} onClick={refreshAllAccounts}>
+                  <button className="button secondary" disabled={busy !== null || refreshableAccountCount === 0} onClick={refreshAllAccounts} title={refreshableAccountCount === 0 ? shellText.noRefreshableAccounts : shellText.refreshLimits}>
                     {busy === "refresh:all" ? <Loader2 className="spin" /> : <RefreshCcw />}
-                    Обновить все
+                    {uiText.actions.refresh}
                   </button>
-                  <span className="badge">Codex · {diagnostics?.codexPath ?? "не найден"}</span>
+                  <details className="account-tools-menu">
+                    <summary className="icon-btn" title={isEnglish ? "Import and export" : "Импорт и экспорт"}><MoreHorizontal /></summary>
+                    <div>
+                      <button disabled={busy !== null || accounts.length === 0} onClick={exportAccounts}>{busy === "export" ? <Loader2 className="spin" /> : <FileDown />}{accountsText.export}</button>
+                      <button disabled={busy !== null} onClick={importAccounts}>{busy === "import" ? <Loader2 className="spin" /> : <FileUp />}{accountsText.import}</button>
+                    </div>
+                  </details>
                 </div>
               </div>
               <div className="profile-workbench">
@@ -1642,11 +2906,11 @@ function App() {
                     <table className="table">
                       <thead>
                         <tr>
-                          <th>Аккаунт</th>
-                          <th>План</th>
-                          <th>5 часов</th>
-                          <th>Неделя</th>
-                          <th>Статус</th>
+                          <th>{accountsText.account}</th>
+                          <th>{accountsText.plan}</th>
+                          <th>{accountsText.fiveHours}</th>
+                          <th>{accountsText.week}</th>
+                          <th>{accountsText.status}</th>
                           <th />
                         </tr>
                       </thead>
@@ -1656,25 +2920,31 @@ function App() {
                             key={account.id}
                             account={account}
                             selected={selectedAccount?.id === account.id}
+                            privacyMode={privacyMode}
                             busy={busy}
                             onRefresh={refreshAccount}
                             onSwitch={switchAccount}
                             onReauth={reauthenticateAccount}
+                            onRepair={repairAccount}
                             onOpenFolder={openProfileFolder}
                             onSelect={setSelectedAccountId}
                             onDelete={deleteAccount}
                           />
                         ))}
-                        {accounts.length === 0 ? (
+                        {scopedAccounts.length === 0 ? (
                           <tr>
                             <td colSpan={6}>
                               <div className="empty-onboarding">
-                                <strong>Добавь первый профиль</strong>
-                                <span>Начни с входа ChatGPT или подключи существующий auth.json. Всё хранится локально и шифруется отдельно.</span>
+                                <strong>{platformFilter === "antigravity" ? "Подключи Antigravity" : "Добавь Codex"}</strong>
+                                <span>{platformFilter === "antigravity" ? "Войди через официальный Antigravity/Google Sign-In, затем проверь локальный профиль IDE." : "Добавь профиль через официальный вход ChatGPT, device code, API key или Enterprise token."}</span>
                                 <div className="mini-actions">
-                                  <button className="button" disabled={busy !== null} onClick={openLoginWizard}><LogIn />Добавить ChatGPT</button>
-                                  <button className="button secondary" disabled={busy !== null} onClick={importAuthJson}><Database />auth.json</button>
-                                  <button className="button secondary" onClick={() => setActiveView("health")}><Activity />Диагностика</button>
+                                  {platformFilter === "antigravity" ? (
+                                    <button className="button" disabled={busy !== null} onClick={() => openAntigravityImport()}><KeyRound />Добавить Antigravity</button>
+                                  ) : (
+                                    <>
+                                      <button className="button" disabled={busy !== null} onClick={openLoginWizard}><LogIn />Добавить Codex</button>
+                                    </>
+                                  )}
                                 </div>
                               </div>
                             </td>
@@ -1682,7 +2952,7 @@ function App() {
                         ) : visibleAccounts.length === 0 ? (
                           <tr>
                             <td colSpan={6}>
-                              <div className="empty">Под этот фильтр аккаунтов нет.</div>
+                              <div className="empty">{accountsText.emptyFiltered}</div>
                             </td>
                           </tr>
                         ) : null}
@@ -1695,368 +2965,392 @@ function App() {
                           key={account.id}
                           account={account}
                           selected={selectedAccount?.id === account.id}
+                          privacyMode={privacyMode}
                           busy={busy}
                           onRefresh={refreshAccount}
                           onSwitch={switchAccount}
                           onReauth={reauthenticateAccount}
-                          onOpenFolder={openProfileFolder}
+                          onRepair={repairAccount}
                           onSelect={setSelectedAccountId}
-                          onDelete={deleteAccount}
+                          onInspect={(id, trigger) => {
+                            inspectorTriggerRef.current = trigger;
+                            setSelectedAccountId(id);
+                            setInspectorOpen(true);
+                          }}
                         />
                       ))}
-                      {accounts.length === 0 ? (
+                      {scopedAccounts.length === 0 ? (
                         <div className="empty-onboarding">
-                          <strong>Список пока пуст</strong>
-                          <span>Добавь ChatGPT-профиль или импортируй auth.json, чтобы менеджер мог переключать Codex без ручной замены файлов.</span>
+                          <strong>{platformFilter === "antigravity" ? "Список Antigravity пуст" : "Список Codex пуст"}</strong>
+                          <span>{platformFilter === "antigravity" ? "Добавь Antigravity через официальный вход и диагностику локального профиля IDE." : "Добавь Codex-профиль через один из официальных способов входа."}</span>
                           <div className="mini-actions">
-                            <button className="button" disabled={busy !== null} onClick={openLoginWizard}><LogIn />Добавить</button>
-                            <button className="button secondary" disabled={busy !== null} onClick={importAuthJson}><Database />auth.json</button>
+                            {platformFilter === "antigravity" ? (
+                              <button className="button" disabled={busy !== null} onClick={() => openAntigravityImport()}><KeyRound />Добавить Antigravity</button>
+                            ) : (
+                              <>
+                                <button className="button" disabled={busy !== null} onClick={openLoginWizard}><LogIn />Добавить Codex</button>
+                              </>
+                            )}
                           </div>
                         </div>
                       ) : null}
-                      {accounts.length > 0 && visibleAccounts.length === 0 ? <div className="empty">Под этот фильтр аккаунтов нет.</div> : null}
+                      {scopedAccounts.length > 0 && visibleAccounts.length === 0 ? <div className="empty">{accountsText.emptyFiltered}</div> : null}
                     </div>
                   )}
                 </div>
-                <AccountInspector
-                  account={selectedAccount}
-                  busy={busy}
-                  onRefresh={refreshAccount}
-                  onSwitch={switchAccount}
-                  onReauth={reauthenticateAccount}
-                  onOpenFolder={openProfileFolder}
-                  onMetadata={(id, input) => void updateAccountMetadata(id, input)}
-                />
-              </div>
-              <div className="workspace-bind-strip">
-                <div>
-                  <span>Привязка workspace</span>
-                  <strong>{workspaceBinding?.accountLabel ? `${workspaceBinding.accountLabel} · ${workspaceBinding.accountEmail}` : "аккаунт не закреплён"}</strong>
-                </div>
-                <div className="mini-actions">
-                  <button className="button secondary" disabled={busy !== null || !selectedAccount} onClick={bindSelectedToWorkspace}>
-                    <FolderOpen />
-                    Закрепить выбранный
-                  </button>
-                  <button className="button secondary" disabled={busy !== null || !workspaceBinding?.accountId} onClick={clearWorkspaceBinding}>
-                    <X />
-                    Снять
-                  </button>
-                </div>
               </div>
             </section>
           </>
         );
-      case "limits":
+      case "activity":
         return (
-          <section className="panel workbench-panel limits-panel">
-            <div className="panel-head">
-              <div>
-                <div className="panel-title-row">
-                  <h3>Лимиты</h3>
-                  <span className="badge compact">маршрутизация</span>
-                </div>
-                <p className="muted">Сводка по нагрузке и ближайшему выгодному аккаунту.</p>
-              </div>
-              <div className="panel-actions">
-                <button className="button secondary" disabled={busy !== null || accounts.length === 0} onClick={refreshAllAccounts}>
-                  {busy === "refresh:all" ? <Loader2 className="spin" /> : <RefreshCcw />}
-                  Обновить все
-                </button>
-                <button className="button" disabled={busy !== null || !bestAccount || bestAccount.isActive} onClick={() => bestAccount && void switchAccount(bestAccount.id)}>
-                  <ArrowUpRight />
-                  Переключить лучший
-                </button>
-              </div>
-            </div>
-            <div className="limits-grid">
-              <div className="limits-overview">
-                <SignalOrbit account={selectedAccount ?? bestAccount} />
-                <div className="recommendation">
-                  <span>{settingsData?.smartSwitchMode === "auto" ? "Авто-режим" : "Умный выбор"}</span>
-                  <strong title={bestAccount?.email ?? ""}>{bestAccount?.label ?? "нет подходящего аккаунта"}</strong>
-                  <small>{bestAccount ? smartRecommendation?.reason ?? `${used(bestAccount).toFixed(0)}% · сброс ${formatTime(soonestReset(bestAccount))}` : "нет данных"}</small>
-                </div>
-                <LimitHistoryChart history={limitHistory} />
-              </div>
-              <div className="limits-list">
-                {visibleAccounts.slice(0, 4).map((account) => (
-                  <div key={account.id} className="limit-card">
-                    <strong>{account.label}</strong>
-                    <LimitMeter label="5 часов" usedPercent={account.fiveHourUsedPercent} resetsAt={account.fiveHourResetsAt} />
-                    <LimitMeter label="Неделя" usedPercent={account.weeklyUsedPercent} resetsAt={account.weeklyResetsAt} />
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
-        );
-      case "vault":
-        return (
-          <section className="panel workbench-panel vault-panel">
-            <div className="panel-head">
-              <div>
-                <div className="panel-title-row">
-                  <h3>Перенос</h3>
-                  <span className="badge compact">vault</span>
-                </div>
-                <p className="muted">Экспорт, импорт и `auth.json` в одном окне.</p>
-              </div>
-              <div className="panel-actions">
-                <button className="button secondary" disabled={busy !== null || accounts.length === 0} onClick={exportAccounts}>
-                  {busy === "export" ? <Loader2 className="spin" /> : <FileDown />}
-                  Экспорт
-                </button>
-                <button className="button secondary" disabled={busy !== null} onClick={importAccounts}>
-                  {busy === "import" ? <Loader2 className="spin" /> : <FileUp />}
-                  Импорт
-                </button>
-                <button className="button" disabled={busy !== null} onClick={importAuthJson}>
-                  {busy === "import-auth" ? <Loader2 className="spin" /> : <Database />}
-                  auth.json
-                </button>
-              </div>
-            </div>
-            <section className="vault-grid">
-              <button className="command-card" disabled={busy !== null || accounts.length === 0} onClick={exportAccounts}>
-                <FileDown />
-                <span>Экспорт</span>
-                <strong>Зашифрованный перенос профилей</strong>
-              </button>
-              <button className="command-card" disabled={busy !== null} onClick={importAccounts}>
-                <FileUp />
-                <span>Импорт</span>
-                <strong>Восстановить `.cam-export`</strong>
-              </button>
-              <button className="command-card" disabled={busy !== null} onClick={importAuthJson}>
-                <Database />
-                <span>auth.json</span>
-                <strong>Подключить существующую авторизацию</strong>
-              </button>
-              <div className="vault-note">
-                <span>Подсказка</span>
-                <strong>Перед записью используется предпросмотр конфликтов.</strong>
-                <p>Если в архиве есть пересечения по e-mail, менеджер предложит безопасный режим переноса.</p>
-              </div>
-            </section>
-          </section>
-        );
-      case "health":
-        return (
-          <>
-            <HealthPage report={healthReport} />
-            <section className="health-foot">
-              <div className="workspace-card">
-                <div className="workspace-meta">
-                  <span>Активный CODEX_HOME</span>
-                  <strong>{diagnostics?.activeCodexHome ?? "не выбран"}</strong>
-                </div>
-                <button className="button secondary" onClick={selectWorkspace}>
-                  <FolderOpen />
-                  Выбрать рабочую папку
-                </button>
-              </div>
-              <div className="health-card">
-                <div>
-                  <span>Профили</span>
-                  <strong>{profileIntegrity ? `${profileIntegrity.ok}/${profileIntegrity.total}` : "проверка"}</strong>
-                </div>
-                <div>
-                  <span>Предупреждения</span>
-                  <strong>{profileIntegrity?.warnings ?? 0}</strong>
-                </div>
-                <div>
-                  <span>Ошибки</span>
-                  <strong>{profileIntegrity?.errors ?? 0}</strong>
-                </div>
-                <div>
-                  <span>Отчёт</span>
-                  <strong>без секретов</strong>
-                </div>
-              </div>
-              <div className="health-actions-strip">
-                <button className="button secondary" disabled={busy !== null} onClick={openLogViewer}>
-                  {busy === "logs" ? <Loader2 className="spin" /> : <FileText />}
-                  Журнал
-                </button>
-                <button className="button secondary" disabled={busy !== null} onClick={openLogsFolder}>
-                  {busy === "logs-folder" ? <Loader2 className="spin" /> : <FolderOpen />}
-                  Папка логов
-                </button>
-                <button className="button secondary" disabled={busy !== null} onClick={exportDiagnosticReport}>
-                  {busy === "diagnostic-report" ? <Loader2 className="spin" /> : <FileDown />}
-                  Отчёт
-                </button>
-                <span>{diagnostics?.logPath ?? "Журнал будет создан после запуска приложения"}</span>
-              </div>
-              <div className="release-health-card">
-                <div className="release-health-head">
-                  <div>
-                    <span>Релиз</span>
-                    <strong>v{releaseReadiness?.version ?? appVersion}</strong>
-                  </div>
-                  <span className={`release-pill ${releaseReadiness?.ready ? "ok" : "warn"}`}>
-                    {releaseReadiness?.ready ? "готов" : "локальная сборка"}
-                  </span>
-                </div>
-                <p>{releaseReadiness?.summary ?? "Проверка релизных файлов будет доступна после загрузки диагностики."}</p>
-                <div className="release-artifacts">
-                  {(releaseReadiness?.artifacts ?? []).slice(0, 5).map((artifact) => (
-                    <span key={artifact.kind} className={artifact.exists && artifact.checksumListed ? "ok" : artifact.exists ? "warn" : "miss"}>
-                      {artifact.exists && artifact.checksumListed ? <CheckCircle2 /> : <AlertTriangle />}
-                      {artifact.label}
-                    </span>
-                  ))}
-                </div>
-                <div className="release-flags">
-                  <span>{releaseReadiness?.signingEnabled ? "подпись включена" : "подпись не включена"}</span>
-                  <span>{releaseReadiness?.updateFeedConfigured ? "feed настроен" : "feed не настроен"}</span>
-                  <span>{updateCheck?.message ?? "обновления ещё не проверялись"}</span>
-                </div>
-                <div className="mini-actions">
-                  <button className="button secondary" disabled={busy !== null} onClick={refreshReleaseReadiness}>
-                    {busy === "release-readiness" ? <Loader2 className="spin" /> : <RefreshCcw />}
-                    Проверить релиз
-                  </button>
-                  <button className="button secondary" disabled={busy !== null} onClick={checkUpdates}>
-                    {busy === "update-check" ? <Loader2 className="spin" /> : <Activity />}
-                    Обновления
-                  </button>
-                  <button className="button secondary" disabled={busy !== null} onClick={openReleaseFolder}>
-                    {busy === "release-folder" ? <Loader2 className="spin" /> : <FolderOpen />}
-                    Папка релиза
-                  </button>
-                  <button className="button secondary" disabled={busy !== null} onClick={openCrashReportsFolder}>
-                    {busy === "crash-folder" ? <Loader2 className="spin" /> : <FileText />}
-                    Crash-отчёты
-                  </button>
-                </div>
-              </div>
-            </section>
-          </>
+          <ActivityPage
+            transactions={switchTransactions}
+            history={switchHistory}
+            accounts={accounts}
+            isEnglish={isEnglish}
+            onOpenSettings={() => setActiveView("settings")}
+          />
         );
       case "settings":
+        {
+          const capabilities = diagnostics?.codexCapabilities;
+          const desktopLifecycle = diagnostics?.desktopLifecycle;
         return (
           <>
-            <SettingsPage settings={settingsData} onUpdate={(input) => void updateSettings(input)} />
+            <SettingsPage settings={settingsData} busy={busy === "settings"} onUpdate={(input) => void updateSettings(input)} />
+            <details className="settings-runtime-details">
+              <summary><span><TerminalSquare />{isEnglish ? "Runtime and diagnostics" : "Среда и диагностика"}</span><ChevronRight /></summary>
+              <div className="settings-runtime-body">
+            <section className="codex-runtime-panel" aria-label={isEnglish ? "Codex runtime diagnostics" : "Диагностика среды Codex"}>
+              <div className="runtime-heading">
+                <div>
+                  <span>{isEnglish ? "OFFICIAL RUNTIME" : "ОФИЦИАЛЬНАЯ СРЕДА"}</span>
+                  <h3>{isEnglish ? "Codex compatibility" : "Совместимость Codex"}</h3>
+                </div>
+                <span className={`runtime-status ${capabilities?.protocol.compatible ? "is-ready" : "is-warning"}`}>
+                  {capabilities?.protocol.compatible
+                    ? (isEnglish ? "verified" : "проверено")
+                    : (isEnglish ? "attention" : "требует внимания")}
+                </span>
+              </div>
+              <div className="runtime-grid">
+                <div>
+                  <span>{isEnglish ? "Desktop package" : "Desktop-пакет"}</span>
+                  <strong>{desktopLifecycle?.selected?.version ?? (isEnglish ? "not found" : "не найден")}</strong>
+                </div>
+                <div>
+                  <span>AppUserModelId</span>
+                  <strong title={desktopLifecycle?.selected?.appUserModelId ?? undefined}>
+                    {desktopLifecycle?.selected?.appUserModelId ?? "—"}
+                  </strong>
+                </div>
+                <div>
+                  <span>{isEnglish ? "Process tree" : "Дерево процессов"}</span>
+                  <strong>
+                    {desktopLifecycle
+                      ? `${desktopLifecycle.runningRootCount} / ${desktopLifecycle.capturedProcessCount}`
+                      : "—"}
+                  </strong>
+                </div>
+                <div>
+                  <span>{isEnglish ? "CLI" : "CLI"}</span>
+                  <strong>{capabilities?.cliVersion ?? (diagnostics?.codexPath ? (isEnglish ? "probing…" : "проверяется…") : (isEnglish ? "not found" : "не найден"))}</strong>
+                </div>
+                <div>
+                  <span>{isEnglish ? "Identity" : "Профиль"}</span>
+                  <strong>{capabilities?.identity.email ?? capabilities?.identity.authMode ?? (isEnglish ? "not signed in" : "нет входа")}</strong>
+                </div>
+                <div>
+                  <span>{isEnglish ? "Protocol" : "Протокол"}</span>
+                  <strong>{capabilities?.protocol.userAgent ?? "—"}</strong>
+                </div>
+              </div>
+              <div className="runtime-methods" aria-label={isEnglish ? "Supported login methods" : "Поддерживаемые способы входа"}>
+                {(capabilities?.loginMethods ?? []).map((method) => (
+                  <span
+                    key={method.id}
+                    className={`runtime-method ${method.available ? "is-available" : "is-unavailable"} ${method.stability === "internal" ? "is-internal" : ""}`}
+                    title={method.reason ?? undefined}
+                  >
+                    {codexLoginMethodLabel(method.id, isEnglish)}
+                    {method.stability === "internal" ? " · internal" : ""}
+                  </span>
+                ))}
+              </div>
+              {capabilities?.protocol.error ? <p className="runtime-error">{capabilities.protocol.error}</p> : null}
+              {desktopLifecycle ? (
+                <p className={desktopLifecycle.status === "ambiguous" || desktopLifecycle.status === "error" ? "runtime-error" : "settings-help"}>
+                  {desktopLifecycle.message}
+                </p>
+              ) : null}
+            </section>
+            <section className="diagnostic-preview" aria-label={isEnglish ? "Diagnostic export contents" : "Состав диагностического отчёта"}>
+              <div>
+                <span>{isEnglish ? "REDACTED DIAGNOSTICS" : "ОБЕЗЛИЧЕННАЯ ДИАГНОСТИКА"}</span>
+                <h3>{isEnglish ? "Preview before export" : "Предпросмотр состава отчёта"}</h3>
+                <p>
+                  {isEnglish
+                    ? "Includes app/runtime versions, health, switch integrity, release readiness, safe settings and redacted account status."
+                    : "Включает версии приложения и среды, health, целостность переключений, готовность релиза, безопасные настройки и обезличенные статусы аккаунтов."}
+                </p>
+                <p className="diagnostic-exclusion">
+                  <ShieldCheck />
+                  {isEnglish
+                    ? "Never includes tokens, cookies, API keys, auth.json contents or unredacted personal paths."
+                    : "Никогда не включает токены, cookies, API keys, содержимое auth.json и открытые персональные пути."}
+                </p>
+              </div>
+              <div className="diagnostic-preview-actions">
+                <button className="button secondary" disabled={busy !== null} onClick={openLogViewer}><TerminalSquare />{isEnglish ? "View log" : "Посмотреть журнал"}</button>
+                <button className="button" disabled={busy !== null} onClick={exportDiagnosticReport}><FileDown />{isEnglish ? "Export report" : "Сохранить отчёт"}</button>
+              </div>
+            </section>
             <section className="settings-strip">
               <div className="workspace-card">
                 <div className="workspace-meta">
-                  <span>Рабочая папка Codex</span>
-                  <strong>{diagnostics?.workspacePath ?? "не выбрана"}</strong>
+                  <span>{isEnglish ? "Codex workspace" : "Рабочая папка Codex"}</span>
+                  <strong>{displayPath(diagnostics?.workspacePath, isEnglish ? "not selected" : "не выбрана")}</strong>
                 </div>
                 <button className="button secondary" onClick={selectWorkspace}>
                   <FolderOpen />
-                  Выбрать
+                  {isEnglish ? "Choose" : "Выбрать"}
                 </button>
               </div>
               <div className="health-card">
                 <div>
-                  <span>Автообновление</span>
-                  <strong>{autoRefreshLabel(diagnostics?.rateLimitRefreshIntervalMs)}</strong>
+                  <span>{isEnglish ? "Auto-refresh" : "Автообновление"}</span>
+                  <strong>{autoRefreshLabel(diagnostics?.rateLimitRefreshIntervalMs, language)}</strong>
                 </div>
                 <div>
-                  <span>Аккаунтов</span>
+                  <span>{isEnglish ? "Accounts" : "Аккаунтов"}</span>
                   <strong>{accounts.length}</strong>
                 </div>
                 <div>
-                  <span>Активный</span>
-                  <strong>{stats.active?.label ?? "не выбран"}</strong>
+                  <span>{isEnglish ? "Active" : "Активный"}</span>
+                  <strong>{stats.active?.label ?? (isEnglish ? "not selected" : "не выбран")}</strong>
                 </div>
                 <div>
-                  <span>Умный режим</span>
-                  <strong>{settingsData?.smartSwitchMode === "auto" ? "авто" : settingsData?.smartSwitchMode === "off" ? "выкл" : "предлагать"}</strong>
+                  <span>{isEnglish ? "Smart mode" : "Умный режим"}</span>
+                  <strong>{settingsData?.smartSwitchMode === "auto" ? (isEnglish ? "auto" : "авто") : settingsData?.smartSwitchMode === "off" ? (isEnglish ? "off" : "выкл") : (isEnglish ? "suggest" : "предлагать")}</strong>
+                </div>
+                <div>
+                  <span>{isEnglish ? "Threshold" : "Порог"}</span>
+                  <strong>{settingsData?.smartSwitchThresholdPercent ?? 10}%</strong>
                 </div>
               </div>
             </section>
-            <section className="page-panel switch-history-panel">
-              <div className="page-header">
-                <span>История</span>
-                <h2>Последние переключения</h2>
               </div>
-              <div className="history-list">
-                {switchHistory.length ? switchHistory.slice(0, 12).map((event) => (
-                  <article key={event.id} className={`history-item ${event.status}`}>
-                    <span>{formatTime(event.startedAt)}</span>
-                    <strong>{event.accountLabel ?? event.accountId}</strong>
-                    <em>{event.status === "completed" ? "завершено" : event.status === "failed" ? "ошибка" : event.status}</em>
-                    <button
-                      className="icon-btn"
-                      disabled={busy !== null || !event.backupPath}
-                      onClick={() => void rollbackSwitch(event)}
-                      title="Откатить auth.json"
-                    >
-                      {busy === `rollback:${event.id}` ? <Loader2 className="spin" /> : <RefreshCcw />}
-                    </button>
-                  </article>
-                )) : <div className="empty compact-empty">Переключений пока нет.</div>}
-              </div>
-            </section>
+            </details>
           </>
         );
+        }
     }
   })();
 
   return (
-    <main className="shell">
-      <header className="topbar">
-        <div className="brand">
+    <main className="shell ops-shell">
+      <aside className="side-rail" aria-label={isEnglish ? "Main sections" : "Основные разделы"}>
+        <div className="rail-brand">
           <div className="mark">
-            <img src={logoUrl} alt="" aria-hidden="true" />
+            <img src={appAvatarUrl} alt="" aria-hidden="true" />
           </div>
-          <div>
-            <div className="eyebrow">Панель управления</div>
-            <h1>Codex Account Manager <span className="version">{appVersion}</span></h1>
+          <div className="rail-brand-meta">
+            <div className="rail-brand-overline">
+              <span className="eyebrow">{isEnglish ? "SESSION CONTROL" : "ЦЕНТР СЕССИЙ"}</span>
+              <span className="version">v{appVersion}</span>
+            </div>
+            <h1>Codex Account Manager</h1>
           </div>
         </div>
-        <nav className="top-nav" aria-label="Разделы консоли">
-          {navItems.map((item) => (
+        <nav className="rail-nav">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.key}
+                className={activeView === item.key ? "is-active" : ""}
+                onClick={() => setActiveView(item.key)}
+                aria-label={item.label}
+                aria-current={activeView === item.key ? "page" : undefined}
+                title={`${item.label} · ${item.description}`}
+              >
+                <Icon />
+                <span>{item.label}</span>
+                <small>{item.description}</small>
+              </button>
+            );
+          })}
+        </nav>
+        <section className="platform-stack" aria-label={shellText.platformFilter}>
+          <div className="rail-section-title">{shellText.platform}</div>
+          {platformSummaries.map((platform) => (
             <button
-              key={item.key}
-              className={activeView === item.key ? "is-active" : ""}
-              onClick={() => setActiveView(item.key)}
+              key={platform.id}
+              className={`platform-tile ${platform.id} ${platform.tone} ${platformFilter === platform.id ? "is-active" : ""}`}
+              aria-label={`${platform.label}: ${platform.count}`}
+              title={`${platform.label} · ${platform.state}`}
+              onClick={() => {
+                setActiveView("accounts");
+                setPlatformFilter(platform.id as PlatformFilter);
+              }}
             >
-              {item.label}
+              <span className="platform-tile-label">
+                <PlatformMark platform={platform.id as "codex" | "antigravity"} size="tile" />
+                <span>{platform.label}</span>
+              </span>
+              <strong>{platform.count}</strong>
+              <small>{platform.state}</small>
             </button>
           ))}
-        </nav>
-        <div className="actions top-actions">
-          <button className="button secondary command-trigger" onClick={() => {
+        </section>
+        <section className="rail-actions" aria-label={shellText.actionCenter}>
+          <div className="rail-section-title">{shellText.actions}</div>
+          <button disabled={busy !== null} onClick={platformFilter === "antigravity" ? () => openAntigravityImport() : openLoginWizard}>
+            {platformFilter === "antigravity" ? <KeyRound /> : <LogIn />}
+            <span>{platformFilter === "antigravity" ? shellText.addAntigravity : shellText.addCodex}</span>
+          </button>
+          <button disabled={busy !== null || refreshableAccountCount === 0} onClick={refreshAllAccounts} title={refreshableAccountCount === 0 ? shellText.noRefreshableAccounts : shellText.refreshLimits}>
+            {busy === "refresh:all" ? <Loader2 className="spin" /> : <RefreshCcw />}
+            <span>{uiText.actions.refresh}</span>
+          </button>
+          <button onClick={() => {
             setCommandOpen(true);
             setCommandSearch("");
-          }}>
+          }} aria-label={shellText.commands} title={shellText.commands}>
             <Command />
-            Команды
+            <span>{shellText.commands}</span>
             <kbd>Ctrl K</kbd>
           </button>
-          <button className="button secondary" disabled={busy !== null} onClick={() => startLogin("chatgptDeviceCode")}>
-            <KeyRound />
-            Код устройства
-          </button>
-          <button className="button" disabled={busy !== null} onClick={openLoginWizard}>
-            <LogIn />
-            Добавить ChatGPT
-          </button>
-          <div className="window-controls" aria-label="Управление окном">
-            <button className="window-btn" onClick={() => void cam.minimizeWindow()} title="Свернуть">
-              <Minus />
+        </section>
+        <div className="rail-footer" role="status" aria-live="polite">
+          <span>{message}</span>
+        </div>
+      </aside>
+
+      <section className="app-frame">
+        <header className="topbar">
+          <div className="topbar-context">
+            <span>{activeNav.label}</span>
+            <strong>{activeNav.description}</strong>
+          </div>
+          <nav className="top-nav compact-top-nav" aria-label={shellText.consoleSections}>
+            {navItems.map((item) => (
+              <button
+                key={item.key}
+                className={activeView === item.key ? "is-active" : ""}
+                onClick={() => setActiveView(item.key)}
+                aria-current={activeView === item.key ? "page" : undefined}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+          <div className="actions top-actions">
+            <button className="button secondary command-trigger" onClick={() => {
+              setCommandOpen(true);
+              setCommandSearch("");
+            }}>
+              <Command />
+              {shellText.commands}
+              <kbd>Ctrl K</kbd>
             </button>
-            <button className="window-btn" onClick={() => void cam.toggleMaximizeWindow()} title="Развернуть">
-              <Maximize2 />
+            <button className="button secondary update-check-button" disabled={busy !== null} onClick={checkApplicationUpdates}>
+              {busy === "updates" ? <Loader2 className="spin" /> : <RefreshCcw />}
+              {isEnglish ? "Check app" : "Проверить приложение"}
             </button>
-            <button className="window-btn close" onClick={() => void cam.closeWindow()} title="Закрыть">
-              <X />
+            {platformFilter === "codex" ? (
+              <button className="button secondary" disabled={busy !== null} onClick={() => startLogin({ type: "chatgptDeviceCode" })}>
+                <KeyRound />
+                {shellText.deviceCode}
+              </button>
+            ) : null}
+            <button className="button" disabled={busy !== null} onClick={platformFilter === "antigravity" ? () => openAntigravityImport() : openLoginWizard}>
+              {platformFilter === "antigravity" ? <KeyRound /> : <LogIn />}
+              {platformFilter === "antigravity" ? shellText.addAntigravity : shellText.addCodex}
+            </button>
+            <div className="window-controls" aria-label={shellText.windowControls}>
+              <button className="window-btn" onClick={() => void cam.minimizeWindow()} title={shellText.minimize}>
+                <Minus />
+              </button>
+              <button className="window-btn" onClick={() => void cam.toggleMaximizeWindow()} title={shellText.maximize}>
+                <Maximize2 />
+              </button>
+              <button className="window-btn close" onClick={() => void cam.closeWindow()} title={shellText.close}>
+                <X />
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {processNotice ? (
+          <aside className={`process-notice is-${processNotice.tone}`} role={processNotice.tone === "error" ? "alert" : "status"} aria-live={processNotice.tone === "error" ? "assertive" : "polite"}>
+            <span className="process-notice-icon">
+              {processNotice.tone === "success" ? <CheckCircle2 /> : processNotice.tone === "error" ? <AlertTriangle /> : <Activity />}
+            </span>
+            <span className="process-notice-copy">
+              <span>{processNotice.eyebrow}</span>
+              <strong>{processNotice.title}</strong>
+              <small>{processNotice.detail}</small>
+            </span>
+            <button className="process-notice-close" onClick={() => setProcessNotice(null)} aria-label={isEnglish ? "Dismiss notification" : "Закрыть уведомление"}><X /></button>
+            <span className="process-notice-progress" aria-label={`${processNotice.step} / 3`}>
+              {processNotice.stages.map((label, index) => (
+                <span className={index + 1 <= processNotice.step ? "is-complete" : ""} key={label}>
+                  <i />
+                  <small>{label}</small>
+                </span>
+              ))}
+            </span>
+          </aside>
+        ) : null}
+
+        {showUpdateBanner ? (
+          <div className={`update-banner update-${updateStatus?.status ?? "idle"}`} role="status">
+            <div className="update-banner-copy">
+              <strong>{isEnglish ? "App update" : "Обновление приложения"}{updateStatus?.version ? ` ${updateStatus.version}` : ""}</strong>
+              <span>{updateStatus?.message}</span>
+            </div>
+            <button className="button update-banner-action" disabled={updateButtonDisabled} onClick={openApplicationUpdate}>
+              {busy === "updates" ? <Loader2 className="spin" /> : <ExternalLink />}
+              {updateButtonLabel}
             </button>
           </div>
-        </div>
-      </header>
+        ) : null}
 
-      <div className={`content content-${activeView}`}>{pageContent}</div>
+        {loadState === "error" || loadState === "degraded" ? (
+          <div className={`runtime-state-banner ${loadState}`} role="alert">
+            <AlertTriangle />
+            <span>
+              <strong>{loadState === "error" ? (isEnglish ? "Account data did not load" : "Данные аккаунтов не загрузились") : (isEnglish ? "Limited mode" : "Ограниченный режим")}</strong>
+              {isEnglish ? "Saved profiles were not deleted. Retry the desktop connection." : "Сохранённые профили не удалены. Повтори подключение к desktop-сервису."}
+            </span>
+            <div className="runtime-state-actions">
+              {loadError ? (
+                <button className="button ghost" onClick={() => void openLogsFolder()}><TerminalSquare />{isEnglish ? "Log" : "Журнал"}</button>
+              ) : null}
+              <button className="button secondary" disabled={busy !== null} onClick={() => { setLoadState("loading"); void reload(); }}><RefreshCcw />{isEnglish ? "Retry" : "Повторить"}</button>
+            </div>
+          </div>
+        ) : null}
+        {loadState === "loading" ? (
+          <div className="content boot-loading" role="status" aria-live="polite">
+            <Loader2 className="spin" />
+            <strong>{isEnglish ? "Connecting to the local vault…" : "Подключаю локальное хранилище…"}</strong>
+            <span>{isEnglish ? "Accounts remain encrypted on this computer." : "Аккаунты остаются зашифрованными на этом компьютере."}</span>
+          </div>
+        ) : (
+          <div className={`content content-${activeView}`}>{pageContent}</div>
+        )}
+      </section>
       <AddAccountWizard
         state={loginWizard}
         busy={busy}
-        onStart={(type) => void startLogin(type)}
+        capabilities={diagnostics?.codexCapabilities}
+        onStart={(input) => void startLogin(input)}
         onOpen={(url) => void cam.openExternal(url)}
+        onCopyDeviceCode={(userCode) => cam.copyDeviceCode(userCode)}
+        onOpenDeviceLogin={(url, userCode) => cam.openDeviceLogin(url, userCode)}
         onClose={closeLoginWizard}
       />
       <ConfirmDialog state={confirmState} onClose={closeConfirm} />
@@ -2069,6 +3363,68 @@ function App() {
         onClose={() => setCommandOpen(false)}
         onRun={runCommand}
       />
+      {inspectorOpen ? (
+        <div
+          className="modal-backdrop profile-details-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label={isEnglish ? "Profile details" : "Подробности профиля"}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setInspectorOpen(false);
+          }}
+        >
+          <div className="profile-details-dialog">
+            <div className="modal-head">
+              <div>
+                <div className="panel-title">{isEnglish ? "Profile details" : "Подробности профиля"}</div>
+                <p className="muted">{isEnglish ? "Status, limits and every profile action in one place." : "Состояние, лимиты и все действия с профилем в одном окне."}</p>
+              </div>
+              <button ref={inspectorCloseButtonRef} className="icon-btn" onClick={() => setInspectorOpen(false)} title={isEnglish ? "Close" : "Закрыть"}>
+                <X />
+              </button>
+            </div>
+            <AccountInspector
+              account={selectedAccount}
+              privacyMode={privacyMode}
+              language={language}
+              busy={busy}
+              onRefresh={refreshAccount}
+              onValidateAuth={validateAccountAuth}
+              onRepair={repairAccount}
+              onSwitch={switchAccount}
+              onReauth={reauthenticateAccount}
+              onOpenFolder={openProfileFolder}
+              onMetadata={(id, input) => void updateAccountMetadata(id, input)}
+              onDelete={(id) => {
+                setInspectorOpen(false);
+                void deleteAccount(id);
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
+      {antigravityImportOpen ? (
+        <AntigravityImportModal
+          busy={busy}
+          profileStatus={antigravityProfileStatus}
+          oauthSession={antigravityOAuthSession}
+          callbackUrl={antigravityCallbackUrl}
+          onCallbackUrl={setAntigravityCallbackUrl}
+          tokenPayload={antigravityTokenPayload}
+          onTokenPayload={setAntigravityTokenPayload}
+          result={antigravityImportResult}
+          displayEmail={displayEmail}
+          onClose={() => void cancelAntigravityOAuthAuthorization()}
+          onStartOAuth={() => void startAntigravityOAuthAuthorization()}
+          onFinishOAuth={(manualCallback) => void finishAntigravityOAuthAuthorization(manualCallback)}
+          onImportToken={() => void importAntigravityTokenPayload()}
+          onImportFiles={() => void importAntigravityLocalFiles()}
+          onImportSource={(source) => void importAntigravityExternalSource(source)}
+          onImportLocalProfile={() => void importAntigravityLocalProfile()}
+          onInspect={() => void inspectAntigravityProfile()}
+          onOpenDocs={() => void cam.openExternal(ANTIGRAVITY_CLI_DOCS_URL)}
+        />
+      ) : null}
       {transferMode ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={transferMode === "export" ? "Экспорт аккаунтов" : "Импорт аккаунтов"}>
           <div className="transfer-modal">
@@ -2150,7 +3506,10 @@ function App() {
               ))}
             </div>
             <div className="modal-actions">
-              <button className="button secondary" onClick={() => setActiveView("health")}>Диагностика</button>
+              <button className="button secondary" onClick={() => {
+                closeReleaseNotes();
+                setActiveView("accounts");
+              }}>Аккаунты</button>
               <button className="button" onClick={closeReleaseNotes}>Понятно</button>
             </div>
           </div>
@@ -2160,8 +3519,22 @@ function App() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(
+function BridgeUnavailable() {
+  return (
+    <main className="bridge-fatal" role="alert">
+      <span><AlertTriangle /></span>
+      <div>
+        <p>DESKTOP BRIDGE</p>
+        <h1>Интерфейс не подключён к приложению</h1>
+        <p>Данные аккаунтов не загружены и не потеряны. Полностью закрой Codex Account Manager и открой его снова. Если экран повторится — переустанови текущую версию поверх существующей.</p>
+      </div>
+    </main>
+  );
+}
+
+const root = createRoot(document.getElementById("root")!);
+root.render(
   <React.StrictMode>
-    <App />
+    {window.cam || import.meta.env.DEV ? <App /> : <BridgeUnavailable />}
   </React.StrictMode>
 );

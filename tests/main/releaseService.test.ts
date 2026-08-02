@@ -1,4 +1,4 @@
-import fs from "node:fs";
+﻿import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -29,16 +29,16 @@ describe("ReleaseService", () => {
     const report = service.getReadiness();
 
     expect(report.ready).toBe(false);
-    expect(report.summary).toContain("публичного канала");
+    expect(report.summary).toContain("GitHub Releases ещё не настроен");
     expect(report.artifacts.every((artifact) => artifact.exists === false)).toBe(true);
   });
 
   it("matches SHA256SUMS entries for release files", () => {
     const releaseDir = tempReleaseDir();
-    const setup = "Codex Account Manager Setup 1.6.0.exe";
-    const portable = "Codex Account Manager 1.6.0.exe";
+    const setup = "Codex-Account-Manager-Setup-1.6.0.exe";
+    const portable = "Codex-Account-Manager-1.6.0.exe";
     const latest = "latest.yml";
-    const blockmap = "Codex Account Manager Setup 1.6.0.exe.blockmap";
+    const blockmap = "Codex-Account-Manager-Setup-1.6.0.exe.blockmap";
     const setupHash = writeArtifact(releaseDir, setup, "setup");
     const portableHash = writeArtifact(releaseDir, portable, "portable");
     const latestHash = writeArtifact(releaseDir, latest, "latest");
@@ -54,11 +54,35 @@ describe("ReleaseService", () => {
       releaseDir,
       version: "1.6.0",
       productName: "Codex Account Manager",
-      packageConfig: { build: { publish: "https://updates.example.test", win: { signAndEditExecutable: true, verifyUpdateCodeSignature: true } } },
+      packageConfig: { build: { publish: "https://updates.example.test", win: { signAndEditExecutable: true, signExecutable: true, verifyUpdateCodeSignature: true } } },
       env: {}
     }).getReadiness();
 
     expect(report.ready).toBe(true);
     expect(report.artifacts.filter((artifact) => artifact.checksumListed)).toHaveLength(5);
+  });
+
+  it("accepts a checksum-complete unsigned local release", () => {
+    const releaseDir = tempReleaseDir();
+    const files = [
+      "Codex-Account-Manager-Setup-1.10.0.exe",
+      "Codex-Account-Manager-1.10.0.exe",
+      "latest.yml",
+      "Codex-Account-Manager-Setup-1.10.0.exe.blockmap"
+    ];
+    const lines = files.map((fileName) => `${writeArtifact(releaseDir, fileName, fileName)}  ${fileName}`);
+    fs.writeFileSync(path.join(releaseDir, "SHA256SUMS-1.10.0.txt"), `${lines.join("\n")}\n`, "utf8");
+
+    const report = new ReleaseService({
+      projectRoot: path.dirname(releaseDir),
+      releaseDir,
+      version: "1.10.0",
+      productName: "Codex Account Manager",
+      packageConfig: { build: { publish: [{ provider: "github" }], win: { signAndEditExecutable: false, verifyUpdateCodeSignature: false } } },
+      env: {}
+    }).getReadiness();
+
+    expect(report.ready).toBe(true);
+    expect(report.summary).toContain("ручной установки");
   });
 });

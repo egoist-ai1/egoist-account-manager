@@ -1,21 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { appVersion } from "../../shared/releaseNotes.js";
-
-const secretPatterns = [
-  /(bearer\s+)[a-z0-9._~+/=-]+/gi,
-  /("(?:access|refresh|id)_token"\s*:\s*")[^"]+(")/gi,
-  /("(?:apiKey|api_key|token|secret|password)"\s*:\s*")[^"]+(")/gi,
-  /((?:sk|sess|eyJ)[a-z0-9._~+/=-]{12,})/gi
-];
+import { redactSensitiveText } from "../../shared/redaction.js";
 
 export function sanitizeCrashText(value: unknown): string {
-  const raw = value instanceof Error ? `${value.name}: ${value.message}\n${value.stack ?? ""}` : String(value);
-  return secretPatterns.reduce((text, pattern) => text.replace(pattern, (...parts) => {
-    if (parts.length >= 4 && typeof parts[1] === "string" && typeof parts[2] === "string") return `${parts[1]}[скрыто]${parts[2]}`;
-    if (parts.length >= 3 && typeof parts[1] === "string") return `${parts[1]}[скрыто]`;
-    return "[скрыто]";
-  }), raw).slice(0, 16_000);
+  return redactSensitiveText(value).slice(0, 16_000);
 }
 
 export interface CrashReportRecord {

@@ -5,8 +5,18 @@ import type { ManagedAccount, SmartRecommendation } from "../../src/shared/types
 function account(input: Partial<ManagedAccount> & Pick<ManagedAccount, "id" | "label">): ManagedAccount {
   return {
     id: input.id,
+    platform: input.platform ?? "codex",
     label: input.label,
     email: input.email ?? `${input.id}@example.com`,
+    authMode: input.platform === "antigravity" ? null : "chatgpt",
+    providerAccountId: null,
+    workspaceAccountId: null,
+    workspaceLabel: null,
+    authFingerprint: null,
+    credentialState: "ready",
+    lastAuthenticatedAt: null,
+    expiresAt: null,
+    version: 1,
     planType: "pro",
     profileDir: "test",
     isActive: input.isActive ?? false,
@@ -49,12 +59,12 @@ describe("command palette model", () => {
         account({ id: "active", label: "основной", isActive: true }),
         account({ id: "backup", label: "backup", favorite: true })
       ],
-      activeView: "dashboard",
+      activeView: "accounts",
       smartRecommendation: recommendation
     });
 
     expect(commands.map((command) => command.title)).toContain("Переключить на лучший профиль");
-    expect(commands.map((command) => command.title)).toContain("Открыть диагностику");
+    expect(commands.map((command) => command.title)).toContain("Открыть настройки");
     expect(commands.map((command) => command.title)).toContain("Переключить: backup");
     expect(commands.some((command) => /[А-Яа-яЁё]/.test(command.title))).toBe(true);
   });
@@ -62,7 +72,7 @@ describe("command palette model", () => {
   it("filters commands by title, subtitle and keywords", () => {
     const commands = buildCommandPalette({
       accounts: [account({ id: "client", label: "клиент", email: "client@example.com" })],
-      activeView: "dashboard",
+      activeView: "accounts",
       smartRecommendation: null
     });
 
@@ -85,5 +95,42 @@ describe("command palette model", () => {
     expect(commands.map((command) => command.id)).not.toContain("account.switch.active");
     expect(commands.map((command) => command.id)).not.toContain("account.switch.archive");
     expect(commands.map((command) => command.id)).toContain("account.switch.ready");
+  });
+
+  it("offers ready Antigravity accounts as switch targets", () => {
+    const commands = buildCommandPalette({
+      accounts: [
+        account({ id: "codex-ready", label: "Codex", platform: "codex" }),
+        account({ id: "ag-ready", label: "Antigravity", platform: "antigravity" })
+      ],
+      activeView: "accounts",
+      smartRecommendation: null
+    });
+
+    expect(commands.map((command) => command.id)).toContain("account.switch.codex-ready");
+    expect(commands.map((command) => command.id)).toContain("account.switch.ag-ready");
+    expect(commands.map((command) => command.id)).toContain("diagnostics.antigravity");
+    expect(commands.find((command) => command.id === "diagnostics.antigravity")).toMatchObject({
+      action: "filterPlatform",
+      view: "accounts",
+      platform: "antigravity"
+    });
+    expect(commands.map((command) => command.id)).toContain("platform.filter.antigravity");
+  });
+
+  it("does not expose raw account emails through search keywords in privacy mode", () => {
+    const commands = buildCommandPalette({
+      accounts: [account({ id: "client", label: "клиент", email: "client@example.com" })],
+      activeView: "accounts",
+      smartRecommendation: null,
+      privacyMode: true
+    });
+
+    const switchCommand = commands.find((command) => command.id === "account.switch.client");
+
+    expect(switchCommand?.subtitle).toContain("cl****@example.com");
+    expect(switchCommand?.subtitle).not.toContain("client@example.com");
+    expect(switchCommand?.keywords).not.toContain("client@example.com");
+    expect(filterCommandPalette(commands, "client@example.com").map((command) => command.id)).not.toContain("account.switch.client");
   });
 });

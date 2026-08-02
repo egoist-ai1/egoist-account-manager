@@ -5,8 +5,18 @@ import type { ManagedAccount } from "../../src/shared/types";
 function account(input: Partial<ManagedAccount>): ManagedAccount {
   return {
     id: input.id ?? "a",
+    platform: input.platform ?? "codex",
     label: input.label ?? "Аккаунт",
     email: input.email ?? "user@example.com",
+    authMode: input.platform === "antigravity" ? null : "chatgpt",
+    providerAccountId: null,
+    workspaceAccountId: null,
+    workspaceLabel: null,
+    authFingerprint: null,
+    credentialState: "ready",
+    lastAuthenticatedAt: null,
+    expiresAt: null,
+    version: 1,
     planType: "plus",
     profileDir: "",
     isActive: input.isActive ?? false,

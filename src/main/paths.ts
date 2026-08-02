@@ -3,6 +3,8 @@ import path from "node:path";
 import { app } from "electron";
 
 export function getDefaultCodexHome(): string {
+  const configured = process.env.CODEX_HOME?.trim();
+  if (configured && path.isAbsolute(configured)) return path.normalize(configured);
   return path.join(os.homedir(), ".codex");
 }
 

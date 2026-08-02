@@ -42,5 +42,10 @@ export const uiText = {
     autoRefresh: "Автообновление лимитов",
     privacyMode: "Режим приватности",
     language: "Язык интерфейса"
+  },
+  inspector: {
+    selectedProfile: "выбранный профиль",
+    noProfileSelected: "Профиль не выбран",
+    noProfileHelp: "Выбери аккаунт в списке, чтобы увидеть живой снимок лимитов и быстрые команды."
   }
 } as const;

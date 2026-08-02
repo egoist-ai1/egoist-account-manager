@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Codex Account Manager">
+  <defs>
+    <linearGradient id="surface" x1="164" y1="116" x2="856" y2="908" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#242039"/>
+      <stop offset="0.48" stop-color="#11131f"/>
+      <stop offset="1" stop-color="#090b13"/>
+    </linearGradient>
+    <linearGradient id="violet" x1="314" y1="212" x2="722" y2="813" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#b7a8ff"/>
+      <stop offset="0.46" stop-color="#7c5cff"/>
+      <stop offset="1" stop-color="#4d32c8"/>
+    </linearGradient>
+    <linearGradient id="violetDark" x1="336" y1="360" x2="668" y2="816" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6e50e8"/>
+      <stop offset="1" stop-color="#2a1c76"/>
+    </linearGradient>
+    <linearGradient id="visor" x1="352" y1="615" x2="676" y2="615" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a899ff"/>
+      <stop offset="0.5" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#a899ff"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="44" y="44" width="936" height="936" rx="224" fill="url(#surface)"/>
+  <rect x="60" y="60" width="904" height="904" rx="208" fill="none" stroke="#8f70ff" stroke-width="18"/>
+
+  <path d="M512 176C389 213 301 326 270 479l-32 157 112-88c29-23 63-40 100-50l62-17 62 17c37 10 71 27 100 50l112 88-32-157C723 326 635 213 512 176Z" fill="url(#violet)"/>
+  <path d="M512 217c-91 33-158 122-188 257l-14 65 44-32c41-30 89-50 139-59l19-3 19 3c50 9 98 29 139 59l44 32-14-65c-30-135-97-224-188-257Z" fill="#171524" fill-opacity="0.82"/>
+  <path d="M512 176v269" fill="none" stroke="#c4b8ff" stroke-width="16" stroke-linecap="round" opacity="0.72"/>
+
+  <path d="M302 554c58-58 130-87 210-87s152 29 210 87l-38 173c-49 75-106 121-172 139-66-18-123-64-172-139l-38-173Z" fill="#090b13" stroke="url(#violetDark)" stroke-width="22" stroke-linejoin="round"/>
+  <path d="M360 594c45 37 96 56 152 56s107-19 152-56c-26 68-77 106-152 112-75-6-126-44-152-112Z" fill="url(#visor)"/>
+  <path d="M391 739c37 41 77 69 121 84 44-15 84-43 121-84-26 63-66 103-121 121-55-18-95-58-121-121Z" fill="#7657f4"/>
+</svg>

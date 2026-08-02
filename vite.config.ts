@@ -8,7 +8,9 @@ export default defineConfig({
   base: "./",
   build: {
     outDir: "dist/renderer",
-    emptyOutDir: false
+    // Renderer chunks are content-addressed. Keeping previous builds here makes
+    // them part of app.asar even though index.html no longer references them.
+    emptyOutDir: true
   },
   resolve: {
     alias: {

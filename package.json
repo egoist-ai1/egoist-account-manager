@@ -1,8 +1,8 @@
 {
   "name": "codex-account-manager",
   "productName": "Codex Account Manager",
-  "version": "1.9.3",
-  "description": "Local Windows account switcher and rate-limit dashboard for Codex ChatGPT auth profiles.",
+  "version": "3.1.0",
+  "description": "Codex Account Manager by Egoist AI — local Windows profile switcher and quota dashboard for user-authorized AI coding accounts.",
   "author": "Egoist Gorbachev",
   "license": "MIT",
   "repository": {
@@ -12,27 +12,34 @@
   "type": "module",
   "main": "dist/main/main.js",
   "private": true,
+  "packageManager": "pnpm@11.7.0",
   "scripts": {
-    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"tsc -p tsconfig.main.json --watch --preserveWatchOutput\" \"wait-on http://127.0.0.1:5173 dist/main/main.js && cross-env NODE_ENV=development electron .\"",
-    "repair:native": "npm rebuild better-sqlite3",
-    "rebuild:native": "electron-rebuild -f -w better-sqlite3",
-    "build": "tsc --noEmit && tsc -p tsconfig.main.json && vite build && npm run rebuild:native && electron-builder --win nsis portable",
-    "build:dir": "tsc --noEmit && tsc -p tsconfig.main.json && vite build && npm run rebuild:native && electron-builder --dir",
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"tsc -p tsconfig.main.json --watch --preserveWatchOutput\" \"wait-on http://127.0.0.1:5173 dist/main/main.js && pnpm run build:preload && cross-env NODE_ENV=development electron .\"",
+    "rebuild:native:node": "pnpm rebuild better-sqlite3",
+    "rebuild:native:electron": "electron-rebuild -f -w better-sqlite3",
+    "repair:native": "pnpm run rebuild:native:node",
+    "icons:build": "node scripts/generate-icons.mjs",
+    "clean:dist": "node scripts/clean-build-output.mjs",
+    "build:preload": "esbuild src/main/preload.ts --bundle --platform=browser --format=cjs --external:electron --outfile=dist/main/preload.cjs",
+    "build": "pnpm run typecheck && pnpm run lint && pnpm run clean:dist && tsc -p tsconfig.main.json && pnpm run build:preload && vite build && pnpm run rebuild:native:electron && electron-builder --win nsis portable",
+    "build:dir": "pnpm run typecheck && pnpm run lint && pnpm run clean:dist && tsc -p tsconfig.main.json && pnpm run build:preload && vite build && pnpm run rebuild:native:electron && electron-builder --dir",
     "preview": "vite preview --host 127.0.0.1",
     "smoke": "playwright test",
     "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit",
+    "lint": "eslint src tests --max-warnings=0",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:node": "npm run repair:native && vitest run"
+    "test:node": "pnpm run rebuild:native:node && vitest run",
+    "test:electron": "pnpm run build:dir && playwright test",
+    "verify:package": "node scripts/verify-package.mjs",
+    "verify:startup": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-packaged-startup.ps1",
+    "release:checksums": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/write-checksums.ps1"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^4.6.0",
+    "@fontsource-variable/montserrat": "^5.2.8",
     "better-sqlite3": "^12.4.6",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
-    "electron-is-dev": "^3.0.1",
-    "electron-updater": "^6.8.3",
     "lucide-react": "^0.561.0",
     "nanoid": "^5.1.6",
     "react": "^19.1.0",
@@ -40,8 +47,12 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@electron/fuses": "1.8.0",
+    "@electron/asar": "3.4.1",
     "@electron/rebuild": "^4.0.4",
+    "@eslint/js": "9.0.0",
     "@playwright/test": "^1.57.0",
+    "@vitejs/plugin-react": "^4.6.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.10.1",
     "@types/react": "^19.1.8",
@@ -50,8 +61,11 @@
     "cross-env": "^10.1.0",
     "electron": "^39.2.7",
     "electron-builder": "^26.0.12",
+    "esbuild": "0.28.1",
+    "eslint": "9.0.0",
     "png-to-ico": "^3.0.1",
     "typescript": "^5.9.3",
+    "typescript-eslint": "8.0.0",
     "vite": "^7.0.4",
     "vitest": "^3.2.4",
     "wait-on": "^9.0.3"
@@ -59,6 +73,7 @@
   "build": {
     "appId": "one.egoist.codex-account-manager",
     "productName": "Codex Account Manager",
+    "electronDist": "node_modules/electron/dist",
     "asar": true,
     "publish": [
       {
@@ -82,6 +97,7 @@
     "directories": {
       "output": "release"
     },
+    "afterPack": "./scripts/afterPack.mjs",
     "win": {
       "icon": "assets/icon.ico",
       "target": [
@@ -89,14 +105,16 @@
         "portable"
       ],
       "requestedExecutionLevel": "asInvoker",
-      "signAndEditExecutable": false,
+      "signAndEditExecutable": true,
+      "signExecutable": false,
       "verifyUpdateCodeSignature": false
     },
     "nsis": {
       "artifactName": "Codex-Account-Manager-Setup-${version}.${ext}",
-      "oneClick": false,
+      "oneClick": true,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
+      "allowToChangeInstallationDirectory": false,
+      "runAfterFinish": true,
       "shortcutName": "Codex Account Manager",
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico",

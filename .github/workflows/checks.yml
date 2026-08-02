@@ -16,19 +16,34 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
+          cache: pnpm
+
+      - name: Настроить pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
 
       - name: Установить зависимости
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Проверить типы
-        run: npm run typecheck
+        run: pnpm run typecheck
 
       - name: Линт
-        run: npm run lint
+        run: pnpm run lint
 
       - name: Тесты
-        run: npm run test:run
+        run: pnpm run test:node
 
       - name: Собрать unpacked-приложение
-        run: npm run build:dir
+        run: pnpm run build:dir
+
+      - name: Smoke packaged application
+        run: pnpm run smoke
+
+      - name: Сохранить unpacked-сборку
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-account-manager-win-unpacked
+          path: release/win-unpacked
+          if-no-files-found: error

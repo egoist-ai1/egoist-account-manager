@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFile, spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 
 function psQuote(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
@@ -26,10 +23,32 @@ function firstExisting(paths: Array<string | null | undefined>): string | null {
   return null;
 }
 
+function codexCommandPriority(candidate: string): number {
+  const normalized = candidate.toLowerCase();
+  const extension = path.extname(normalized);
+  if (process.platform === "win32") {
+    if (extension === ".cmd" || extension === ".bat") return 0;
+    if (extension === ".exe" && !normalized.includes("\\windowsapps\\")) return 1;
+    if (extension === ".exe") return 2;
+    if (extension === ".ps1") return 3;
+    return 99;
+  }
+  return extension ? 0 : 1;
+}
+
+export function pickCodexPathFromWhereOutput(output: string): string | null {
+  const candidates = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .sort((a, b) => codexCommandPriority(a) - codexCommandPriority(b));
+  return firstExisting(candidates);
+}
+
 function findFromWhere(): string | null {
   const result = spawnSync("where.exe", ["codex"], { encoding: "utf8", windowsHide: true });
   if (result.status !== 0) return null;
-  return firstExisting(result.stdout.split(/\r?\n/).map((line) => line.trim()));
+  return pickCodexPathFromWhereOutput(result.stdout);
 }
 
 function findFromAppxPackage(): string | null {
@@ -47,8 +66,16 @@ function findFromAppxPackage(): string | null {
   ]);
 }
 
+export function getOpenAiDesktopCandidates(installLocation: string): string[] {
+  return [
+    path.join(installLocation, "app", "ChatGPT.exe"),
+    path.join(installLocation, "app", "Codex.exe")
+  ];
+}
+
 function findDesktopFromAppxPackage(): string | null {
-  const command = "(Get-AppxPackage OpenAI.Codex -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty InstallLocation)";
+  const command =
+    "(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @('OpenAI.Codex','OpenAI.ChatGPT') } | Select-Object -First 1 -ExpandProperty InstallLocation)";
   const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], {
     encoding: "utf8",
     windowsHide: true
@@ -56,7 +83,7 @@ function findDesktopFromAppxPackage(): string | null {
   if (result.status !== 0) return null;
   const installLocation = result.stdout.trim();
   if (!installLocation) return null;
-  return firstExisting([path.join(installLocation, "app", "Codex.exe")]);
+  return firstExisting(getOpenAiDesktopCandidates(installLocation));
 }
 
 function findDesktopFromKnownLocations(): string | null {
@@ -64,11 +91,18 @@ function findDesktopFromKnownLocations(): string | null {
   const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
   const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
   return firstExisting([
+    path.join(localAppData, "Programs", "ChatGPT", "ChatGPT.exe"),
+    path.join(localAppData, "OpenAI", "ChatGPT", "ChatGPT.exe"),
+    path.join(localAppData, "ChatGPT", "ChatGPT.exe"),
     path.join(localAppData, "Programs", "Codex", "Codex.exe"),
     path.join(localAppData, "OpenAI", "Codex", "Codex.exe"),
     path.join(localAppData, "Codex", "Codex.exe"),
+    path.join(programFiles, "ChatGPT", "ChatGPT.exe"),
+    path.join(programFiles, "OpenAI", "ChatGPT", "ChatGPT.exe"),
     path.join(programFiles, "Codex", "Codex.exe"),
     path.join(programFiles, "OpenAI", "Codex", "Codex.exe"),
+    path.join(programFilesX86, "ChatGPT", "ChatGPT.exe"),
+    path.join(programFilesX86, "OpenAI", "ChatGPT", "ChatGPT.exe"),
     path.join(programFilesX86, "Codex", "Codex.exe"),
     path.join(programFilesX86, "OpenAI", "Codex", "Codex.exe")
   ]);
@@ -87,7 +121,7 @@ function findFromRunningProcesses(): string | null {
 
 function findDesktopFromRunningProcesses(): string | null {
   const command =
-    "Get-CimInstance Win32_Process | Where-Object { $_.Name -ieq 'Codex.exe' -and $_.ExecutablePath -match '\\\\app\\\\Codex\\.exe$' -and $_.CommandLine -notmatch '--type=' } | Select-Object -First 1 -ExpandProperty ExecutablePath";
+    "Get-CimInstance Win32_Process | Where-Object { ($_.Name -ieq 'ChatGPT.exe' -or $_.Name -ieq 'Codex.exe') -and $_.ExecutablePath -match '\\\\app\\\\(ChatGPT|Codex)\\.exe$' -and $_.CommandLine -notmatch '(^|\\s)--type=' } | Select-Object -First 1 -ExpandProperty ExecutablePath";
   const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], {
     encoding: "utf8",
     windowsHide: true
@@ -114,15 +148,11 @@ export function resolveCodexDesktopPath(): string | null {
 }
 
 export async function stopCodexProcesses(): Promise<void> {
-  const names = ["codex.exe", "Codex.exe"];
-  for (const name of names) {
-    try {
-      await execFileAsync("taskkill.exe", ["/IM", name, "/T", "/F"], { windowsHide: true, timeout: 5000 });
-    } catch {
-      // No matching process is a normal state.
-    }
-  }
-  await waitForCodexExit(10000);
+  // Do not use taskkill by image name here. The official Codex Desktop renderer
+  // and its backend share the same Codex/codex image names as the CLI. Killing
+  // them by name interrupts conversations and leaves the Store application in
+  // its crash-recovery screen. Auth writes are atomic; active sessions are left
+  // untouched and future sessions observe the selected auth.json.
 }
 
 function waitForProcessExit(child: ChildProcess, timeoutMs: number): Promise<void> {
@@ -139,13 +169,13 @@ function waitForProcessExit(child: ChildProcess, timeoutMs: number): Promise<voi
   });
 }
 
-function getVisibleCodexWindowCount(): number {
+function getVisibleOpenAiDesktopWindowCount(): number {
   const result = spawnSync("powershell.exe", [
     "-NoProfile",
     "-ExecutionPolicy",
     "Bypass",
     "-Command",
-    "(Get-Process -Name Codex -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }).Count"
+    "(Get-Process -Name ChatGPT,Codex -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }).Count"
   ], {
     encoding: "utf8",
     windowsHide: true
@@ -153,31 +183,13 @@ function getVisibleCodexWindowCount(): number {
   return Number(result.stdout.trim()) || 0;
 }
 
-async function waitForVisibleCodexWindow(timeoutMs: number): Promise<boolean> {
+async function waitForVisibleOpenAiDesktopWindow(timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (getVisibleCodexWindowCount() > 0) return true;
+    if (getVisibleOpenAiDesktopWindowCount() > 0) return true;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  return getVisibleCodexWindowCount() > 0;
-}
-
-async function waitForCodexExit(timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const result = spawnSync("powershell.exe", [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      "(Get-Process -Name Codex,codex -ErrorAction SilentlyContinue).Count"
-    ], {
-      encoding: "utf8",
-      windowsHide: true
-    });
-    if ((Number(result.stdout.trim()) || 0) === 0) return;
-    await new Promise((resolve) => setTimeout(resolve, 400));
-  }
+  return getVisibleOpenAiDesktopWindowCount() > 0;
 }
 
 export function getCodexAppUserModelId(): string | null {
@@ -186,7 +198,7 @@ export function getCodexAppUserModelId(): string | null {
     "-ExecutionPolicy",
     "Bypass",
     "-Command",
-    "(Get-StartApps | Where-Object { $_.Name -eq 'Codex' -or $_.AppID -like 'OpenAI.Codex*!App' } | Select-Object -First 1 -ExpandProperty AppID)"
+    "(Get-StartApps | Where-Object { $_.Name -in @('ChatGPT','Codex') -or $_.AppID -like 'OpenAI.Codex*!App' -or $_.AppID -like 'OpenAI.ChatGPT*!App' } | Select-Object -First 1 -ExpandProperty AppID)"
   ], {
     encoding: "utf8",
     windowsHide: true
@@ -215,11 +227,11 @@ export async function launchCodexApp(_codexPath: string, _workspacePath: string)
       windowsHide: true
     });
     child.unref();
-    if (await waitForVisibleCodexWindow(8000)) return;
+    if (await waitForVisibleOpenAiDesktopWindow(8000)) return;
   }
 
   await launchViaAppUserModelId();
-  if (await waitForVisibleCodexWindow(8000)) return;
+  if (await waitForVisibleOpenAiDesktopWindow(8000)) return;
 
   throw new Error("Codex launch command completed, but no visible Codex window appeared.");
 }
@@ -231,21 +243,21 @@ export interface ScheduledRestart {
   logPath: string;
 }
 
-export function scheduleCodexRestart(desktopPath: string | null, appUserModelId: string | null, runnerDir: string): ScheduledRestart {
-  const scriptsDir = path.join(runnerDir, "scripts");
-  const logsDir = path.join(runnerDir, "logs");
-  fs.mkdirSync(scriptsDir, { recursive: true });
-  fs.mkdirSync(logsDir, { recursive: true });
+export interface OpenAiDesktopRestartScriptOptions {
+  desktopPath: string | null;
+  appUserModelId: string | null;
+  logPath: string;
+}
 
-  const launcherPath = path.join(scriptsDir, "restart-codex.vbs");
-  const launcherLogPath = path.join(logsDir, "restart-launcher.log");
-  const scriptPath = path.join(scriptsDir, "restart-codex.ps1");
-  const logPath = path.join(logsDir, "restart-runner.log");
-  const script = `
+export function buildOpenAiDesktopRestartScript(options: OpenAiDesktopRestartScriptOptions): string {
+  const { desktopPath, appUserModelId, logPath } = options;
+  return `
 $ErrorActionPreference = 'Continue'
 $desktop = ${desktopPath ? psQuote(desktopPath) : "$null"}
 $appId = ${appUserModelId ? psQuote(appUserModelId) : "$null"}
 $logPath = ${psQuote(logPath)}
+$mutex = $null
+$hasMutex = $false
 
 function Write-RunnerLog([string]$Message) {
   try {
@@ -255,121 +267,138 @@ function Write-RunnerLog([string]$Message) {
   } catch {}
 }
 
-function Resolve-CodexDesktop {
-  param([string]$KnownDesktop)
+function Get-OpenAiDesktopRoots {
+  return @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+    ($_.Name -ieq 'ChatGPT.exe' -or $_.Name -ieq 'Codex.exe') -and
+    ($_.ExecutablePath -like '*\\app\\ChatGPT.exe' -or $_.ExecutablePath -like '*\\app\\Codex.exe') -and
+    $_.CommandLine -notmatch '(^|\\s)--type='
+  })
+}
 
+function Wait-RootExit([int[]]$ProcessIds, [int]$Seconds) {
+  $deadline = (Get-Date).AddSeconds($Seconds)
+  do {
+    $remaining = @($ProcessIds | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    if ($remaining.Count -eq 0) { return $true }
+    Start-Sleep -Milliseconds 250
+  } while ((Get-Date) -lt $deadline)
+  return $false
+}
+
+function Resolve-OpenAiDesktop([string]$KnownDesktop) {
   if ($KnownDesktop -and (Test-Path -LiteralPath $KnownDesktop)) { return $KnownDesktop }
-
   try {
-    $pkg = Get-AppxPackage OpenAI.Codex -ErrorAction SilentlyContinue | Select-Object -First 1
+    $pkg = Get-AppxPackage -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -in @('OpenAI.Codex', 'OpenAI.ChatGPT') } |
+      Select-Object -First 1
     if ($pkg -and $pkg.InstallLocation) {
-      $candidate = Join-Path $pkg.InstallLocation "app\\Codex.exe"
-      if (Test-Path -LiteralPath $candidate) { return $candidate }
+      foreach ($fileName in @('ChatGPT.exe', 'Codex.exe')) {
+        $candidate = Join-Path $pkg.InstallLocation ("app\\" + $fileName)
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+      }
     }
   } catch {}
-
-  $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
-  $knownRoots = @()
-  if ($env:LOCALAPPDATA) {
-    $knownRoots += Join-Path $env:LOCALAPPDATA "Programs\\Codex\\Codex.exe"
-    $knownRoots += Join-Path $env:LOCALAPPDATA "OpenAI\\Codex\\Codex.exe"
-    $knownRoots += Join-Path $env:LOCALAPPDATA "Codex\\Codex.exe"
-  }
-  if ($env:ProgramFiles) {
-    $knownRoots += Join-Path $env:ProgramFiles "Codex\\Codex.exe"
-    $knownRoots += Join-Path $env:ProgramFiles "OpenAI\\Codex\\Codex.exe"
-  }
-  if ($programFilesX86) {
-    $knownRoots += Join-Path $programFilesX86 "Codex\\Codex.exe"
-    $knownRoots += Join-Path $programFilesX86 "OpenAI\\Codex\\Codex.exe"
-  }
-  foreach ($candidate in $knownRoots) {
-    if ($candidate -and (Test-Path -LiteralPath $candidate)) { return $candidate }
-  }
-
   return $null
 }
 
-function Resolve-CodexAppId {
-  param([string]$KnownAppId)
-
+function Resolve-OpenAiAppId([string]$KnownAppId) {
   if ($KnownAppId) { return $KnownAppId }
   try {
-    return (Get-StartApps | Where-Object { $_.Name -eq 'Codex' -or $_.AppID -like 'OpenAI.Codex*!App' } | Select-Object -First 1 -ExpandProperty AppID)
+    return (Get-StartApps | Where-Object {
+      $_.Name -in @('ChatGPT', 'Codex') -or
+      $_.AppID -like 'OpenAI.Codex*!App' -or
+      $_.AppID -like 'OpenAI.ChatGPT*!App'
+    } | Select-Object -First 1 -ExpandProperty AppID)
   } catch {
     return $null
   }
 }
 
-function Wait-CodexWindow([int]$Seconds) {
+function Wait-OpenAiWindow([int]$Seconds) {
   $deadline = (Get-Date).AddSeconds($Seconds)
   do {
-    $visible = @(Get-Process -Name Codex -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }).Count
+    $visible = @(Get-Process -Name ChatGPT,Codex -ErrorAction SilentlyContinue |
+      Where-Object { $_.MainWindowHandle -ne 0 }).Count
     if ($visible -gt 0) { return $true }
-    Start-Sleep -Milliseconds 500
+    Start-Sleep -Milliseconds 250
   } while ((Get-Date) -lt $deadline)
   return $false
 }
 
-$desktop = Resolve-CodexDesktop $desktop
-$appId = Resolve-CodexAppId $appId
-Write-RunnerLog "Runner started. Desktop=$desktop AppID=$appId"
-
 try {
-  Get-Process -Name Codex,codex -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-  $deadline = (Get-Date).AddSeconds(10)
-  do {
-    $remaining = @(Get-Process -Name Codex,codex -ErrorAction SilentlyContinue).Count
-    if ($remaining -eq 0) { break }
-    Start-Sleep -Milliseconds 250
-  } while ((Get-Date) -lt $deadline)
-  Write-RunnerLog "Codex process cleanup finished"
-} catch {
-  Write-RunnerLog ("Cleanup failed: " + $_.Exception.Message)
-}
+  $mutex = [System.Threading.Mutex]::new($false, 'Local\\EgoistCodexAccountManagerOpenAiRestart')
+  $hasMutex = $mutex.WaitOne(0)
+  if (-not $hasMutex) {
+    Write-RunnerLog 'A restart is already running; duplicate request ignored.'
+    return
+  }
 
-try {
+  $desktop = Resolve-OpenAiDesktop $desktop
+  $appId = Resolve-OpenAiAppId $appId
+  Write-RunnerLog ("Restart started. Desktop={0} AppID={1}" -f $desktop, $appId)
+
+  Start-Sleep -Milliseconds 250
+  $roots = @(Get-OpenAiDesktopRoots)
+  $rootIds = @($roots | ForEach-Object { [int]$_.ProcessId })
+  if ($rootIds.Count -gt 0) {
+    foreach ($processId in $rootIds) {
+      try {
+        $process = Get-Process -Id $processId -ErrorAction Stop
+        $requested = $process.CloseMainWindow()
+        Write-RunnerLog ("Graceful close requested for PID={0}; accepted={1}" -f $processId, $requested)
+      } catch {
+        Write-RunnerLog ("Graceful close request failed for PID={0}: {1}" -f $processId, $_.Exception.Message)
+      }
+    }
+
+    if (-not (Wait-RootExit $rootIds 10)) {
+      Write-RunnerLog 'Main window did not close within 10 seconds; restart aborted without force-killing processes.'
+      return
+    }
+    Start-Sleep -Milliseconds 500
+  }
+
   if ($appId) {
-    Write-RunnerLog "Starting Codex through Microsoft Store AppID"
-    Start-Process -FilePath "explorer.exe" -ArgumentList ("shell:AppsFolder\\" + $appId)
-    Write-RunnerLog ("Store AppID launch requested: " + $appId)
-    if (Wait-CodexWindow 12) {
-      Write-RunnerLog "Visible Codex window detected after Store AppID launch"
-      exit 0
+    Write-RunnerLog 'Starting ChatGPT/Codex through the registered Microsoft Store AppID.'
+    Start-Process -FilePath 'explorer.exe' -ArgumentList ('shell:AppsFolder\\' + $appId)
+    if (Wait-OpenAiWindow 15) {
+      Write-RunnerLog 'Restart completed; a visible ChatGPT/Codex window was detected.'
+      return
     }
-  } else {
-    Write-RunnerLog "Store AppID not found"
+    Write-RunnerLog 'Store activation returned without a visible window; trying the desktop executable fallback.'
   }
 
   if ($desktop -and (Test-Path -LiteralPath $desktop)) {
-    try {
-      Write-RunnerLog "Starting Codex desktop executable"
-      Start-Process -FilePath $desktop
-    } catch {
-      Write-RunnerLog ("Desktop executable launch failed: " + $_.Exception.Message)
-    }
-
-    if (Wait-CodexWindow 12) {
-      Write-RunnerLog "Visible Codex window detected after desktop executable launch"
-      exit 0
-    }
-  } else {
-    Write-RunnerLog "Desktop executable path is missing or unavailable"
-  }
-
-  if ($desktop -and (Test-Path -LiteralPath $desktop)) {
-    Write-RunnerLog "No visible window after normal launch paths. Requesting elevated desktop launch via UAC"
-    try {
-      Start-Process -FilePath $desktop -Verb RunAs
-      Write-RunnerLog "Elevated desktop launch requested"
-    } catch {
-      Write-RunnerLog ("Elevated desktop launch failed or was cancelled: " + $_.Exception.Message)
+    Start-Process -FilePath $desktop
+    if (Wait-OpenAiWindow 15) {
+      Write-RunnerLog 'Restart completed through the desktop executable fallback.'
+      return
     }
   }
+
+  Write-RunnerLog 'Restart could not open a visible ChatGPT/Codex window.'
 } catch {
   Write-RunnerLog ("Restart runner failed: " + $_.Exception.Message)
+} finally {
+  if ($hasMutex -and $mutex) {
+    try { $mutex.ReleaseMutex() } catch {}
+  }
+  if ($mutex) { $mutex.Dispose() }
 }
-`;
+`.trimStart();
+}
+
+export function scheduleOpenAiDesktopRestart(desktopPath: string | null, appUserModelId: string | null, runnerDir: string): ScheduledRestart {
+  const scriptsDir = path.join(runnerDir, "scripts");
+  const logsDir = path.join(runnerDir, "logs");
+  fs.mkdirSync(scriptsDir, { recursive: true });
+  fs.mkdirSync(logsDir, { recursive: true });
+
+  const launcherPath = path.join(scriptsDir, "restart-openai-desktop.vbs");
+  const launcherLogPath = path.join(logsDir, "restart-launcher.log");
+  const scriptPath = path.join(scriptsDir, "restart-openai-desktop.ps1");
+  const logPath = path.join(logsDir, "restart-runner.log");
+  const script = buildOpenAiDesktopRestartScript({ desktopPath, appUserModelId, logPath });
 
   fs.writeFileSync(scriptPath, `\uFEFF${script.trimStart()}`, "utf8");
 
@@ -396,3 +425,5 @@ try {
 
   return { launcherPath, launcherLogPath, scriptPath, logPath };
 }
+
+export const scheduleCodexRestart = scheduleOpenAiDesktopRestart;

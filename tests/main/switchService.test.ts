@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { SwitchService, type SwitchEventRecord } from "../../src/main/services/switchService";
 
 const dirs: string[] = [];
+const sealBackup = (contents: string) => Buffer.from(contents, "utf8").toString("base64");
+const unsealBackup = (ciphertext: string) => Buffer.from(ciphertext, "base64").toString("utf8");
 
 function tempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cam-switch-"));
@@ -26,11 +28,12 @@ describe("SwitchService", () => {
     const records: SwitchEventRecord[] = [];
     const service = new SwitchService({
       codexHome,
-      stopCodex: async () => {
-        calls.push("stop");
-      },
-      startCodex: async () => {
-        calls.push("start");
+      sealBackup,
+      unsealBackup,
+      stableCheckIntervalMs: 0,
+      afterWrite: async () => {
+        calls.push("afterWrite");
+        expect(JSON.parse(fs.readFileSync(authPath, "utf8")).account_id).toBe("new");
       },
       recordEvent: async (event) => {
         records.push(event);
@@ -45,7 +48,7 @@ describe("SwitchService", () => {
 
     expect(JSON.parse(fs.readFileSync(authPath, "utf8")).account_id).toBe("new");
     expect(fs.existsSync(result.backupPath)).toBe(true);
-    expect(calls).toEqual(["stop", "start"]);
+    expect(calls).toEqual(["afterWrite"]);
     expect(records).toMatchObject([
       { accountId: "new", previousAccountId: "old", status: "started", completedAt: null },
       { accountId: "new", previousAccountId: "old", status: "completed", error: null }
@@ -62,8 +65,10 @@ describe("SwitchService", () => {
 
     const service = new SwitchService({
       codexHome,
-      stopCodex: async () => undefined,
-      startCodex: async () => undefined,
+      sealBackup,
+      unsealBackup,
+      stableCheckIntervalMs: 0,
+      afterWrite: async () => undefined,
       recordEvent: async () => undefined
     });
 
@@ -86,11 +91,11 @@ describe("SwitchService", () => {
     const records: SwitchEventRecord[] = [];
     const service = new SwitchService({
       codexHome,
-      stopCodex: async () => {
-        calls.push("stop");
-      },
-      startCodex: async () => {
-        calls.push("start");
+      sealBackup,
+      unsealBackup,
+      stableCheckIntervalMs: 0,
+      afterWrite: async () => {
+        calls.push("afterWrite");
       },
       recordEvent: async (event) => {
         records.push(event);

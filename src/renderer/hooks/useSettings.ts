@@ -5,7 +5,7 @@ export interface SettingsState {
   settings: AppSettings | null;
   loading: boolean;
   error: string | null;
-  save: (input: Partial<Omit<AppSettings, "language">>) => Promise<AppSettings | null>;
+  save: (input: Partial<AppSettings>) => Promise<AppSettings | null>;
   refresh: () => Promise<void>;
 }
 
@@ -34,7 +34,7 @@ export function useSettings(api?: AppApi): SettingsState {
   }, [resolvedApi]);
 
   const save = useCallback(
-    async (input: Partial<Omit<AppSettings, "language">>) => {
+    async (input: Partial<AppSettings>) => {
       if (!resolvedApi) {
         setError("Мост приложения недоступен.");
         return null;
@@ -42,7 +42,7 @@ export function useSettings(api?: AppApi): SettingsState {
 
       setError(null);
       try {
-        const next = await resolvedApi.updateSettings({ ...input, language: "ru" });
+        const next = await resolvedApi.updateSettings(input);
         setSettings(next);
         return next;
       } catch (caught) {

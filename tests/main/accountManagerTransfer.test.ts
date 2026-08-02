@@ -43,15 +43,19 @@ describe("AccountManager transfer", () => {
       });
 
       const sourceManager = new AccountManager(sourceStore, sourceVault, sourceDir, "codex");
-      const targetManager = new AccountManager(targetStore, new Vault(targetDir), targetDir, "codex");
+      const targetVault = new Vault(targetDir);
+      const targetManager = new AccountManager(targetStore, targetVault, targetDir, "codex");
 
       await expect(sourceManager.exportAccounts(exportPath, "strong-password")).resolves.toMatchObject({ exportedCount: 1 });
+      const envelope = JSON.parse(fs.readFileSync(exportPath, "utf8")) as { version: number; kdf: { name: string } };
+      expect(envelope).toMatchObject({ version: 3, kdf: { name: "scrypt" } });
       await expect(targetManager.importAccounts(exportPath, "strong-password")).resolves.toMatchObject({ importedCount: 1 });
 
       const imported = targetStore.getByEmail("real@example.com");
       expect(imported?.label).toBe("Рабочий");
       expect(imported?.planType).toBe("plus");
-      expect(fs.readFileSync(getAuthFilePath(imported!.profileDir), "utf8")).toBe(authJson);
+      expect(fs.existsSync(getAuthFilePath(imported!.profileDir))).toBe(false);
+      expect(targetVault.decryptUtf8(imported!.encryptedAuthJson)).toBe(authJson);
     } finally {
       sourceStore.close();
       targetStore.close();
@@ -106,6 +110,7 @@ describe("AccountManager transfer", () => {
       });
 
       const manager = new AccountManager(store, vault, appDir, "codex");
+      manager.secureManagedProfileHomes();
       const report = manager.getProfileIntegrity();
 
       expect(report).toMatchObject({ total: 1, ok: 1, warnings: 0, errors: 0 });

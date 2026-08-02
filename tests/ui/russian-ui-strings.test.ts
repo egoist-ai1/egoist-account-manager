@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { uiText } from "../../src/renderer/i18n/ru";
+import { uiTextEn } from "../../src/renderer/i18n/en";
 
 function walk(value: unknown, path: string[] = []): Array<{ path: string; text: string }> {
   if (typeof value === "string") return [{ path: path.join("."), text: value }];
@@ -29,5 +30,13 @@ describe("русский пользовательский интерфейс", (
     expect(() => walk({ broken: 1 })).toThrow("Unsupported UI text leaf");
     expect(() => walk({ broken: false })).toThrow("Unsupported UI text leaf");
     expect(() => walk({ broken: {} })).toThrow("Empty UI text group");
+  });
+
+  it("хранит английскую версию с той же структурой словаря", () => {
+    const russianStrings = walk(uiText);
+    const englishStrings = walk(uiTextEn);
+
+    expect(englishStrings.map(({ path }) => path)).toEqual(russianStrings.map(({ path }) => path));
+    expect(englishStrings.filter(({ text }) => /[A-Za-z]/.test(text)).length).toBe(englishStrings.length);
   });
 });

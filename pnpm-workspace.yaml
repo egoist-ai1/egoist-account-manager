@@ -1,0 +1,16 @@
+packages:
+  - .
+
+overrides:
+  js-yaml: 4.3.0
+  postcss: 8.5.18
+  brace-expansion: 5.0.8
+  fast-uri: 3.1.4
+  shell-quote: 1.10.0
+  tar: 7.5.22
+
+allowBuilds:
+  better-sqlite3: true
+  electron: true
+  electron-winstaller: true
+  esbuild: true

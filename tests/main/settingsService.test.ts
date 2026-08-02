@@ -18,23 +18,53 @@ afterEach(() => {
 });
 
 describe("SettingsService", () => {
-  it("persists Russian-only settings with safe defaults", () => {
+  it("persists settings with safe defaults and selectable language", () => {
     const store = new AccountStore(tempDir());
     const service = new SettingsService(store);
 
     expect(service.get().language).toBe("ru");
-    service.update({ privacyMode: true, autoRefreshIntervalMs: 300000 });
+    service.update({ privacyMode: true, autoRefreshIntervalMs: 180000, language: "en" });
 
     expect(service.get()).toMatchObject({
-      language: "ru",
+      language: "en",
       privacyMode: true,
-      autoRefreshIntervalMs: 300000,
+      autoRefreshIntervalMs: 180000,
+      desktopClosePolicy: "exact-tree-fallback",
       smartSwitchMode: "suggest",
-      desktopNotifications: true
+      smartSwitchThresholdPercent: 10,
+      desktopNotifications: true,
+      trayEnabled: false,
+      autostartEnabled: false
     });
-    service.update({ smartSwitchMode: "auto", desktopNotifications: false });
+    service.update({
+      smartSwitchMode: "auto",
+      smartSwitchThresholdPercent: 15,
+      desktopNotifications: false,
+      trayEnabled: true,
+      autostartEnabled: true,
+      autoRefreshIntervalMs: 0
+    });
 
-    expect(service.get()).toMatchObject({ smartSwitchMode: "auto", desktopNotifications: false });
+    expect(service.get()).toMatchObject({
+      smartSwitchMode: "suggest",
+      smartSwitchThresholdPercent: 15,
+      desktopNotifications: false,
+      trayEnabled: true,
+      autostartEnabled: true,
+      autoRefreshIntervalMs: 0
+    });
     store.close();
+  });
+
+  it("migrates legacy one- and five-minute refresh settings to the three-minute cadence", () => {
+    const store = new AccountStore(tempDir());
+    try {
+      store.setSetting("appSettings", JSON.stringify({ autoRefreshIntervalMs: 60_000 }));
+      expect(new SettingsService(store).get().autoRefreshIntervalMs).toBe(180_000);
+      store.setSetting("appSettings", JSON.stringify({ autoRefreshIntervalMs: 300_000 }));
+      expect(new SettingsService(store).get().autoRefreshIntervalMs).toBe(180_000);
+    } finally {
+      store.close();
+    }
   });
 });

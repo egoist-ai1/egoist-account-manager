@@ -351,20 +351,21 @@ test("показывает рабочую консоль с двумя плат�
     if (compactViewport) {
       await expect(page.getByLabel("Центр действий")).toBeHidden();
       await expect(page.getByRole("button", { name: /Команды/ })).toBeVisible();
+      await expect(page.getByLabel("Фильтр платформы")).toBeHidden();
     } else {
       await expect(page.getByLabel("Центр действий")).toBeVisible();
+      await expect(page.getByLabel("Фильтр платформы")).toBeVisible();
+      await expect(page.getByLabel("Фильтр платформы").getByText("Codex", { exact: true })).toBeVisible();
+      await expect(page.getByLabel("Фильтр платформы").getByText("Antigravity", { exact: true })).toBeVisible();
     }
-    await expect(page.getByLabel("Фильтр платформы")).toBeVisible();
-    await expect(page.getByLabel("Фильтр платформы").getByText("Codex", { exact: true })).toBeVisible();
-    await expect(page.getByLabel("Фильтр платформы").getByText("Antigravity", { exact: true })).toBeVisible();
 
     await page.keyboard.press("Control+K");
     await expect(page.getByRole("dialog", { name: "Командный центр" })).toBeVisible();
     await page.getByLabel("Поиск команды").fill("antigravity");
     await expect(page.getByRole("button", { name: /Диагностика Antigravity/ })).toBeVisible();
-    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: /Показать профили Antigravity/ }).click();
+    await expect(page.getByRole("dialog", { name: "Командный центр" })).toBeHidden();
 
-    await page.getByLabel("Фильтр платформы").getByText("Antigravity", { exact: true }).click();
     await expect(page.getByText("Аккаунты Antigravity")).toBeVisible();
     await expect(page.locator(".profile-workbench > .inspector")).toHaveCount(0);
     const viewport = await page.evaluate(() => ({

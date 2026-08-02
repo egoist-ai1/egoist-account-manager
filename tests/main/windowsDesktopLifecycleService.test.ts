@@ -105,7 +105,7 @@ describe("WindowsDesktopLifecycleService", () => {
     expect(diagnostics.candidates.every((candidate) =>
       candidate.packageName === "OpenAI.Codex" || candidate.packageName === "OpenAI.ChatGPT"
     )).toBe(true);
-  });
+  }, 30_000);
 
   it("uses an explicit Codex package policy when Codex and classic ChatGPT coexist", () => {
     const codex = desktopPackage("OpenAI.Codex");

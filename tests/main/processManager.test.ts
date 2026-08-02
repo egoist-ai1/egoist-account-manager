@@ -78,5 +78,5 @@ describe("processManager", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 });

@@ -26,6 +26,9 @@ jobs:
       - name: Установить зависимости
         run: pnpm install --frozen-lockfile
 
+      - name: Установить Chromium для UI smoke
+        run: pnpm exec playwright install chromium
+
       - name: Проверить типы
         run: pnpm run typecheck
 

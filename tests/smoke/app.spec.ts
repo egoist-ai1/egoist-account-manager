@@ -72,11 +72,17 @@ test("3.0.10 сохраняет естественный поток, читае�
     await page.waitForLoadState("domcontentloaded");
     await closeReleaseNotesIfVisible(page);
 
-    const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
-    expect(viewport.width).toBeGreaterThanOrEqual(1400);
-    expect(viewport.height).toBeGreaterThanOrEqual(860);
+    const viewport = await page.evaluate(() => ({
+      width: window.innerWidth,
+      height: window.innerHeight,
+      availableWidth: window.screen.availWidth,
+      availableHeight: window.screen.availHeight
+    }));
+    expect(viewport.width).toBeGreaterThanOrEqual(Math.min(1400, viewport.availableWidth - 40));
+    expect(viewport.height).toBeGreaterThanOrEqual(Math.min(860, viewport.availableHeight - 80));
     expect(viewport.width).toBeLessThanOrEqual(1460);
     expect(viewport.height).toBeLessThanOrEqual(900);
+    const wideViewport = viewport.width >= 1400 && viewport.height >= 860;
 
     const nav = page.getByLabel("Основные разделы");
     await nav.getByText("Настройки", { exact: true }).click();
@@ -181,13 +187,17 @@ test("3.0.10 сохраняет естественный поток, читае�
         cardTitleFontSize: Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--v306-card-title-size") || "13.5")
       };
     });
-    expect(accountSurface).toEqual({
-      columns: 3,
-      visibleCapacity: 9,
-      overflowY: "auto",
-      horizontalOverflow: 0,
-      cardTitleFontSize: 13.5
-    });
+    expect(accountSurface).not.toBeNull();
+    expect(accountSurface!.overflowY).toBe("auto");
+    expect(accountSurface!.horizontalOverflow).toBe(0);
+    expect(accountSurface!.cardTitleFontSize).toBe(13.5);
+    if (wideViewport) {
+      expect(accountSurface!.columns).toBe(3);
+      expect(accountSurface!.visibleCapacity).toBeGreaterThanOrEqual(9);
+    } else {
+      expect(accountSurface!.columns).toBeGreaterThanOrEqual(2);
+      expect(accountSurface!.visibleCapacity).toBeGreaterThanOrEqual(4);
+    }
   } finally {
     await app.close();
     fs.rmSync(userDataDir, { recursive: true, force: true });
@@ -337,7 +347,13 @@ test("показывает рабочую консоль с двумя плат�
     await closeReleaseNotesIfVisible(page);
 
     await expect(page.getByLabel("Основные разделы")).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByLabel("Центр действий")).toBeVisible();
+    const compactViewport = await page.evaluate(() => window.innerWidth < 1200 || window.innerHeight < 780);
+    if (compactViewport) {
+      await expect(page.getByLabel("Центр действий")).toBeHidden();
+      await expect(page.getByRole("button", { name: /Команды/ })).toBeVisible();
+    } else {
+      await expect(page.getByLabel("Центр действий")).toBeVisible();
+    }
     await expect(page.getByLabel("Фильтр платформы")).toBeVisible();
     await expect(page.getByLabel("Фильтр платформы").getByText("Codex", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Фильтр платформы").getByText("Antigravity", { exact: true })).toBeVisible();

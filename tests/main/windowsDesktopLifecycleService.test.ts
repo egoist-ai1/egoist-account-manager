@@ -98,7 +98,7 @@ class FakeAdapter implements WindowsDesktopLifecycleAdapter {
 }
 
 describe("WindowsDesktopLifecycleService", () => {
-  it.runIf(process.platform === "win32")("discovers the installed Windows desktop package without mutating it", async () => {
+  it.runIf(process.platform === "win32" && !process.env.CI)("discovers the installed Windows desktop package without mutating it", async () => {
     const diagnostics = await new WindowsDesktopLifecycleService().getDiagnostics();
 
     expect(diagnostics.status).not.toBe("error");

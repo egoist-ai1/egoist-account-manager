@@ -1,8 +1,8 @@
 # Codex Account Manager — status
 
-- Last updated: `2026-08-02T23:57:40Z`
-- Version/revision: exact local `3.1.5` release candidate; public stable remains [`v3.1.4`](https://github.com/egoistgorbachev/codex-account-manager/releases/tag/v3.1.4) at `990ef785395b5cff1ea987865097661c4d000284`
-- Stage: `release-ready`
+- Last updated: `2026-08-03T00:15:37Z`
+- Version/revision: public stable [`v3.1.5`](https://github.com/egoistgorbachev/codex-account-manager/releases/tag/v3.1.5) at `5aa92061f43bc6378b2120a0b571f6ba1e41a2d3`
+- Stage: `released`
 
 ## Observable outcome
 
@@ -11,8 +11,8 @@
 ## Current milestone
 
 - 3.1.5 исправляет воспроизведённую периодическую блокировку переключения после target reauth; Claude Code scope отложен и продуктовый код Claude не менялся.
-- Exact installer/portable и пять publication assets собраны; source/package/UI/Sandbox gates прошли.
-- GitHub tag/release 3.1.5 ещё не создавались: следующий шаг — независимый review exact commit/manifest и guarded publication.
+- Exact installer/portable и пять publication assets собраны, прошли source/package/UI/Sandbox gates и опубликованы через guarded delivery после независимого `pass`.
+- GitHub `latest`, annotated tag и публичные asset digest/size проверены после публикации; все пять assets совпали с reviewed manifest.
 
 ## Completed in the latest task
 
@@ -24,9 +24,9 @@
 
 ## Next safe action
 
-1. Зафиксировать exact source commit и publication manifest.
-2. Получить независимый outcome-review `pass`.
-3. Только после pass выполнить guarded push/tag/GitHub Release v3.1.5 и публично сверить 5/5 assets.
+1. Наблюдать switch/reauth только по redacted локальному журналу.
+2. При реальном повторении сохранять transaction id и terminal state без вывода credentials.
+3. Claude Code scope возвращать только по новому явному запросу.
 
 ## Verification
 
@@ -34,6 +34,7 @@
 | --- | --- | --- | --- |
 | 2026-08-02 | Exact 3.1.5 release gate | pass; 71/343 tests, smoke 15/4, startup, 78/78 ASAR, tray 44/44 | [`docs/releases/3.1.5.md`](./docs/releases/3.1.5.md) |
 | 2026-08-02 | Sandbox 3.1.4→3.1.5 lifecycle | pass 16/16 | [`artifacts/sandbox/3.1.5/results/release-lifecycle.json`](./artifacts/sandbox/3.1.5/results/release-lifecycle.json) |
+| 2026-08-03 | Public release 3.1.5 | pass; latest stable, 5/5 public digests, exact commit/tag | [GitHub Release](https://github.com/egoistgorbachev/codex-account-manager/releases/tag/v3.1.5) |
 | 2026-08-02 | Public release 3.1.4 | pass; latest stable, 5 assets, exact commit/tag | [GitHub Release](https://github.com/egoistgorbachev/codex-account-manager/releases/tag/v3.1.4) |
 | 2026-08-02 | Claude Code provider research | pass; implementation deferred | [`docs/research/claude-code-provider-integration-2026-08-02.md`](./docs/research/claude-code-provider-integration-2026-08-02.md) |
 

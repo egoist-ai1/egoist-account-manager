@@ -1,7 +1,9 @@
-# Release notes
+# Последние версии
 
-- Existing user-facing notes remain at project root as `RELEASE_NOTES_*.md`.
-- Latest local package: [3.1.5](./3.1.5.md). Latest published stable release remains [3.1.4](./3.1.4.md).
-- Future releases should use one canonical file in this directory and link their verification note.
+| Версия | Статус | Главное |
+| --- | --- | --- |
+| [3.1.6](3.1.6.md) | Preview, не опубликована | Полировка интерфейса, честный ближайший сброс, список и сортировка профилей. |
+| [3.1.5](3.1.5.md) | Стабильная | Восстановление переключения после reauth и усиление transaction cleanup. |
+| [3.1.4](3.1.4.md) | Архивная стабильная | Компактный прозрачный tray и уточнение активного лимита. |
 
-Create one user-facing note per future shipped version and link its verification evidence.
+Более ранняя история свёрнута в [`CHANGELOG.md`](../../CHANGELOG.md) и Git history; опубликованные сборки доступны в [GitHub Releases](https://github.com/egoistgorbachev/codex-account-manager/releases).

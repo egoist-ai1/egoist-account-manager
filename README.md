@@ -5,24 +5,26 @@
   <p>Защищённые входы, честные лимиты и проверяемое переключение аккаунта — без ручной замены файлов.</p>
 
   <p>
-    <a href="https://github.com/egoistgorbachev/egoist-account-manager/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/egoistgorbachev/egoist-account-manager?display_name=tag&style=for-the-badge&color=7c3aed" /></a>
+    <a href="https://github.com/egoist-ai1/egoist-account-manager/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/egoist-ai1/egoist-account-manager?display_name=tag&style=for-the-badge&color=7c3aed" /></a>
     <img alt="Windows 11" src="https://img.shields.io/badge/Windows-11-2563eb?style=for-the-badge&logo=windows11&logoColor=white" />
     <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-16a34a?style=for-the-badge" /></a>
   </p>
 
   <p>
-    <a href="https://github.com/egoistgorbachev/egoist-account-manager/releases/latest"><strong>Скачать стабильную версию</strong></a>
+    <a href="https://github.com/egoist-ai1/egoist-account-manager/releases/latest"><strong>Скачать стабильную версию</strong></a>
     ·
     <a href="docs/troubleshooting.md">Решение проблем</a>
     ·
     <a href="CHANGELOG.md">История изменений</a>
+    ·
+    <a href="https://boosty.to/eg01stgames"><strong>Поддержать автора</strong></a>
   </p>
 </div>
 
 ![Обзор Egoist Account Manager](docs/images/overview-3.1.6.png)
 
 > [!NOTE]
-> На скриншотах показан интерфейс следующего обновления 3.1.6. Последняя публичная стабильная сборка — [3.1.5](https://github.com/egoistgorbachev/egoist-account-manager/releases/tag/v3.1.5); неподписанный кандидат 3.1.6 не публикуется до прохождения Windows install/live gate.
+> На скриншотах показан интерфейс следующего обновления 3.1.6. Последняя публичная стабильная сборка — [3.1.5](https://github.com/egoist-ai1/egoist-account-manager/releases/tag/v3.1.5); неподписанный кандидат 3.1.6 не публикуется до прохождения Windows install/live gate.
 
 ## Главное
 
@@ -112,7 +114,7 @@
 
 ## Установка
 
-1. Откройте [последний стабильный GitHub Release](https://github.com/egoistgorbachev/egoist-account-manager/releases/latest).
+1. Откройте [последний стабильный GitHub Release](https://github.com/egoist-ai1/egoist-account-manager/releases/latest).
 2. Скачайте installer или portable EXE с номером опубликованного тега.
 3. Сверьте SHA-256 с `SHA256SUMS-<version>.txt` из того же релиза.
 4. Запустите Manager и добавьте профиль одним из официальных способов входа.

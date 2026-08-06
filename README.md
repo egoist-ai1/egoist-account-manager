@@ -129,3 +129,13 @@ Electron · React · TypeScript · Vite · SQLite · Windows DPAPI
 - [Полный CHANGELOG](CHANGELOG.md)
 - [Документация разработчика](docs/development.md)
 - [Лицензия MIT](LICENSE)
+
+## Поддержать автора
+
+Если Egoist Account Manager экономит вам время, поддержите независимую разработку и развитие новых функций.
+
+<p align="center">
+  <a href="https://boosty.to/eg01stgames" title="Поддержать Egoist Ai One на Boosty">
+    <img src="docs/images/boosty-support-banner.svg" alt="Поддержать автора Egoist Ai One на Boosty" width="760">
+  </a>
+</p>

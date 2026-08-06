@@ -56,6 +56,7 @@ describe("live tray indicator", () => {
       iconText: "60"
     });
     expect(snapshot.tooltip).toContain("текущий недельный лимит: 60%");
+    expect(snapshot.tooltip).toContain("Egoist Account Manager");
   });
 
   it("does not duplicate one generic weekly quota into a five-hour window", () => {
@@ -100,6 +101,7 @@ describe("live tray indicator", () => {
     const snapshot = buildLiveTraySnapshot([account()], { now: 1_100, privacyMode: true });
     expect(snapshot.tooltip).toContain("Активный профиль");
     expect(snapshot.tooltip).not.toContain("Primary profile");
+    expect(snapshot.tooltip).toContain("Egoist Account Manager");
     const bitmap = renderLiveTrayBitmap(snapshot);
     expect(bitmap).toHaveLength(32 * 32 * 4);
     expect(bitmap.some((channel) => channel > 0)).toBe(true);

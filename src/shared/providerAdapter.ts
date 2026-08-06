@@ -118,7 +118,7 @@ export const knownProviderAdapterMetadata: ProviderAdapterMetadata[] = [
       getHistory: {
         supported: true,
         ...localInferred,
-        reason: "Local switch and limit history are recorded by Codex Account Manager."
+        reason: "Local switch and limit history are recorded by Egoist Account Manager."
       }
     },
     knownLimitWindows: [
@@ -185,12 +185,12 @@ export const knownProviderAdapterMetadata: ProviderAdapterMetadata[] = [
         supported: true,
         confidence: "inferred",
         source: "local_status",
-        reason: "On Windows, Codex Account Manager can restart Antigravity.exe/language_server so the Hub reloads OS Credential Manager state."
+        reason: "On Windows, Egoist Account Manager can restart Antigravity.exe/language_server so the Hub reloads OS Credential Manager state."
       },
       getHistory: {
         supported: true,
         ...localInferred,
-        reason: "Local switch/import history can be recorded by Codex Account Manager."
+        reason: "Local switch/import history can be recorded by Egoist Account Manager."
       }
     },
     knownLimitWindows: [

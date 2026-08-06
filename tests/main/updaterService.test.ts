@@ -62,10 +62,10 @@ describe("UpdaterService GitHub release discovery", () => {
     await expect(service.checkForUpdates()).resolves.toMatchObject({
       status: "available",
       version: "3.2.0",
-      feedUrl: "https://github.com/egoistgorbachev/codex-account-manager/releases/tag/v3.2.0"
+      feedUrl: "https://github.com/egoist-ai1/egoist-account-manager/releases/tag/v3.2.0"
     });
     expect(fetchRelease).toHaveBeenCalledWith(
-      "https://api.github.com/repos/egoistgorbachev/codex-account-manager/releases/latest",
+      "https://api.github.com/repos/egoist-ai1/egoist-account-manager/releases/latest",
       expect.objectContaining({ method: "GET", redirect: "error" })
     );
     expect(statuses.map((item) => item.status)).toEqual(["checking", "available"]);
@@ -82,7 +82,7 @@ describe("UpdaterService GitHub release discovery", () => {
     await service.checkForUpdates();
 
     await expect(service.openUpdateRelease()).resolves.toMatchObject({ status: "available", version: "3.2.0" });
-    expect(openExternal).toHaveBeenCalledWith("https://github.com/egoistgorbachev/codex-account-manager/releases/tag/v3.2.0");
+    expect(openExternal).toHaveBeenCalledWith("https://github.com/egoist-ai1/egoist-account-manager/releases/tag/v3.2.0");
     expect(onUpdateAvailable).toHaveBeenCalledTimes(1);
   });
 

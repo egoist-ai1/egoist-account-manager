@@ -21,7 +21,7 @@ describe("ReleaseService", () => {
       projectRoot: path.dirname(releaseDir),
       releaseDir,
       version: "1.6.0",
-      productName: "Codex Account Manager",
+      productName: "Egoist Account Manager",
       packageConfig: { build: { win: { signAndEditExecutable: false, verifyUpdateCodeSignature: false } } },
       env: {}
     });
@@ -35,10 +35,10 @@ describe("ReleaseService", () => {
 
   it("matches SHA256SUMS entries for release files", () => {
     const releaseDir = tempReleaseDir();
-    const setup = "Codex-Account-Manager-Setup-1.6.0.exe";
-    const portable = "Codex-Account-Manager-1.6.0.exe";
+    const setup = "Egoist-Account-Manager-Setup-1.6.0.exe";
+    const portable = "Egoist-Account-Manager-1.6.0.exe";
     const latest = "latest.yml";
-    const blockmap = "Codex-Account-Manager-Setup-1.6.0.exe.blockmap";
+    const blockmap = "Egoist-Account-Manager-Setup-1.6.0.exe.blockmap";
     const setupHash = writeArtifact(releaseDir, setup, "setup");
     const portableHash = writeArtifact(releaseDir, portable, "portable");
     const latestHash = writeArtifact(releaseDir, latest, "latest");
@@ -53,7 +53,7 @@ describe("ReleaseService", () => {
       projectRoot: path.dirname(releaseDir),
       releaseDir,
       version: "1.6.0",
-      productName: "Codex Account Manager",
+      productName: "Egoist Account Manager",
       packageConfig: { build: { publish: "https://updates.example.test", win: { signAndEditExecutable: true, signExecutable: true, verifyUpdateCodeSignature: true } } },
       env: {}
     }).getReadiness();
@@ -65,10 +65,10 @@ describe("ReleaseService", () => {
   it("accepts a checksum-complete unsigned local release", () => {
     const releaseDir = tempReleaseDir();
     const files = [
-      "Codex-Account-Manager-Setup-1.10.0.exe",
-      "Codex-Account-Manager-1.10.0.exe",
+      "Egoist-Account-Manager-Setup-1.10.0.exe",
+      "Egoist-Account-Manager-1.10.0.exe",
       "latest.yml",
-      "Codex-Account-Manager-Setup-1.10.0.exe.blockmap"
+      "Egoist-Account-Manager-Setup-1.10.0.exe.blockmap"
     ];
     const lines = files.map((fileName) => `${writeArtifact(releaseDir, fileName, fileName)}  ${fileName}`);
     fs.writeFileSync(path.join(releaseDir, "SHA256SUMS-1.10.0.txt"), `${lines.join("\n")}\n`, "utf8");
@@ -77,7 +77,7 @@ describe("ReleaseService", () => {
       projectRoot: path.dirname(releaseDir),
       releaseDir,
       version: "1.10.0",
-      productName: "Codex Account Manager",
+      productName: "Egoist Account Manager",
       packageConfig: { build: { publish: [{ provider: "github" }], win: { signAndEditExecutable: false, verifyUpdateCodeSignature: false } } },
       env: {}
     }).getReadiness();

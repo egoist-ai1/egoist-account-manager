@@ -125,7 +125,7 @@ export class CodexProfileVaultService {
       if (plaintextMetadata.authFingerprint !== vaultedMetadata.authFingerprint) {
         this.captureDrift(account, plaintext, plaintextMetadata.authFingerprint);
         this.removePlaintext(account.profileDir);
-        throw new Error("Managed Codex profile credentials changed outside Codex Account Manager");
+        throw new Error("Managed Codex profile credentials changed outside Egoist Account Manager");
       }
       return;
     }

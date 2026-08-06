@@ -15,7 +15,9 @@ import {
   FolderOpen,
   KeyRound,
   LayoutDashboard,
+  LayoutGrid,
   Layers3,
+  List,
   Loader2,
   LogIn,
   Maximize2,
@@ -26,6 +28,7 @@ import {
   SlidersHorizontal,
   RefreshCcw,
   Star,
+  ArrowUpDown,
   Tag,
   TerminalSquare,
   Trash2,
@@ -60,6 +63,7 @@ import type {
 } from "../shared/types";
 import type { AppViewKey, CommandPaletteCommand } from "../shared/commandPalette";
 import { buildCommandPalette, filterCommandPalette } from "../shared/commandPalette";
+import { selectAccountListQuota, sortAccountList, type AccountListSort } from "../shared/accountListPresentation";
 import { maskEmailForPrivacy, maskPathForPrivacy, maskSensitiveDisplayText } from "../shared/privacyDisplay";
 import { buildProviderQuotaState } from "../shared/providerAdapter";
 import { buildQuotaFreshness, hasCurrentQuotaRefreshFailure } from "../shared/quotaFreshness";
@@ -324,7 +328,7 @@ const demoSwitchHistory: SwitchHistoryItem[] = demoSwitchTransactions.map((trans
 
 const cam: AppApi = window.cam ?? {
   listAccounts: async () => demoAccounts,
-  getAppInfo: async () => ({ name: "Codex Account Manager", publisher: "Egoist AI", version: appVersion, vaultDegraded: false }),
+  getAppInfo: async () => ({ name: "Egoist Account Manager", publisher: "Egoist AI", version: appVersion, vaultDegraded: false }),
   startLogin: async (input: CodexLoginRequest) => ({
     loginId: "demo-login",
     profileId: "demo-profile",
@@ -531,7 +535,7 @@ const cam: AppApi = window.cam ?? {
   openUpdateRelease: async () => ({
     status: "available",
     message: "Официальный релиз открыт на GitHub.",
-    feedUrl: "https://github.com/egoistgorbachev/codex-account-manager/releases/tag/v3.1.0",
+    feedUrl: "https://github.com/egoist-ai1/egoist-account-manager/releases/tag/v3.1.0",
     checkedAt: nowSeconds(),
     version: "3.1.0"
   }),
@@ -658,18 +662,6 @@ function statusClass(account: ManagedAccount): string {
 
 function used(account: ManagedAccount): number {
   return Math.max(account.fiveHourUsedPercent ?? 0, account.weeklyUsedPercent ?? 0);
-}
-
-function soonestReset(account: ManagedAccount): number | null {
-  const resets = [account.fiveHourResetsAt, account.weeklyResetsAt].filter(Boolean) as number[];
-  return resets.length ? Math.min(...resets) : null;
-}
-
-function accountScore(account: ManagedAccount): number {
-  if (account.status === "error") return 5000;
-  if (account.status === "limited") return 4000 + (soonestReset(account) ?? 0) / 100000;
-  if (account.status === "near_limit") return 2000 + used(account);
-  return used(account);
 }
 
 function isUsable(account: ManagedAccount): boolean {
@@ -888,88 +880,75 @@ function PlanBadge({ planType }: { planType: ManagedAccount["planType"] }) {
   );
 }
 
-function AccountRow({
+function AccountCompactRow({
   account,
   selected,
   privacyMode,
   busy,
-  onRefresh,
-  onSwitch,
-  onReauth,
-  onRepair,
-  onOpenFolder,
+  isEnglish,
   onSelect,
-  onDelete
+  onSwitch
 }: {
   account: ManagedAccount;
   selected: boolean;
   privacyMode: boolean;
   busy: string | null;
-  onRefresh: (id: string) => void;
-  onSwitch: (id: string) => void;
-  onReauth: (id: string) => void;
-  onRepair: (id: string) => void;
-  onOpenFolder: (id: string) => void;
+  isEnglish: boolean;
   onSelect: (id: string) => void;
-  onDelete: (id: string) => void;
+  onSwitch: (id: string) => void;
 }) {
-  const isAntigravity = accountPlatform(account) === "antigravity";
-  const needsRepair = hasCurrentQuotaRefreshFailure(account) || account.credentialState !== "ready";
-  const limits = accountLimitDisplay(account);
+  const quota = selectAccountListQuota(account, nowSeconds());
+  const remaining = quota.remainingPercent;
+  const windowName = quota.windowType === "5h"
+    ? (isEnglish ? "5-hour window" : "5-часовой лимит")
+    : quota.windowType === "weekly"
+      ? (isEnglish ? "Weekly limit" : "Недельный лимит")
+      : quota.windowType === "daily"
+        ? (isEnglish ? "Daily limit" : "Дневной лимит")
+        : (isEnglish ? "Current limit" : "Текущий лимит");
+  const resetLabel = quota.resetAt
+    ? quota.resetAt <= nowSeconds()
+      ? (isEnglish ? "Reset time reached · refresh data" : "Время сброса наступило · обновите данные")
+      : `${isEnglish ? "Reset" : "Сброс"} ${formatTime(quota.resetAt)}`
+    : (isEnglish ? "Reset time unavailable" : "Время сброса неизвестно");
+  const tone = remaining === null ? "unknown" : remaining <= 10 ? "danger" : remaining <= 25 ? "warn" : "good";
   return (
-    <tr className={`${account.isActive ? "account-row is-active" : "account-row"} ${selected ? "is-selected" : ""}`}>
-      <td onClick={() => onSelect(account.id)}>
-        <div className="account-cell">
-          <AccountPlatformMark account={account} />
-          <div className="account-copy">
-            <div className="name">
-              <span className="account-label">{account.label}</span>
-              {account.favorite ? <Star className="inline-mark" /> : null}
-              {account.archived ? <span className="badge compact">архив</span> : null}
-              {account.isActive ? <span className="badge active compact">активен</span> : null}
-            </div>
-            <div className="email">{privacyMode ? maskEmailForPrivacy(account.email) : account.email}</div>
+    <article className={`account-compact-row ${selected ? "is-selected" : ""} ${account.isActive ? "is-active" : ""}`} role="listitem" onClick={() => onSelect(account.id)}>
+      <div className="account-compact-identity">
+        <AccountPlatformMark account={account} />
+        <div className="account-copy">
+          <div className="name">
+            <span className="account-label" title={account.label}>{account.label}</span>
+            <PlanBadge planType={account.planType} />
           </div>
+          <div className="email" title={privacyMode ? undefined : account.email}>{privacyMode ? maskEmailForPrivacy(account.email) : account.email}</div>
         </div>
-      </td>
-      <td onClick={() => onSelect(account.id)}>
-        <PlanBadge planType={account.planType} />
-      </td>
-      <td onClick={() => onSelect(account.id)}>
-        <LimitMeter label={limits.primaryLabel} usedPercent={limits.primaryUsedPercent} resetsAt={limits.primaryResetsAt} unavailableReason={limits.primaryUnavailableReason} />
-      </td>
-      <td onClick={() => onSelect(account.id)}>
-        <LimitMeter label={limits.secondaryLabel} usedPercent={limits.secondaryUsedPercent} resetsAt={limits.secondaryResetsAt} unavailableReason={limits.secondaryUnavailableReason} />
-      </td>
-      <td onClick={() => onSelect(account.id)}>
-        <div className="account-status-stack">
-          <div className="account-status-badges">
-            <CredentialStateChip account={account} />
-            <QuotaFreshnessChip account={account} />
-          </div>
-          <div className="reset">проверен {formatTime(account.lastRefreshAt)}</div>
+      </div>
+      <div className={`account-compact-quota ${tone}`} title={remaining === null ? (isEnglish ? "No fresh quota data" : "Нет свежих данных лимита") : `${windowName}: ${remaining.toFixed(0)}%`}>
+        <div>
+          <span>{windowName}</span>
+          <strong>{remaining === null ? "—" : `${remaining.toFixed(0)}%`}</strong>
         </div>
-      </td>
-      <td>
-        <div className="row-actions">
-          <button className="icon-btn" disabled={busy !== null} onClick={() => onRefresh(account.id)} title={isAntigravity ? "Обновить лимиты Antigravity" : "Обновить лимиты"}>
-            {busy === `refresh:${account.id}` ? <Loader2 className="spin" /> : <RefreshCcw />}
-          </button>
-          <button className={`icon-btn ${needsRepair ? "repair-action" : ""}`} aria-label={needsRepair ? "Диагностировать и починить аккаунт" : isAntigravity ? "Открыть авторизацию Antigravity" : "Повторно авторизовать профиль"} disabled={busy !== null} onClick={() => needsRepair ? onRepair(account.id) : onReauth(account.id)} title={needsRepair ? "Диагностировать и починить аккаунт" : isAntigravity ? "Открыть авторизацию Antigravity" : "Повторно авторизовать профиль"}>
-            {busy === `repair:${account.id}` || busy === `reauth:${account.id}` ? <Loader2 className="spin" /> : <KeyRound />}
-          </button>
-          <button className="icon-btn" disabled={busy !== null} onClick={() => onOpenFolder(account.id)} title="Открыть папку профиля">
-            <FolderOpen />
-          </button>
-          <button className="icon-btn primary" disabled={busy !== null || account.isActive} onClick={() => onSwitch(account.id)} title="Сделать активным">
-            {busy === `switch:${account.id}` ? <Loader2 className="spin" /> : <Zap />}
-          </button>
-          <button className="icon-btn" disabled={busy !== null || account.isActive} onClick={() => onDelete(account.id)} title={account.isActive ? "Сначала переключись на другой аккаунт" : "Удалить профиль"}>
-            <Trash2 />
-          </button>
-        </div>
-      </td>
-    </tr>
+        <div className="bar"><span style={{ width: `${remaining ?? 0}%` }} /></div>
+        <small>{resetLabel}</small>
+      </div>
+      <div className="account-compact-state">
+        <CredentialStateChip account={account} />
+        <QuotaFreshnessChip account={account} />
+      </div>
+      <button
+        className="profile-switch-action account-compact-switch"
+        disabled={busy !== null || account.isActive || account.credentialState !== "ready"}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSwitch(account.id);
+        }}
+        title={account.credentialState !== "ready" ? (isEnglish ? "Sign-in required before switching" : "Перед переключением требуется вход") : (isEnglish ? "Make active" : "Сделать активным")}
+      >
+        {busy === `switch:${account.id}` ? <Loader2 className="spin" /> : account.isActive ? <CheckCircle2 /> : <Zap />}
+        <span>{account.isActive ? (isEnglish ? "Active" : "Активен") : (isEnglish ? "Switch" : "Переключить")}</span>
+      </button>
+    </article>
   );
 }
 
@@ -1782,9 +1761,12 @@ function App() {
   const [antigravityTokenPayload, setAntigravityTokenPayload] = useState("");
   const [antigravityImportResult, setAntigravityImportResult] = useState<AntigravityCredentialBatchImportResult | null>(null);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | "usable" | "risk">("all");
+  const [accountSort, setAccountSort] = useState<AccountListSort>(() => {
+    const saved = window.localStorage.getItem("cam.accountSort");
+    return saved === "subscription" || saved === "remaining" || saved === "reset" || saved === "freshness" || saved === "added" || saved === "name" ? saved : "smart";
+  });
   const [platformFilter, setPlatformFilter] = useState<PlatformFilter>("codex");
-  const [viewMode] = useState<"table" | "cards">("cards");
+  const [viewMode, setViewMode] = useState<"table" | "cards">(() => window.localStorage.getItem("cam.accountView") === "table" ? "table" : "cards");
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const inspectorTriggerRef = useRef<HTMLElement | null>(null);
@@ -1825,10 +1807,16 @@ function App() {
     accountFilter: isEnglish ? "Account filter" : "Фильтр аккаунтов",
     viewMode: isEnglish ? "Account view" : "Вид аккаунтов",
     all: isEnglish ? "All" : "Все",
-    ready: isEnglish ? "Ready" : "Готовые",
-    risk: isEnglish ? "Risk" : "Риск",
-    table: isEnglish ? "Table" : "Таблица",
+    table: isEnglish ? "List" : "Список",
     cards: isEnglish ? "Cards" : "Карточки",
+    sort: isEnglish ? "Sort accounts" : "Сортировка аккаунтов",
+    smartSort: isEnglish ? "Smart order" : "Умная сортировка",
+    subscriptionSort: isEnglish ? "Best plan" : "По подписке",
+    remainingSort: isEnglish ? "Most limit left" : "Больше остаток",
+    resetSort: isEnglish ? "Nearest reset" : "Ближайший сброс",
+    freshnessSort: isEnglish ? "Freshest data" : "Свежие данные",
+    addedSort: isEnglish ? "Recently added" : "Сначала новые",
+    nameSort: isEnglish ? "By name" : "По названию",
     export: isEnglish ? "Export" : "Экспорт",
     import: isEnglish ? "Import" : "Импорт",
     account: isEnglish ? "Account" : "Аккаунт",
@@ -1854,6 +1842,10 @@ function App() {
     const antigravity = accounts.filter((account) => accountPlatform(account) === "antigravity").length;
     return { active, low, avg, usable, stale, codex, antigravity };
   }, [accounts]);
+  const overviewAccounts = useMemo(
+    () => accounts.filter((account) => accountPlatform(account) === "codex"),
+    [accounts]
+  );
 
   const smartRecommendation = useMemo(() => selectSmartAccount(accounts, workspaceBinding), [accounts, workspaceBinding]);
   const bestAccount = useMemo(() => {
@@ -1883,16 +1875,13 @@ function App() {
 
   const visibleAccounts = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return scopedAccounts
+    const filtered = scopedAccounts
       .filter((account) => {
-        if (statusFilter === "usable" && (!isUsable(account) || account.archived)) return false;
-        if (statusFilter === "risk" && account.status !== "near_limit" && account.status !== "limited" && account.status !== "error") return false;
         if (!needle) return true;
         return `${account.label} ${account.email} ${account.planType}`.toLowerCase().includes(needle);
-      })
-      .slice()
-      .sort((a, b) => Number(b.isActive) - Number(a.isActive) || Number(b.favorite) - Number(a.favorite) || Number(a.archived) - Number(b.archived) || accountScore(a) - accountScore(b) || a.label.localeCompare(b.label));
-  }, [scopedAccounts, search, statusFilter]);
+      });
+    return sortAccountList(filtered, accountSort, nowSeconds());
+  }, [accountSort, scopedAccounts, search]);
   const scopedProtectedCount = scopedAccounts.filter((account) => account.credentialState === "ready").length;
   const scopedAttentionCount = scopedAccounts.filter((account) => account.credentialState !== "ready" || hasCurrentQuotaRefreshFailure(account)).length;
   const refreshableAccountCount = accounts.length;
@@ -1910,14 +1899,16 @@ function App() {
       label: "Codex",
       count: stats.codex,
       state: platformFilter === "codex" ? "выбран" : diagnostics?.codexPath ? "готов" : "нужен CLI",
-      tone: diagnostics?.codexPath ? "ready" : "warn"
+      tone: diagnostics?.codexPath ? "ready" : "warn",
+      available: true
     },
     {
       id: "antigravity",
       label: "Antigravity",
       count: stats.antigravity,
-      state: platformFilter === "antigravity" ? "выбран" : antigravityProfileStatus?.detected ? "профиль найден" : "ожидает вход",
-      tone: antigravityProfileStatus?.detected ? "ready" : "warn"
+      state: isEnglish ? "in development" : "в разработке",
+      tone: "muted",
+      available: false
     }
   ];
 
@@ -1932,6 +1923,14 @@ function App() {
     languageRef.current = language;
     settingsRef.current = settingsData;
   }, [language, settingsData]);
+
+  useEffect(() => {
+    window.localStorage.setItem("cam.accountSort", accountSort);
+  }, [accountSort]);
+
+  useEffect(() => {
+    window.localStorage.setItem("cam.accountView", viewMode);
+  }, [viewMode]);
 
   useEffect(() => {
     const onVisibilityChange = () => setVisibilityEpoch((value) => value + 1);
@@ -2851,7 +2850,7 @@ function App() {
       case "overview":
         return (
           <OverviewPage
-            accounts={accounts}
+            accounts={overviewAccounts}
             diagnostics={diagnostics}
             latestTransaction={switchTransactions[0] ?? null}
             busy={busy}
@@ -2874,7 +2873,12 @@ function App() {
                 <div className="account-panel-intro">
                   <div className="panel-title-row">
                     <h3>{accountsText.title}</h3>
-                    <span className="badge compact">{visibleAccounts.length}/{platformFilter === "antigravity" ? stats.antigravity : stats.codex}</span>
+                    <span
+                      className="badge compact"
+                      title={search.trim() ? `${visibleAccounts.length} ${isEnglish ? "shown out of" : "показано из"} ${scopedAccounts.length}` : `${scopedAccounts.length} ${isEnglish ? "saved profiles" : "сохранённых профилей"}`}
+                    >
+                      {search.trim() ? `${visibleAccounts.length} ${isEnglish ? "of" : "из"} ${scopedAccounts.length}` : scopedAccounts.length}
+                    </span>
                   </div>
                   <p>
                     {isEnglish
@@ -2893,17 +2897,29 @@ function App() {
                       aria-label={accountsText.searchProfile}
                     />
                   </label>
-                  <div className="segmented" aria-label={accountsText.accountFilter}>
-                    <button className={statusFilter === "all" ? "is-selected" : ""} onClick={() => setStatusFilter("all")}>{accountsText.all}</button>
-                    <button className={statusFilter === "usable" ? "is-selected" : ""} onClick={() => setStatusFilter("usable")}>{accountsText.ready}</button>
-                    <button className={statusFilter === "risk" ? "is-selected" : ""} onClick={() => setStatusFilter("risk")}>{accountsText.risk}</button>
+                  <div className="segmented account-view-toggle" aria-label={accountsText.viewMode}>
+                    <button className={viewMode === "cards" ? "is-selected" : ""} onClick={() => setViewMode("cards")} title={accountsText.cards} aria-label={accountsText.cards}><LayoutGrid /><span>{accountsText.cards}</span></button>
+                    <button className={viewMode === "table" ? "is-selected" : ""} onClick={() => setViewMode("table")} title={accountsText.table} aria-label={accountsText.table}><List /><span>{accountsText.table}</span></button>
                   </div>
+                  <label className="account-sort-control" title={accountsText.sort}>
+                    <ArrowUpDown aria-hidden="true" />
+                    <span className="sr-only">{accountsText.sort}</span>
+                    <select value={accountSort} onChange={(event) => setAccountSort(event.target.value as AccountListSort)} aria-label={accountsText.sort}>
+                      <option value="smart">{accountsText.smartSort}</option>
+                      <option value="subscription">{accountsText.subscriptionSort}</option>
+                      <option value="remaining">{accountsText.remainingSort}</option>
+                      <option value="reset">{accountsText.resetSort}</option>
+                      <option value="freshness">{accountsText.freshnessSort}</option>
+                      <option value="added">{accountsText.addedSort}</option>
+                      <option value="name">{accountsText.nameSort}</option>
+                    </select>
+                  </label>
                   <button className="button secondary" disabled={busy !== null || refreshableAccountCount === 0} onClick={refreshAllAccounts} title={refreshableAccountCount === 0 ? shellText.noRefreshableAccounts : shellText.refreshLimits}>
                     {busy === "refresh:all" ? <Loader2 className="spin" /> : <RefreshCcw />}
                     {uiText.actions.refresh}
                   </button>
                   <details className="account-tools-menu">
-                    <summary className="icon-btn" title={isEnglish ? "Import and export" : "Импорт и экспорт"}><MoreHorizontal /></summary>
+                    <summary className="icon-btn" title={isEnglish ? "Import and export" : "Импорт и экспорт"} aria-label={isEnglish ? "Import and export" : "Импорт и экспорт"}><MoreHorizontal /></summary>
                     <div>
                       <button disabled={busy !== null || accounts.length === 0} onClick={exportAccounts}>{busy === "export" ? <Loader2 className="spin" /> : <FileDown />}{accountsText.export}</button>
                       <button disabled={busy !== null} onClick={importAccounts}>{busy === "import" ? <Loader2 className="spin" /> : <FileUp />}{accountsText.import}</button>
@@ -2914,61 +2930,22 @@ function App() {
               <div className="profile-workbench">
                 <div className={`profile-main ${tableScrollable ? "is-scrollable" : ""}`}>
                   {viewMode === "table" ? (
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th>{accountsText.account}</th>
-                          <th>{accountsText.plan}</th>
-                          <th>{accountsText.fiveHours}</th>
-                          <th>{accountsText.week}</th>
-                          <th>{accountsText.status}</th>
-                          <th />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {visibleAccounts.map((account) => (
-                          <AccountRow
-                            key={account.id}
-                            account={account}
-                            selected={selectedAccount?.id === account.id}
-                            privacyMode={privacyMode}
-                            busy={busy}
-                            onRefresh={refreshAccount}
-                            onSwitch={switchAccount}
-                            onReauth={reauthenticateAccount}
-                            onRepair={repairAccount}
-                            onOpenFolder={openProfileFolder}
-                            onSelect={setSelectedAccountId}
-                            onDelete={deleteAccount}
-                          />
-                        ))}
-                        {scopedAccounts.length === 0 ? (
-                          <tr>
-                            <td colSpan={6}>
-                              <div className="empty-onboarding">
-                                <strong>{platformFilter === "antigravity" ? "Подключи Antigravity" : "Добавь Codex"}</strong>
-                                <span>{platformFilter === "antigravity" ? "Войди через официальный Antigravity/Google Sign-In, затем проверь локальный профиль IDE." : "Добавь профиль через официальный вход ChatGPT, device code, API key или Enterprise token."}</span>
-                                <div className="mini-actions">
-                                  {platformFilter === "antigravity" ? (
-                                    <button className="button" disabled={busy !== null} onClick={() => openAntigravityImport()}><KeyRound />Добавить Antigravity</button>
-                                  ) : (
-                                    <>
-                                      <button className="button" disabled={busy !== null} onClick={openLoginWizard}><LogIn />Добавить Codex</button>
-                                    </>
-                                  )}
-                                </div>
-                              </div>
-                            </td>
-                          </tr>
-                        ) : visibleAccounts.length === 0 ? (
-                          <tr>
-                            <td colSpan={6}>
-                              <div className="empty">{accountsText.emptyFiltered}</div>
-                            </td>
-                          </tr>
-                        ) : null}
-                      </tbody>
-                    </table>
+                    <div className="account-compact-list" role="list" aria-label={isEnglish ? "Compact account list" : "Компактный список аккаунтов"}>
+                      {visibleAccounts.map((account) => (
+                        <AccountCompactRow
+                          key={account.id}
+                          account={account}
+                          selected={selectedAccount?.id === account.id}
+                          privacyMode={privacyMode}
+                          busy={busy}
+                          isEnglish={isEnglish}
+                          onSelect={setSelectedAccountId}
+                          onSwitch={switchAccount}
+                        />
+                      ))}
+                      {scopedAccounts.length === 0 ? <div className="empty">{platformFilter === "antigravity" ? "Список Antigravity пуст" : "Список Codex пуст"}</div> : null}
+                      {scopedAccounts.length > 0 && visibleAccounts.length === 0 ? <div className="empty">{accountsText.emptyFiltered}</div> : null}
+                    </div>
                   ) : (
                     <div className="profile-grid">
                       {visibleAccounts.map((account) => (
@@ -3171,7 +3148,7 @@ function App() {
               <span className="eyebrow">{isEnglish ? "SESSION CONTROL" : "ЦЕНТР СЕССИЙ"}</span>
               <span className="version">v{appVersion}</span>
             </div>
-            <h1>Codex Account Manager</h1>
+            <h1>Egoist Account Manager</h1>
           </div>
         </div>
         <nav className="rail-nav">
@@ -3198,10 +3175,13 @@ function App() {
           {platformSummaries.map((platform) => (
             <button
               key={platform.id}
-              className={`platform-tile ${platform.id} ${platform.tone} ${platformFilter === platform.id ? "is-active" : ""}`}
-              aria-label={`${platform.label}: ${platform.count}`}
-              title={`${platform.label} · ${platform.state}`}
+              className={`platform-tile ${platform.id} ${platform.tone} ${platformFilter === platform.id ? "is-active" : ""} ${platform.available ? "" : "is-coming-soon"}`}
+              aria-label={`${platform.label}: ${platform.count} · ${platform.state}`}
+              aria-disabled={!platform.available}
+              title={platform.available ? `${platform.label} · ${platform.state}` : undefined}
+              data-tooltip={platform.available ? undefined : (isEnglish ? "Antigravity · In development" : "Antigravity · В разработке")}
               onClick={() => {
+                if (!platform.available) return;
                 setActiveView("accounts");
                 setPlatformFilter(platform.id as PlatformFilter);
               }}
@@ -3449,7 +3429,7 @@ function App() {
             </p>
             <label className="field">
               <span>Пароль</span>
-              <input autoFocus type="password" value={transferPassword} onChange={(event) => setTransferPassword(event.target.value)} onKeyDown={(event) => {
+              <input autoFocus type="password" aria-label={transferMode === "export" ? "Пароль экспорта" : "Пароль импорта"} value={transferPassword} onChange={(event) => setTransferPassword(event.target.value)} onKeyDown={(event) => {
                 if (event.key === "Enter") submitTransferPrompt();
                 if (event.key === "Escape") closeTransferPrompt(null);
               }} />
@@ -3458,7 +3438,7 @@ function App() {
             {transferMode === "export" ? (
               <label className="field">
                 <span>Повтор пароля</span>
-                <input type="password" value={transferConfirm} onChange={(event) => setTransferConfirm(event.target.value)} onKeyDown={(event) => {
+                <input type="password" aria-label="Повтор пароля экспорта" value={transferConfirm} onChange={(event) => setTransferConfirm(event.target.value)} onKeyDown={(event) => {
                   if (event.key === "Enter") submitTransferPrompt();
                   if (event.key === "Escape") closeTransferPrompt(null);
                 }} />
@@ -3539,7 +3519,7 @@ function BridgeUnavailable() {
       <div>
         <p>DESKTOP BRIDGE</p>
         <h1>Интерфейс не подключён к приложению</h1>
-        <p>Данные аккаунтов не загружены и не потеряны. Полностью закрой Codex Account Manager и открой его снова. Если экран повторится — переустанови текущую версию поверх существующей.</p>
+        <p>Данные аккаунтов не загружены и не потеряны. Полностью закрой Egoist Account Manager и открой его снова. Если экран повторится — переустанови текущую версию поверх существующей.</p>
       </div>
     </main>
   );

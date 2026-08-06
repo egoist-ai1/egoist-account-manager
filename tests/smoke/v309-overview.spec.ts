@@ -50,6 +50,18 @@ for (const viewport of [
     });
     expect(continuationGeometry).toEqual({ noHorizontalOverflow: true, laneFits: true, queueFits: true, footerFits: true });
 
+    const resetGeometry = await page.locator(".overview-reset-signal").evaluate((card) => {
+      const copy = card.querySelector(".reset-signal-copy")?.getBoundingClientRect();
+      const time = card.querySelector(".reset-signal-time")?.getBoundingClientRect();
+      const rect = card.getBoundingClientRect();
+      return {
+        noOverflow: card.scrollWidth <= card.clientWidth + 1 && card.scrollHeight <= card.clientHeight + 1,
+        columnsSeparated: Boolean(copy && time && copy.right <= time.left + 1),
+        contentInside: Boolean(copy && time && copy.left >= rect.left && time.right <= rect.right + 1)
+      };
+    });
+    expect(resetGeometry).toEqual({ noOverflow: true, columnsSeparated: true, contentInside: true });
+
     const textFloor = await page.locator(
       ".quota-card-head, .quota-copy, .handoff-lane, .continuation-row, .continuation-foot"
     ).evaluateAll((containers) => containers.flatMap((container) => Array.from(container.querySelectorAll("span, strong, small, b")))

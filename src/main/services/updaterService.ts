@@ -2,9 +2,9 @@ import type { BrowserWindow } from "electron";
 import { app, net, shell } from "electron";
 import type { UpdateCheckResult } from "../../shared/types.js";
 
-const repositoryUrl = "https://github.com/egoistgorbachev/codex-account-manager";
+const repositoryUrl = "https://github.com/egoist-ai1/egoist-account-manager";
 const releasesUrl = `${repositoryUrl}/releases`;
-const latestReleaseApiUrl = "https://api.github.com/repos/egoistgorbachev/codex-account-manager/releases/latest";
+const latestReleaseApiUrl = "https://api.github.com/repos/egoist-ai1/egoist-account-manager/releases/latest";
 const maximumReleaseResponseBytes = 256 * 1024;
 const githubApiVersion = "2026-03-10";
 
@@ -84,7 +84,7 @@ export class UpdaterService {
           headers: {
             Accept: "application/vnd.github+json",
             "X-GitHub-Api-Version": githubApiVersion,
-            "User-Agent": "Codex-Account-Manager"
+            "User-Agent": "Egoist-Account-Manager"
           },
           redirect: "error",
           signal: controller.signal
@@ -222,7 +222,7 @@ function isTrustedReleaseUrl(value: string | null): value is string {
     const url = new URL(value);
     return url.protocol === "https:"
       && url.hostname === "github.com"
-      && url.pathname.startsWith("/egoistgorbachev/codex-account-manager/releases/tag/v");
+      && url.pathname.startsWith("/egoist-ai1/egoist-account-manager/releases/tag/v");
   } catch {
     return false;
   }

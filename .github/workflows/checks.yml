@@ -47,6 +47,6 @@ jobs:
       - name: Сохранить unpacked-сборку
         uses: actions/upload-artifact@v4
         with:
-          name: codex-account-manager-win-unpacked
+          name: egoist-account-manager-win-unpacked
           path: release/win-unpacked
           if-no-files-found: error

@@ -45,7 +45,11 @@ const navigation: Array<Pick<CommandPaletteCommand, "id" | "title" | "subtitle" 
 ];
 
 function isSwitchTarget(account: ManagedAccount): boolean {
-  return !account.isActive && !account.archived && account.status !== "limited" && account.status !== "error";
+  return account.platform === "codex"
+    && !account.isActive
+    && !account.archived
+    && account.status !== "limited"
+    && account.status !== "error";
 }
 
 function searchText(command: CommandPaletteCommand): string {
@@ -98,11 +102,12 @@ export function buildCommandPalette(input: BuildCommandPaletteInput): CommandPal
       id: "platform.filter.antigravity",
       group: "Платформы",
       title: "Показать профили Antigravity",
-      subtitle: "Открыть список профилей с фильтром по Antigravity",
+      subtitle: "В разработке · основной режим сейчас Codex",
       keywords: ["antigravity", "платформа", "профили", "фильтр"],
       action: "filterPlatform",
       view: "accounts",
-      platform: "antigravity"
+      platform: "antigravity",
+      disabled: true
     },
     {
       id: "platform.filter.codex",
@@ -118,11 +123,12 @@ export function buildCommandPalette(input: BuildCommandPaletteInput): CommandPal
       id: "diagnostics.antigravity",
       group: "Диагностика",
       title: "Диагностика Antigravity",
-      subtitle: "Открыть аккаунты Antigravity и локальные действия проверки",
+      subtitle: "В разработке · пока недоступно",
       keywords: ["antigravity", "state.vscdb", "storage", "machineid", "диагностика"],
       action: "filterPlatform",
       view: "accounts",
-      platform: "antigravity"
+      platform: "antigravity",
+      disabled: true
     },
     {
       id: "accounts.export",

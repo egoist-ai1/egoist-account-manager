@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 $projectRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $allowedRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot "release\win-unpacked"))
 if (-not $ExecutablePath) {
-  $ExecutablePath = Join-Path $allowedRoot "Codex Account Manager.exe"
+  $ExecutablePath = Join-Path $allowedRoot "Egoist Account Manager.exe"
 }
 $resolvedExecutable = [IO.Path]::GetFullPath($ExecutablePath)
 if (-not $resolvedExecutable.StartsWith($allowedRoot, [StringComparison]::OrdinalIgnoreCase)) {
@@ -58,7 +58,7 @@ try {
     Start-Sleep -Milliseconds 500
     $targetProcesses = @(Get-TargetProcesses)
     $main = $targetProcesses | Where-Object {
-      $_.Name -eq "Codex Account Manager.exe" -and $_.CommandLine -notmatch "--type="
+      $_.Name -eq "Egoist Account Manager.exe" -and $_.CommandLine -notmatch "--type="
     } | Select-Object -First 1
     if ($main -and (Test-Path -LiteralPath $mainLogPath -PathType Leaf)) {
       $mainLog = Get-Content -Raw -LiteralPath $mainLogPath

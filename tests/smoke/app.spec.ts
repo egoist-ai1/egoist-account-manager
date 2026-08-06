@@ -213,7 +213,7 @@ test("3.0.10 сохраняет естественный поток, читае�
 });
 
 test("собранное приложение показывает Cockpit-style подключение Antigravity без раскрытия токенов", async () => {
-  const executablePath = path.join(process.cwd(), "release", "win-unpacked", "Codex Account Manager.exe");
+  const executablePath = path.join(process.cwd(), "release", "win-unpacked", "Egoist Account Manager.exe");
   test.skip(!packagedPlaywrightEnabled, "Production Electron blocks Node inspect; use verify:startup + verify:package for the exact release.");
   test.skip(!fs.existsSync(executablePath), "Сначала нужно выполнить pnpm run build или pnpm run build:dir");
 
@@ -371,11 +371,14 @@ test("показывает рабочую консоль с двумя плат�
     await expect(page.getByRole("dialog", { name: "Командный центр" })).toBeVisible();
     await page.getByLabel("Поиск команды").fill("antigravity");
     await expect(page.getByRole("button", { name: /Диагностика Antigravity/ })).toBeVisible();
-    await page.getByRole("button", { name: /Показать профили Antigravity/ }).click();
+    const antigravityCommand = page.getByRole("button", { name: /Показать профили Antigravity/ });
+    await expect(antigravityCommand).toBeDisabled();
+    await expect(antigravityCommand).toContainText("В разработке");
+    await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog", { name: "Командный центр" })).toBeHidden();
 
-    await expect(page.getByText("Аккаунты Antigravity")).toBeVisible();
-    await expect(page.locator(".profile-workbench > .inspector")).toHaveCount(0);
+    await expect(page.getByText("Аккаунты Antigravity")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /Codex: / })).toHaveClass(/is-active/);
     const viewport = await page.evaluate(() => ({
       pageOverflow: document.documentElement.scrollHeight - document.documentElement.clientHeight,
       contentOverflowMode: (() => {
@@ -388,8 +391,8 @@ test("показывает рабочую консоль с двумя плат�
       })()
     }));
     expect(viewport.pageOverflow).toBeLessThanOrEqual(1);
-    expect(viewport.contentOverflowMode).toBe("hidden");
-    expect(viewport.profileOverflowMode).toBe("auto");
+    expect(viewport.contentOverflowMode).toBe("auto");
+    expect(viewport.profileOverflowMode).toBeNull();
   } finally {
     await closeTestApp(app);
     fs.rmSync(userDataDir, { recursive: true, force: true });
@@ -472,7 +475,7 @@ test("настройки сохраняют реальные значения ч
 });
 
 test("собранное приложение запускает реальные сервисы без startupError", async () => {
-  const executablePath = path.join(process.cwd(), "release", "win-unpacked", "Codex Account Manager.exe");
+  const executablePath = path.join(process.cwd(), "release", "win-unpacked", "Egoist Account Manager.exe");
   test.skip(!packagedPlaywrightEnabled, "Production Electron blocks Node inspect; use verify:startup + verify:package for the exact release.");
   test.skip(!fs.existsSync(executablePath), "Сначала нужно выполнить pnpm run build или pnpm run build:dir");
 
@@ -504,7 +507,7 @@ test("собранное приложение запускает реальны�
 });
 
 test("3.0 packaged shell имеет доступные имена, keyboard focus и управляемый updater", async () => {
-  const executablePath = path.join(process.cwd(), "release", "win-unpacked", "Codex Account Manager.exe");
+  const executablePath = path.join(process.cwd(), "release", "win-unpacked", "Egoist Account Manager.exe");
   test.skip(!packagedPlaywrightEnabled, "Production Electron blocks Node inspect; use verify:startup + verify:package for the exact release.");
   test.skip(!fs.existsSync(executablePath), "Сначала нужно выполнить pnpm run build или pnpm run build:dir");
 
@@ -573,7 +576,7 @@ test("3.0 packaged shell имеет доступные имена, keyboard focu
 });
 test("собранное приложение запускает реальный сценарий добавления аккаунта", async () => {
   test.setTimeout(70_000);
-  const executablePath = path.join(process.cwd(), "release", "win-unpacked", "Codex Account Manager.exe");
+  const executablePath = path.join(process.cwd(), "release", "win-unpacked", "Egoist Account Manager.exe");
   test.skip(!packagedPlaywrightEnabled, "Production Electron blocks Node inspect; use verify:startup + verify:package for the exact release.");
   test.skip(!fs.existsSync(executablePath), "Сначала нужно выполнить pnpm run build или pnpm run build:dir");
 

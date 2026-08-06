@@ -1,4 +1,4 @@
-# Claude Code в Codex Account Manager: исследование и готовая архитектура
+# Claude Code в Egoist Account Manager: исследование и готовая архитектура
 
 - Дата исследования: `2026-08-02`
 - Часовой пояс: `Europe/Moscow`
@@ -124,7 +124,7 @@ Claude Code можно добавить качественно и без под�
 - парсинг TUI `/usage` или scraping веб-интерфейса;
 - автоматическое переключение подписок для обхода Technical Limitations.
 
-## Текущее состояние Codex Account Manager
+## Текущее состояние Egoist Account Manager
 
 ### Что уже подходит
 
@@ -168,7 +168,7 @@ Claude Code можно добавить качественно и без под�
 
 ```mermaid
 flowchart LR
-    UI["Codex Account Manager UI"] --> REG["Provider Registry"]
+    UI["Egoist Account Manager UI"] --> REG["Provider Registry"]
     REG --> CP["ClaudeCodeProvider"]
     CP --> STORE["Metadata + active pointer\nSQLite"]
     CP --> CLI["Official Claude CLI\nlogin / logout / auth status"]
@@ -220,7 +220,7 @@ Claude v1 capabilities должны быть:
 Предлагаемый root:
 
 ```text
-%APPDATA%/Codex Account Manager/providers/claude-code/profiles/<profile-id>/config/
+%APPDATA%/Egoist Account Manager/providers/claude-code/profiles/<profile-id>/config/
 ```
 
 В SQLite хранить только:

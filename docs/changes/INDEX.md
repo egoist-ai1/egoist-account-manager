@@ -12,12 +12,10 @@
 - [2026-08-02T183037Z-v3-1-3-compact-active-tray](./2026-08-02T183037Z-v3-1-3-compact-active-tray.md)
 - [2026-08-02T180323Z-v3-1-2-tray-hover](./2026-08-02T180323Z-v3-1-2-tray-hover.md)
 - [2026-08-02T173029Z-v3-1-1-live-tray-sandbox](./2026-08-02T173029Z-v3-1-1-live-tray-sandbox.md)
-- [2026-08-02T155041Z-v3-1-0-publication](./2026-08-02T155041Z-v3-1-0-publication.md)
-- [2026-08-02T150644Z-v3-1-0-official-auth-release](./2026-08-02T150644Z-v3-1-0-official-auth-release.md)
 
 ## Archive
 
-- [2026/08](./archive/2026/08/) - 8 notes
+- [2026/08](./archive/2026/08/) - 10 notes
 - [2026/07](./archive/2026/07/) - 1 notes
 
-Hot set: 10. Archived: 9.
+Hot set: 8. Archived: 11.

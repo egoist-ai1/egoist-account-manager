@@ -201,9 +201,9 @@ describe("WindowsDesktopLifecycleService", () => {
       900,
       271,
       "2026-07-30T12:06:02.000Z",
-      "C:\\Users\\test\\AppData\\Local\\Programs\\codex-account-manager\\Codex Account Manager.exe",
-      "\"C:\\Users\\test\\AppData\\Local\\Programs\\codex-account-manager\\Codex Account Manager.exe\"",
-      "Codex Account Manager.exe"
+      "C:\\Users\\test\\AppData\\Local\\Programs\\codex-account-manager\\Egoist Account Manager.exe",
+      "\"C:\\Users\\test\\AppData\\Local\\Programs\\codex-account-manager\\Egoist Account Manager.exe\"",
+      "Egoist Account Manager.exe"
     );
     const adapter = new FakeAdapter(snapshot([codex], [root, codeModeHost, manager]));
     const service = new WindowsDesktopLifecycleService(adapter, {

@@ -97,7 +97,7 @@ describe("command palette model", () => {
     expect(commands.map((command) => command.id)).toContain("account.switch.ready");
   });
 
-  it("offers ready Antigravity accounts as switch targets", () => {
+  it("keeps Antigravity visible as an unavailable future platform", () => {
     const commands = buildCommandPalette({
       accounts: [
         account({ id: "codex-ready", label: "Codex", platform: "codex" }),
@@ -108,14 +108,18 @@ describe("command palette model", () => {
     });
 
     expect(commands.map((command) => command.id)).toContain("account.switch.codex-ready");
-    expect(commands.map((command) => command.id)).toContain("account.switch.ag-ready");
+    expect(commands.map((command) => command.id)).not.toContain("account.switch.ag-ready");
     expect(commands.map((command) => command.id)).toContain("diagnostics.antigravity");
     expect(commands.find((command) => command.id === "diagnostics.antigravity")).toMatchObject({
       action: "filterPlatform",
       view: "accounts",
-      platform: "antigravity"
+      platform: "antigravity",
+      disabled: true
     });
-    expect(commands.map((command) => command.id)).toContain("platform.filter.antigravity");
+    expect(commands.find((command) => command.id === "platform.filter.antigravity")).toMatchObject({
+      platform: "antigravity",
+      disabled: true
+    });
   });
 
   it("does not expose raw account emails through search keywords in privacy mode", () => {

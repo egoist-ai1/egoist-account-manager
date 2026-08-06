@@ -1,4 +1,4 @@
-# Codex Account Manager 3.0 — tracer-bullet tickets
+# Egoist Account Manager 3.0 — tracer-bullet tickets
 
 Статус: proposed, требуется утверждение владельца
 Основание: утверждённая `docs/product-3.0-spec-2026-07-29.md`

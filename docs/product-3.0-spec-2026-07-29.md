@@ -1,4 +1,4 @@
-# Codex Account Manager 3.0 — спецификация
+# Egoist Account Manager 3.0 — спецификация
 
 Статус: proposed, требуется явное утверждение владельца
 Дата: 2026-07-29

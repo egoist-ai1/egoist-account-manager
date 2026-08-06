@@ -1283,7 +1283,7 @@ describe.skipIf(process.platform !== "win32")("AccountManager Codex auth modes",
 
       const firstSwitch = managerOne.switchAccount(oneSecond.account!.id);
       await quiesceEntered;
-      await expect(managerTwo.switchAccount(twoSecond.account!.id)).rejects.toThrow("Another Codex Account Manager process");
+      await expect(managerTwo.switchAccount(twoSecond.account!.id)).rejects.toThrow("Another Egoist Account Manager process");
       expect(storeTwo.get(twoFirst.account!.id)?.isActive).toBe(true);
       expect(managerTwo.listSwitchTransactions()).toEqual([]);
 

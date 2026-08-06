@@ -54,3 +54,22 @@ test("3.1 add-account wizard exposes only official Codex sign-in methods", async
   }));
   expect(layout).toEqual({ verticalFits: true, horizontalFits: true });
 });
+
+test("future Antigravity platform stays quiet and cannot replace the Codex focus", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1460, height: 900 });
+  await ready(page);
+
+  const antigravity = page.getByRole("button", { name: /Antigravity: .*в разработке/i });
+  await expect(antigravity).toHaveAttribute("aria-disabled", "true");
+  await expect(antigravity).toHaveAttribute("data-tooltip", "Antigravity · В разработке");
+  await expect(antigravity).toHaveCSS("cursor", "help");
+  await antigravity.hover();
+  await expect.poll(() => antigravity.evaluate((element) => getComputedStyle(element, "::after").opacity)).toBe("1");
+  if (process.env.CAM_CAPTURE_VISUALS === "1") {
+    await page.screenshot({ path: testInfo.outputPath("antigravity-coming-soon.png"), fullPage: true });
+  }
+  await antigravity.dispatchEvent("click");
+  await expect(page.locator(".overview-command-grid")).toBeVisible();
+  await expect(antigravity).not.toHaveClass(/is-active/);
+  await expect(page.getByRole("button", { name: /Codex: / })).toHaveClass(/is-active/);
+});

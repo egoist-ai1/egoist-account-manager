@@ -83,9 +83,10 @@ describe("renderer source Russian UI", () => {
     const appSource = fs.readFileSync(path.join(rendererDir, "App.tsx"), "utf8");
     const styles = fs.readFileSync(path.join(rendererDir, "styles.css"), "utf8");
     const releaseStyles = fs.readFileSync(path.join(rendererDir, "v308.css"), "utf8");
+    const polishStyles = fs.readFileSync(path.join(rendererDir, "v310.css"), "utf8");
 
-    expect(appSource).toContain("account-status-stack");
-    expect(appSource).toContain("account-status-badges");
+    expect(appSource).toContain("account-compact-state");
+    expect(appSource).toContain("account-compact-quota");
     expect(appSource).toContain("inspector-meta-line");
     expect(appSource).toContain("inspector-profile-row");
     expect(appSource).toContain("inspector-meta-chips");
@@ -97,7 +98,8 @@ describe("renderer source Russian UI", () => {
     expect(appSource).not.toContain("authValidationTone(authState)");
     expect(styles).toContain(".limit-meter {\n  border: 0;");
     expect(styles).toContain(".limit-meter small {\n  white-space: nowrap;");
-    expect(styles).toContain(".account-status-badges {\n  display: flex;");
+    expect(polishStyles).toContain(".account-compact-state {\n  display: flex;");
+    expect(polishStyles).toContain(".account-compact-quota {\n  display: grid;");
     expect(styles).toContain(".inspector-profile-row {\n  display: grid;");
     expect(styles).toContain(".inspector-meta-chips {\n  display: flex;");
     expect(styles).toContain(".inspector-meta-chip {\n  display: inline-flex;");

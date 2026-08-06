@@ -64,7 +64,7 @@ describe("IPC schemas", () => {
     expect(switchTransactionActionInputSchema.parse({ transactionId: "transaction_123" })).toEqual({
       transactionId: "transaction_123"
     });
-    expect(openExternalInputSchema.parse({ url: "https://github.com/egoistgorbachev/codex-account-manager" })).toMatchObject({ url: expect.any(String) });
+    expect(openExternalInputSchema.parse({ url: "https://github.com/egoist-ai1/egoist-account-manager" })).toMatchObject({ url: expect.any(String) });
     expect(deviceCodeActionInputSchema.parse({ userCode: "ABCD-1234" })).toEqual({ userCode: "ABCD-1234" });
     expect(deviceCodeOpenInputSchema.parse({
       url: "https://auth.openai.com/codex/device",

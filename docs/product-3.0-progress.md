@@ -1,4 +1,4 @@
-# Codex Account Manager 3.0 — progress
+# Egoist Account Manager 3.0 — progress
 
 Updated: 2026-08-02 00:53 MSK
 Specification: `docs/product-3.0-spec-2026-07-29.md`

@@ -568,7 +568,7 @@ export class WindowsDesktopLifecycleService {
         remainingProcessCount: resolved.tree.length,
         gracefulCloseAccepted: false,
         usedExactTreeFallback: false,
-        message: "Codex Account Manager is hosted inside the active Codex process tree. Reopen Manager from the Windows Start menu before switching."
+        message: "Egoist Account Manager is hosted inside the active Codex process tree. Reopen Manager from the Windows Start menu before switching."
       };
     }
 

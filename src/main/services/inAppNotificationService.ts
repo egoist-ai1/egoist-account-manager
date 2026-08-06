@@ -140,7 +140,7 @@ export function buildQuotaNotification(alert: QuotaAlert, isEnglish: boolean): A
 export function buildUpdateNotification(version: string, isEnglish: boolean): AppNotificationPayload {
   return notice({
     key: `release:${version}`,
-    title: isEnglish ? `Codex Manager ${version} is available` : `Доступен Codex Manager ${version}`,
+    title: isEnglish ? `Egoist Account Manager ${version} is available` : `Доступен Egoist Account Manager ${version}`,
     body: isEnglish
       ? "A stable release is listed in the official GitHub repository. Open the update banner to review it."
       : "В официальном GitHub-репозитории опубликован стабильный релиз. Откройте плашку, чтобы проверить его.",

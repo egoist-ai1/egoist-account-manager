@@ -4,19 +4,28 @@ param([switch]$Apply)
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$stageRoot = [IO.Path]::GetFullPath("C:\CAM-Stage")
+$mappedStageRoot = [IO.Path]::GetFullPath("C:\CAM-Stage")
+$guestWorkRoot = [IO.Path]::GetFullPath("C:\CAM-Work")
+$stageRoot = Join-Path $guestWorkRoot "payload"
 $resultRoot = [IO.Path]::GetFullPath("C:\CAM-Results")
-$installer314 = Join-Path $stageRoot "Codex-Account-Manager-Setup-3.1.4.exe"
 $installer315 = Join-Path $stageRoot "Codex-Account-Manager-Setup-3.1.5.exe"
-$portable315 = Join-Path $stageRoot "Codex-Account-Manager-3.1.5.exe"
+$installer316 = Join-Path $stageRoot "Egoist-Account-Manager-Setup-3.1.6.exe"
+$portable316 = Join-Path $stageRoot "Egoist-Account-Manager-3.1.6.exe"
 $installRoot = Join-Path $env:LOCALAPPDATA "Programs\codex-account-manager"
-$installedExe = Join-Path $installRoot "Codex Account Manager.exe"
-$uninstaller = Join-Path $installRoot "Uninstall Codex Account Manager.exe"
+$installedExe315 = Join-Path $installRoot "Codex Account Manager.exe"
+$installedExe316 = Join-Path $installRoot "Egoist Account Manager.exe"
+$installedExe = $installedExe315
+$uninstaller = Join-Path $installRoot "Uninstall Egoist Account Manager.exe"
 $appDataRoot = Join-Path $env:APPDATA "Codex Account Manager"
 $databasePath = Join-Path $appDataRoot "accounts.sqlite"
 $markerPath = Join-Path $appDataRoot "sandbox-upgrade-marker.txt"
 $reportPath = Join-Path $resultRoot "release-lifecycle.json"
 $completePath = Join-Path $resultRoot "complete.json"
+$stagedArtifacts = @{
+  "Codex-Account-Manager-Setup-3.1.5.exe" = Join-Path $mappedStageRoot "Codex-Account-Manager-Setup-3.1.5.exe"
+  "Egoist-Account-Manager-Setup-3.1.6.exe" = Join-Path $mappedStageRoot "Egoist-Account-Manager-Setup-3.1.6.exe"
+  "Egoist-Account-Manager-3.1.6.exe" = Join-Path $mappedStageRoot "Egoist-Account-Manager-3.1.6.exe"
+}
 
 function Write-Result([hashtable]$Value, [string]$Path) {
   $Value | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Path -Encoding UTF8
@@ -40,6 +49,30 @@ function Invoke-ProcessWithTimeout([string]$FilePath, [string[]]$Arguments, [int
   if ($process.ExitCode -ne 0) { throw "Process failed with exit code $($process.ExitCode): $FilePath" }
 }
 
+function Enable-UnsignedTestExecution {
+  $policyPath = "HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy"
+  New-Item -Path $policyPath -Force | Out-Null
+  Set-ItemProperty -Path $policyPath -Name "VerifiedAndReputablePolicyState" -Type DWord -Value 0
+  & "$env:SystemRoot\System32\CiTool.exe" -r | Out-Null
+  if ($LASTEXITCODE -ne 0 -or (Get-ItemPropertyValue -Path $policyPath -Name "VerifiedAndReputablePolicyState") -ne 0) {
+    throw "Disposable unsigned-test execution mode did not activate."
+  }
+  Start-Sleep -Seconds 2
+}
+
+function Copy-GuestLocalArtifacts {
+  New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
+  foreach ($entry in $stagedArtifacts.GetEnumerator()) {
+    if (-not (Test-Path -LiteralPath $entry.Value -PathType Leaf)) { throw "Missing staged artifact: $($entry.Key)" }
+    $destination = Join-Path $stageRoot $entry.Key
+    Copy-Item -LiteralPath $entry.Value -Destination $destination -Force
+    Unblock-File -LiteralPath $destination -ErrorAction SilentlyContinue
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $entry.Value).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath $destination).Hash) {
+      throw "Guest-local artifact copy verification failed."
+    }
+  }
+}
+
 function Get-ManagedProcesses {
   @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
     $_.ExecutablePath -and $_.ExecutablePath.StartsWith($installRoot, [StringComparison]::OrdinalIgnoreCase)
@@ -59,8 +92,10 @@ function Stop-ManagedProcesses {
 function Start-And-Probe([string]$Executable, [string]$UserDataDir, [int]$Seconds = 25) {
   New-Item -ItemType Directory -Path $UserDataDir -Force | Out-Null
   $previousUserData = [Environment]::GetEnvironmentVariable("CAM_USER_DATA_DIR", "Process")
+  $previousCodexHome = [Environment]::GetEnvironmentVariable("CODEX_HOME", "Process")
   try {
     [Environment]::SetEnvironmentVariable("CAM_USER_DATA_DIR", $UserDataDir, "Process")
+    [Environment]::SetEnvironmentVariable("CODEX_HOME", (Join-Path $UserDataDir "codex-home"), "Process")
     [Environment]::SetEnvironmentVariable("CAM_ALLOW_MULTIPLE_INSTANCE", "1", "Process")
     [Environment]::SetEnvironmentVariable("CAM_DISABLE_AUTO_UPDATE", "1", "Process")
     [Environment]::SetEnvironmentVariable("CAM_DISABLE_EXTERNAL_OPEN", "1", "Process")
@@ -74,6 +109,7 @@ function Start-And-Probe([string]$Executable, [string]$UserDataDir, [int]$Second
     return @{ rendererReady = $true; logPath = $logPath }
   } finally {
     [Environment]::SetEnvironmentVariable("CAM_USER_DATA_DIR", $previousUserData, "Process")
+    [Environment]::SetEnvironmentVariable("CODEX_HOME", $previousCodexHome, "Process")
   }
 }
 
@@ -114,7 +150,8 @@ public static class CamWindowProbe {
 $plan = [ordered]@{
   sandbox = $true
   network = "disabled by host config"
-  tests = @("fresh-install-3.1.4", "running-upgrade-3.1.5", "data-persistence", "uninstall", "reinstall-3.1.5", "portable-startup")
+  unsignedExecution = "Smart App Control off only inside disposable test guest; CiTool policy refresh"
+  tests = @("fresh-install-3.1.5", "running-upgrade-3.1.6", "data-persistence", "uninstall", "reinstall-3.1.6", "portable-startup")
 }
 if (-not $Apply) {
   $plan | ConvertTo-Json -Depth 4
@@ -122,9 +159,6 @@ if (-not $Apply) {
 }
 
 if (-not $PSCmdlet.ShouldProcess("Windows Sandbox", "Run isolated install, upgrade, uninstall, reinstall and portable probes")) { exit 0 }
-foreach ($required in @($installer314, $installer315, $portable315)) {
-  if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing staged artifact: $required" }
-}
 New-Item -ItemType Directory -Path $resultRoot -Force | Out-Null
 $results = [ordered]@{
   passed = $false
@@ -138,12 +172,20 @@ $results = [ordered]@{
 }
 
 try {
-  Invoke-ProcessWithTimeout $installer314 @("/S") 120
-  Wait-Until { Test-Path -LiteralPath $installedExe -PathType Leaf } 30 "3.1.4 executable was not installed."
-  $results.checks.install314 = ((Get-Item -LiteralPath $installedExe).VersionInfo.ProductVersion -like "3.1.4*")
+  foreach ($required in $stagedArtifacts.Values) {
+    if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing staged artifact." }
+  }
+  Enable-UnsignedTestExecution
+  $results.checks.smartAppControlDisabledForUnsignedTest = $true
+  Copy-GuestLocalArtifacts
+  $results.checks.guestLocalArtifactsVerified = $true
 
-  $probe314 = Join-Path $env:TEMP "cam-sandbox-314"
-  $results.checks.start314 = (Start-And-Probe $installedExe $probe314).rendererReady
+  Invoke-ProcessWithTimeout $installer315 @("/S") 120
+  Wait-Until { Test-Path -LiteralPath $installedExe -PathType Leaf } 30 "3.1.5 executable was not installed."
+  $results.checks.install315 = ((Get-Item -LiteralPath $installedExe).VersionInfo.ProductVersion -like "3.1.5*")
+
+  $probe315 = Join-Path $env:TEMP "cam-sandbox-315"
+  $results.checks.start315 = (Start-And-Probe $installedExe $probe315).rendererReady
   Stop-ManagedProcesses
 
   New-Item -ItemType Directory -Path $appDataRoot -Force | Out-Null
@@ -151,39 +193,40 @@ try {
   [Environment]::SetEnvironmentVariable("CAM_DISABLE_AUTO_UPDATE", "1", "Process")
   [Environment]::SetEnvironmentVariable("CAM_DISABLE_EXTERNAL_OPEN", "1", "Process")
   Start-Process -FilePath $installedExe | Out-Null
-  Wait-Until { @(Get-ManagedProcesses).Count -gt 0 } 20 "3.1.4 did not start before upgrade."
-  Wait-Until { Test-Path -LiteralPath $databasePath -PathType Leaf } 20 "3.1.4 did not create accounts.sqlite."
+  Wait-Until { @(Get-ManagedProcesses).Count -gt 0 } 20 "3.1.5 did not start before upgrade."
+  Wait-Until { Test-Path -LiteralPath $databasePath -PathType Leaf } 20 "3.1.5 did not create accounts.sqlite."
   $preUpgradeProcessIds = @(Get-ManagedProcesses | Select-Object -ExpandProperty ProcessId)
-  if ($preUpgradeProcessIds.Count -eq 0) { throw "No 3.1.4 process tree was captured before upgrade." }
-  Invoke-ProcessWithTimeout $installer315 @("/S") 150
+  if ($preUpgradeProcessIds.Count -eq 0) { throw "No 3.1.5 process tree was captured before upgrade." }
+  Invoke-ProcessWithTimeout $installer316 @("/S") 150
+  $installedExe = $installedExe316
   Wait-Until {
-    (Test-Path -LiteralPath $installedExe -PathType Leaf) -and ((Get-Item -LiteralPath $installedExe).VersionInfo.ProductVersion -like "3.1.5*")
-  } 45 "Running upgrade did not install 3.1.5."
+    (Test-Path -LiteralPath $installedExe -PathType Leaf) -and ((Get-Item -LiteralPath $installedExe).VersionInfo.ProductVersion -like "3.1.6*")
+  } 45 "Running upgrade did not install 3.1.6."
   try {
     Wait-Until {
       @($preUpgradeProcessIds | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }).Count -eq 0
-    } 30 "Installer did not close the captured 3.1.4 process tree."
+    } 30 "Installer did not close the captured 3.1.5 process tree."
   } catch { }
   $results.checks.installerClosedPreviousProcesses = @($preUpgradeProcessIds | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }).Count -eq 0
   Stop-ManagedProcesses
-  $results.checks.runningUpgrade315 = $true
+  $results.checks.runningUpgrade316 = $true
   $results.checks.markerPreservedAfterUpgrade = (Test-Path -LiteralPath $markerPath -PathType Leaf)
   $results.checks.databasePreservedAfterUpgrade = (Test-Path -LiteralPath $databasePath -PathType Leaf)
 
-  $probe315 = Join-Path $env:TEMP "cam-sandbox-315"
-  $results.checks.start315 = (Start-And-Probe $installedExe $probe315).rendererReady
+  $probe316 = Join-Path $env:TEMP "cam-sandbox-316"
+  $results.checks.start316 = (Start-And-Probe $installedExe $probe316).rendererReady
   Start-Sleep -Seconds 3
   Show-InstalledWindow
-  Capture-Desktop (Join-Path $resultRoot "installed-3.1.5.png")
+  Capture-Desktop (Join-Path $resultRoot "installed-3.1.6.png")
   Stop-ManagedProcesses
 
   $shortcutCandidates = @(
-    (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Codex Account Manager.lnk"),
-    (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Codex Account Manager\Codex Account Manager.lnk")
+    (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Egoist Account Manager.lnk"),
+    (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Egoist Account Manager\Egoist Account Manager.lnk")
   )
   $desktopShortcutCandidates = @(
-    (Join-Path ([Environment]::GetFolderPath("Desktop")) "Codex Account Manager.lnk"),
-    (Join-Path $env:PUBLIC "Desktop\Codex Account Manager.lnk")
+    (Join-Path ([Environment]::GetFolderPath("Desktop")) "Egoist Account Manager.lnk"),
+    (Join-Path $env:PUBLIC "Desktop\Egoist Account Manager.lnk")
   )
   $allShortcutCandidates = @($shortcutCandidates + $desktopShortcutCandidates)
   $results.checks.startMenuShortcutCreated = @($shortcutCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }).Count -gt 0
@@ -201,19 +244,19 @@ try {
   $results.checks.uninstallPreservedUserData = (Test-Path -LiteralPath $markerPath -PathType Leaf) -and (Test-Path -LiteralPath $databasePath -PathType Leaf)
   $results.checks.uninstallRemovedShortcut = @($allShortcutCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }).Count -eq 0
 
-  Invoke-ProcessWithTimeout $installer315 @("/S") 120
-  Wait-Until { Test-Path -LiteralPath $installedExe -PathType Leaf } 30 "3.1.5 clean reinstall failed."
-  $results.checks.reinstall315 = ((Get-Item -LiteralPath $installedExe).VersionInfo.ProductVersion -like "3.1.5*")
+  Invoke-ProcessWithTimeout $installer316 @("/S") 120
+  Wait-Until { Test-Path -LiteralPath $installedExe -PathType Leaf } 30 "3.1.6 clean reinstall failed."
+  $results.checks.reinstall316 = ((Get-Item -LiteralPath $installedExe).VersionInfo.ProductVersion -like "3.1.6*")
   $results.checks.reinstallPreservedUserData = (Test-Path -LiteralPath $markerPath -PathType Leaf)
   $reinstallProbe = Join-Path $env:TEMP "cam-sandbox-reinstall"
   $results.checks.reinstallStartup = (Start-And-Probe $installedExe $reinstallProbe).rendererReady
   Stop-ManagedProcesses
 
   $portableProbe = Join-Path $env:TEMP "cam-sandbox-portable"
-  $results.checks.portableStartup = (Start-And-Probe $portable315 $portableProbe 45).rendererReady
-  $portableRoot = Split-Path -Parent $portable315
+  $results.checks.portableStartup = (Start-And-Probe $portable316 $portableProbe 45).rendererReady
+  $portableRoot = Split-Path -Parent $portable316
   foreach ($process in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-    $_.ExecutablePath -and $_.ExecutablePath.StartsWith($portableRoot, [StringComparison]::OrdinalIgnoreCase) -and $_.Name -like "Codex-Account-Manager-3.1.5*"
+    $_.ExecutablePath -and $_.ExecutablePath.StartsWith($portableRoot, [StringComparison]::OrdinalIgnoreCase) -and $_.Name -like "Egoist-Account-Manager-3.1.6*"
   })) {
     Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
   }

@@ -55,7 +55,7 @@ type Row = {
   ide_state_detected?: 0 | 1;
 };
 
-const authDriftReason = "Profile credentials changed outside Codex Account Manager. Review or reauthenticate this profile.";
+const authDriftReason = "Profile credentials changed outside Egoist Account Manager. Review or reauthenticate this profile.";
 
 type Migration = {
   version: number;

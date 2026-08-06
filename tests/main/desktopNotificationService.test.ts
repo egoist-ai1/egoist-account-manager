@@ -94,7 +94,7 @@ describe("InAppNotificationService", () => {
   it("announces an official repository listing without claiming artifact verification or silent installation", () => {
     expect(buildUpdateNotification("3.2.0", false)).toMatchObject({
       key: "release:3.2.0",
-      title: "Доступен Codex Manager 3.2.0",
+      title: "Доступен Egoist Account Manager 3.2.0",
       tone: "progress",
       silent: false
     });

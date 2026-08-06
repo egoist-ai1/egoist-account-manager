@@ -19,9 +19,9 @@ $package = Get-Content -Raw -Encoding utf8 (Join-Path $PSScriptRoot "..\\package
 $version = $package.version
 $files = Get-ChildItem -LiteralPath $ReleaseDir -File | Where-Object {
   $_.Name -in @(
-    "Codex-Account-Manager-Setup-$version.exe",
-    "Codex-Account-Manager-$version.exe",
-    "Codex-Account-Manager-Setup-$version.exe.blockmap",
+    "Egoist-Account-Manager-Setup-$version.exe",
+    "Egoist-Account-Manager-$version.exe",
+    "Egoist-Account-Manager-Setup-$version.exe.blockmap",
     "latest.yml"
   )
 }

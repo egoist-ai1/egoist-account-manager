@@ -234,7 +234,7 @@ function authCompleteHtml(success: boolean, message: string): string {
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
-  <title>Codex Account Manager</title>
+  <title>Egoist Account Manager</title>
   <style>
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0f0f12; color: #f4f0ff; font-family: system-ui, -apple-system, Segoe UI, sans-serif; }
     main { width: min(520px, calc(100vw - 40px)); border: 1px solid #302b3a; border-radius: 14px; padding: 28px; background: #17151d; box-shadow: 0 18px 60px rgba(0,0,0,.45); }
@@ -304,7 +304,7 @@ async function createCallbackServer(timeoutMs = 5 * 60_000): Promise<Antigravity
           return;
         }
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        res.end(authCompleteHtml(true, "Codex Account Manager завершает привязку аккаунта. Вернись в приложение через несколько секунд."));
+        res.end(authCompleteHtml(true, "Egoist Account Manager завершает привязку аккаунта. Вернись в приложение через несколько секунд."));
         if (!settled) {
           settled = true;
           resolveCallback({ code, state });

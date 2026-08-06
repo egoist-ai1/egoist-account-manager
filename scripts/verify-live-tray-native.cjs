@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { app, nativeImage } = require("electron");
 
-const samples = ["0", "1", "9", "10", "25", "64", "99", "100", "—", "~", "!"];
+const samples = ["0", "1", "9", "10", "25", "64", "66", "99", "100", "—", "~", "!"];
 
 app.whenReady().then(async () => {
   const { LIVE_TRAY_REPRESENTATIONS, renderLiveTrayBitmap } = await import("../dist/shared/liveTray.js");

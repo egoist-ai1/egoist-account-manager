@@ -171,7 +171,7 @@ export class CodexRpcClient extends EventEmitter {
       this.initializeResponse = await this.request<CodexInitializeResponse>("initialize", {
         clientInfo: {
           name: "egoist_codex_account_manager",
-          title: "Codex Account Manager",
+          title: "Egoist Account Manager",
           version: appVersion
         },
         capabilities: {
@@ -320,7 +320,7 @@ export class CodexRpcClient extends EventEmitter {
         id,
         error: {
           code: -32601,
-          message: `Client-side server request is not supported by Codex Account Manager: ${method}`
+          message: `Client-side server request is not supported by Egoist Account Manager: ${method}`
         }
       })}\n`
     );

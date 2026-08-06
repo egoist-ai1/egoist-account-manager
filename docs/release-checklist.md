@@ -15,13 +15,13 @@
 pnpm run build
 ```
 
-Ожидаемые файлы для версии 3.1.0:
+Ожидаемые файлы для версии `<version>`:
 
-- `release/Codex-Account-Manager-Setup-3.1.0.exe`
-- `release/Codex-Account-Manager-3.1.0.exe`
+- `release/Egoist-Account-Manager-Setup-<version>.exe`
+- `release/Egoist-Account-Manager-<version>.exe`
 - `release/latest.yml`
-- `release/Codex-Account-Manager-Setup-3.1.0.exe.blockmap`
-- `release/SHA256SUMS-3.1.0.txt`
+- `release/Egoist-Account-Manager-Setup-<version>.exe.blockmap`
+- `release/SHA256SUMS-<version>.txt`
 
 ## Контрольные суммы
 
@@ -29,8 +29,8 @@ pnpm run build
 pnpm run release:checksums
 ```
 
-- Сверить каждый файл с `SHA256SUMS-3.1.0.txt` отдельным fresh gate.
-- Зафиксировать точные размеры и SHA-256 в `docs/releases/3.1.0.md`.
+- Сверить каждый файл с `SHA256SUMS-<version>.txt` отдельным fresh gate.
+- Зафиксировать точные размеры и SHA-256 в `docs/releases/<version>.md`.
 
 ## Packaged gate
 
@@ -52,6 +52,6 @@ pnpm run verify:startup
 
 ## Перед публичной публикацией
 
-- До подключения сертификата публиковать GitHub Release с SHA-256 и ручной установкой. Приложение может автоматически обнаружить новую версию, но не скачивает и не запускает EXE.
+- Неподписанный release нельзя публиковать как прошедший clean-Windows gate, если текущий Smart App Control блокирует exact artifact. Приложение может автоматически обнаружить новую версию, но не скачивает и не запускает EXE.
 - Для публичной high-trust доставки подключить Authenticode, RFC3161 timestamp, `signAndEditExecutable` и `verifyUpdateCodeSignature`, затем проверить всю signature chain.
 - Проверить блок `Диагностика → Релиз` в собранном приложении.

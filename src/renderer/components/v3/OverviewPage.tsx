@@ -12,11 +12,17 @@ import {
   Zap
 } from "lucide-react";
 import type {
+  AccountPlatform,
   AppDiagnostics,
   CodexCredentialStoreDiagnostics,
   ManagedAccount,
   SwitchTransaction
 } from "../../../shared/types";
+import {
+  buildProviderQuotaState,
+  type ProviderLimitWindowType
+} from "../../../shared/providerAdapter";
+import { buildQuotaFreshness, hasCurrentQuotaRefreshFailure } from "../../../shared/quotaFreshness";
 import { rankSwitchCandidates, type RankedSwitchCandidate } from "../../../shared/smartSelection";
 
 function remaining(usedPercent: number | null): number | null {
@@ -65,6 +71,87 @@ export function formatQuotaReset(resetAt: number | null, now: number, isEnglish:
   return isEnglish
     ? `Resets in ${days} d`
     : `Сброс через ${days} ${pluralRu(days, "день", "дня", "дней")}`;
+}
+
+export function formatQuotaResetMoment(resetAt: number | null, isEnglish: boolean): string {
+  if (!resetAt) return isEnglish ? "No confirmed date" : "Нет подтверждённой даты";
+  return new Intl.DateTimeFormat(isEnglish ? "en-US" : "ru-RU", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(resetAt * 1000);
+}
+
+export interface NearestQuotaResetSummary {
+  accountId: string;
+  accountLabel: string;
+  resetAt: number;
+  remaining: number | null;
+  windowType: ProviderLimitWindowType;
+  freshness: "fresh" | "saved";
+  protectedProfiles: number;
+  profilesWithReset: number;
+}
+
+export function selectNearestQuotaReset(
+  accounts: ManagedAccount[],
+  now: number,
+  platform: AccountPlatform
+): NearestQuotaResetSummary | null {
+  const protectedAccounts = accounts.filter((account) =>
+    account.platform === platform
+    && account.credentialState === "ready"
+    && !account.archived
+  );
+  const candidates = protectedAccounts.flatMap((account) => {
+    const freshnessState = buildQuotaFreshness(account, { now, staleAfterSeconds: 15 * 60 }).state;
+    const freshness: NearestQuotaResetSummary["freshness"] = freshnessState === "fresh"
+      && !hasCurrentQuotaRefreshFailure(account)
+      ? "fresh"
+      : "saved";
+    return buildProviderQuotaState(account).windows.flatMap((window) => {
+      if (window.resetAt === null || window.resetAt <= now) return [];
+      return [{
+        accountId: account.id,
+        accountLabel: account.label,
+        resetAt: window.resetAt,
+        remaining: window.remaining,
+        windowType: window.windowType,
+        freshness,
+        checkedAt: account.lastRefreshAt ?? 0
+      }];
+    });
+  });
+  if (candidates.length === 0) return null;
+
+  const selected = candidates.slice().sort((left, right) =>
+    left.resetAt - right.resetAt
+    || Number(right.freshness === "fresh") - Number(left.freshness === "fresh")
+    || right.checkedAt - left.checkedAt
+    || left.accountLabel.localeCompare(right.accountLabel)
+  )[0];
+  return {
+    accountId: selected.accountId,
+    accountLabel: selected.accountLabel,
+    resetAt: selected.resetAt,
+    remaining: selected.remaining,
+    windowType: selected.windowType,
+    freshness: selected.freshness,
+    protectedProfiles: protectedAccounts.length,
+    profilesWithReset: new Set(candidates.map((candidate) => candidate.accountId)).size
+  };
+}
+
+function quotaWindowLabel(windowType: ProviderLimitWindowType, isEnglish: boolean): string {
+  const labels: Record<ProviderLimitWindowType, [string, string]> = {
+    "5h": ["5-hour window", "5-часовой лимит"],
+    daily: ["Daily window", "Дневной лимит"],
+    weekly: ["Weekly window", "Недельный лимит"],
+    rolling: ["Rolling window", "Плавающее окно"],
+    unknown: ["Account limit", "Лимит аккаунта"]
+  };
+  return labels[windowType][isEnglish ? 0 : 1];
 }
 
 export function formatCredentialStore(
@@ -241,15 +328,15 @@ export function OverviewPage({
   const switchReady = environmentReady && protocolReady && credentialStoreReady && (accounts.length === 0 || identityReady);
   const transactionNeedsAttention = latestTransaction?.status === "recovery_required" || latestTransaction?.status === "failed";
   const activeSession = active ? sessionCopy(active, isEnglish) : null;
-  const activeQuotaError = active?.lastRefreshError ?? null;
+  const activeQuotaError = active && hasCurrentQuotaRefreshFailure(active) ? active.lastRefreshError : null;
   const savedProfiles = accounts.filter((account) => account.credentialState === "ready").length;
   const freshProfiles = accounts.filter((account) =>
-    !account.lastRefreshError
+    !hasCurrentQuotaRefreshFailure(account)
     && account.lastRefreshAt !== null
     && now - account.lastRefreshAt < 15 * 60
   ).length;
   const attentionProfiles = accounts.filter((account) =>
-    account.credentialState !== "ready" || Boolean(account.lastRefreshError)
+    account.credentialState !== "ready" || hasCurrentQuotaRefreshFailure(account)
   ).length;
   const switchCandidates = rankSwitchCandidates(accounts, { now, staleAfterSeconds: 15 * 60 });
   const nextCandidate = switchCandidates.find((candidate) => candidate.state === "ready") ?? null;
@@ -264,9 +351,8 @@ export function OverviewPage({
   const transactionDuration = latestTransaction
     ? Math.max(0, (latestTransaction.completedAt ?? latestTransaction.updatedAt) - latestTransaction.createdAt)
     : null;
-  const nextResetAt = [active?.fiveHourResetsAt ?? null, active?.weeklyResetsAt ?? null]
-    .filter((value): value is number => value !== null && value > now)
-    .sort((a, b) => a - b)[0] ?? null;
+  const resetPlatform = active?.platform ?? "codex";
+  const nearestReset = selectNearestQuotaReset(accounts, now, resetPlatform);
 
   return (
     <div className="v3-page overview-page overview-v304 overview-v306">
@@ -448,7 +534,27 @@ export function OverviewPage({
             <div className={savedProfiles === accounts.length ? "is-ready" : "is-warning"}><ShieldCheck /><span>{isEnglish ? "Saved sign-ins" : "Сохранённые входы"}</span><strong>{savedProfiles}/{accounts.length}</strong></div>
             <div className={freshProfiles === accounts.length ? "is-ready" : "is-warning"}><RefreshCcw /><span>{isEnglish ? "Fresh profiles" : "Свежие профили"}</span><strong>{freshProfiles}/{accounts.length}</strong></div>
             <div className={protocolReady ? "is-ready" : "is-warning"}><CheckCircle2 /><span>App-server</span><strong>{protocolReady ? (isEnglish ? "Ready" : "Готов") : (isEnglish ? "Review" : "Проверить")}</strong></div>
-            <div><Clock3 /><span>{isEnglish ? "Next reset" : "Ближайший сброс"}</span><strong>{formatQuotaReset(nextResetAt, now, isEnglish)}</strong></div>
+            <div
+              className={`overview-reset-signal ${nearestReset?.freshness === "fresh" ? "is-fresh" : "is-saved"}`}
+              aria-label={`${isEnglish ? "Nearest reset across profiles" : "Ближайший сброс по профилям"}: ${formatQuotaResetMoment(nearestReset?.resetAt ?? null, isEnglish)}`}
+            >
+              <span className="reset-signal-icon"><Clock3 /></span>
+              <span className="reset-signal-copy">
+                <span className="reset-signal-label">{isEnglish ? "Nearest reset" : "Ближайший сброс"}</span>
+                <strong>{formatQuotaResetMoment(nearestReset?.resetAt ?? null, isEnglish)}</strong>
+                <small>{nearestReset
+                  ? `${quotaWindowLabel(nearestReset.windowType, isEnglish)} · ${nearestReset.accountLabel}`
+                  : (isEnglish ? "Refresh protected profiles to load reset times" : "Обновите защищённые профили, чтобы получить даты")}</small>
+              </span>
+              <span className="reset-signal-time">
+                <strong>{formatQuotaReset(nearestReset?.resetAt ?? null, now, isEnglish)}</strong>
+                <small>{nearestReset
+                  ? (isEnglish
+                    ? `${nearestReset.freshness === "fresh" ? "fresh" : "saved"} · ${nearestReset.profilesWithReset} of ${nearestReset.protectedProfiles} profiles`
+                    : `${nearestReset.freshness === "fresh" ? "свежий" : "сохранённый"} · ${nearestReset.profilesWithReset} из ${nearestReset.protectedProfiles} профилей`)
+                  : (isEnglish ? "No future windows" : "Нет будущих окон")}</small>
+              </span>
+            </div>
           </div>
           <div className="operation-foot">
             <div className="persistence-tags"><span>DPAPI</span><span>Rollback</span><span>{isEnglish ? "Local" : "Локально"}</span></div>

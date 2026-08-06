@@ -1,8 +1,8 @@
-# Codex Account Manager — roadmap
+# Egoist Account Manager — roadmap
 
 ## Now
 
-- Public 3.1.5 устраняет воспроизведённую блокировку switch после reauth; exact build прошёл полный release gate, Sandbox 3.1.4→3.1.5 и guarded publication с публичной сверкой 5/5 assets. Claude Code Provider Pilot отложен, продуктовый код Claude не начат.
+- Public 3.1.5 остаётся latest stable. Local 3.1.6 прошёл build/audit/Node/Electron/package gates, но current clean-Windows Smart App Control блокирует unsigned installer; публикация ждёт CA-trusted Authenticode + RFC 3161 и повтор exact Sandbox lifecycle/live gate. Claude Code Provider Pilot отложен.
 
 ## Next
 

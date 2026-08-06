@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Evolve Codex Account Manager into a commercial-safe local account control plane for Codex and Google Antigravity without copying Cockpit Tools source code.
+**Goal:** Evolve Egoist Account Manager into a commercial-safe local account control plane for Codex and Google Antigravity without copying Cockpit Tools source code.
 
 **Architecture:** Keep the existing Electron + React + TypeScript + SQLite product as the base. Implement Cockpit-inspired behavior as original TypeScript services with explicit tests, using Cockpit only as behavioral research: storage ideas, OAuth flows, quota strategy, switch workflow, and risk hardening.
 
@@ -567,7 +567,7 @@ Expected: no user-facing English strings except allowed technical terms.
 
 - [ ] **Step 1: Product naming**
 
-Decide final product name before release. If keeping `Codex Account Manager`, update description to mention Antigravity. If renaming, update `productName`, `appId`, NSIS shortcut names, artifact names, README, release tests, and screenshots together.
+Decide final product name before release. If keeping `Egoist Account Manager`, update description to mention Antigravity. If renaming, update `productName`, `appId`, NSIS shortcut names, artifact names, README, release tests, and screenshots together.
 
 - [ ] **Step 2: Signing policy**
 

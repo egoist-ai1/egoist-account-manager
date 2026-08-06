@@ -5,15 +5,15 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $projectRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
-$sandboxRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot "artifacts\sandbox\3.1.5"))
+$sandboxRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot "artifacts\sandbox\3.1.6-egoist-brand"))
 $stageRoot = Join-Path $sandboxRoot "stage"
 $resultRoot = Join-Path $sandboxRoot "results"
-$configPath = Join-Path $sandboxRoot "codex-account-manager-3.1.5.wsb"
+$configPath = Join-Path $sandboxRoot "egoist-account-manager-3.1.6.wsb"
 $sandboxExe = Join-Path $env:SystemRoot "System32\WindowsSandbox.exe"
 $artifacts = @(
-  "Codex-Account-Manager-Setup-3.1.4.exe",
   "Codex-Account-Manager-Setup-3.1.5.exe",
-  "Codex-Account-Manager-3.1.5.exe"
+  "Egoist-Account-Manager-Setup-3.1.6.exe",
+  "Egoist-Account-Manager-3.1.6.exe"
 )
 
 $plan = [ordered]@{
@@ -57,6 +57,7 @@ $escapedResults = [Security.SecurityElement]::Escape($resultRoot)
 $config = @"
 <Configuration>
   <VGpu>Enable</VGpu>
+  <ProtectedClient>Disable</ProtectedClient>
   <Networking>Disable</Networking>
   <AudioInput>Disable</AudioInput>
   <VideoInput>Disable</VideoInput>

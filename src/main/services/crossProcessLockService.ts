@@ -91,7 +91,7 @@ export class CrossProcessLockService {
         const owner = parseRecord(lockPath);
         if (owner && this.isOwnerAlive(owner)) {
           throw new CrossProcessLockError(
-            `Another Codex Account Manager process is running ${owner.operation || "an account operation"}.`
+            `Another Egoist Account Manager process is running ${owner.operation || "an account operation"}.`
           );
         }
         try {

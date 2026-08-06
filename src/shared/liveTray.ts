@@ -64,7 +64,7 @@ export function buildLiveTraySnapshot(
       activeWindowType: null,
       activeWindowResetAt: null,
       iconText: "—",
-      tooltip: isEnglish ? "Codex Manager · no active account" : "Codex Manager · активный аккаунт не выбран",
+      tooltip: isEnglish ? "Egoist Account Manager · no active account" : "Egoist Account Manager · активный аккаунт не выбран",
       updatedAt: null
     };
   }
@@ -115,7 +115,7 @@ export function buildLiveTraySnapshot(
         ? (isEnglish ? "quota unavailable" : "лимиты недоступны")
         : (isEnglish ? `${activeWindowName} ${remainingPercent}%` : `${activeWindowName} ${remainingPercent}%`);
   const tooltip = [
-    `Codex Manager · ${accountLabel}`,
+    `Egoist Account Manager · ${accountLabel}`,
     activeWindow ? `${activeWindowName}: ${quotaLabel(remainingPercent)}` : (isEnglish ? "Current quota: —" : "Текущий лимит: —"),
     `${status} · ${ageLabel(active.lastRefreshAt, now, isEnglish)}`
   ].join("\n");

@@ -99,8 +99,9 @@ const antigravityGoogleOAuthSessions = new Map<string, {
 }>();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const productName = "Codex Account Manager";
+const productName = "Egoist Account Manager";
 const publisherName = "Egoist AI";
+const previousProductName = "Codex Account Manager";
 const legacyProductName = "Egoist AI Manager";
 const appUserModelId = "one.egoist.codex-account-manager";
 // Packaged code must never trust an environment flag to enable a localhost
@@ -666,8 +667,8 @@ function registerIpc(appDataDir: string): void {
     const stamp = new Date().toISOString().slice(0, 10);
     const options: Electron.SaveDialogOptions = {
       title: "Export ChatGPT accounts",
-      defaultPath: `codex-account-manager-accounts-${stamp}.cam-export`,
-      filters: [{ name: "Codex Account Manager export", extensions: ["cam-export"] }]
+      defaultPath: `egoist-account-manager-accounts-${stamp}.cam-export`,
+      filters: [{ name: "Egoist Account Manager export", extensions: ["cam-export"] }]
     };
     const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
     if (result.canceled || !result.filePath) return { exportedCount: 0, filePath: "" };
@@ -679,7 +680,7 @@ function registerIpc(appDataDir: string): void {
     const options: Electron.OpenDialogOptions = {
       title: "Import ChatGPT accounts",
       properties: ["openFile"],
-      filters: [{ name: "Codex Account Manager export", extensions: ["cam-export", "json"] }]
+      filters: [{ name: "Egoist Account Manager export", extensions: ["cam-export", "json"] }]
     };
     const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
     if (result.canceled || !result.filePaths[0]) return { importedCount: 0, accounts: requireManager().list() };
@@ -767,7 +768,7 @@ function registerIpc(appDataDir: string): void {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     const options: Electron.SaveDialogOptions = {
       title: "Сохранить отчёт диагностики",
-      defaultPath: `codex-account-manager-diagnostics-${stamp}.json`,
+      defaultPath: `egoist-account-manager-diagnostics-${stamp}.json`,
       filters: [{ name: "Diagnostic JSON", extensions: ["json"] }]
     };
     const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
@@ -1369,11 +1370,15 @@ if (!gotLock) {
   if (process.env.CAM_USER_DATA_DIR) {
     app.setPath("userData", process.env.CAM_USER_DATA_DIR);
   } else {
+    const previousUserDataDir = path.join(app.getPath("appData"), previousProductName);
     const legacyUserDataDir = path.join(app.getPath("appData"), legacyProductName);
-    const renamedUserDataDir = path.join(app.getPath("appData"), productName);
+    const currentUserDataDir = path.join(app.getPath("appData"), productName);
+    const previousDbPath = path.join(previousUserDataDir, "accounts.sqlite");
     const legacyDbPath = path.join(legacyUserDataDir, "accounts.sqlite");
-    const renamedDbPath = path.join(renamedUserDataDir, "accounts.sqlite");
-    if (fs.existsSync(legacyDbPath) && !fs.existsSync(renamedDbPath)) {
+    const currentDbPath = path.join(currentUserDataDir, "accounts.sqlite");
+    if (fs.existsSync(previousDbPath)) {
+      app.setPath("userData", previousUserDataDir);
+    } else if (fs.existsSync(legacyDbPath) && !fs.existsSync(currentDbPath)) {
       app.setPath("userData", legacyUserDataDir);
     }
   }

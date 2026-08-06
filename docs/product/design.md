@@ -1,4 +1,4 @@
-# Дизайн Codex Account Manager
+# Дизайн Egoist Account Manager
 
 ## Направление
 

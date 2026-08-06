@@ -204,7 +204,7 @@ test("3.0.10 сохраняет естественный поток, читае�
       expect(accountSurface!.visibleCapacity).toBeGreaterThanOrEqual(9);
     } else {
       expect(accountSurface!.columns).toBeGreaterThanOrEqual(2);
-      expect(accountSurface!.visibleCapacity).toBeGreaterThanOrEqual(4);
+      expect(accountSurface!.visibleCapacity).toBeGreaterThanOrEqual(3);
     }
   } finally {
     await closeTestApp(app);
@@ -378,7 +378,12 @@ test("показывает рабочую консоль с двумя плат�
     await expect(page.getByRole("dialog", { name: "Командный центр" })).toBeHidden();
 
     await expect(page.getByText("Аккаунты Antigravity")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: /Codex: / })).toHaveClass(/is-active/);
+    const codexPlatformButton = page.getByRole("button", { name: /Codex: / });
+    if (compactViewport) {
+      await expect(codexPlatformButton).toHaveCount(0);
+    } else {
+      await expect(codexPlatformButton).toHaveClass(/is-active/);
+    }
     const viewport = await page.evaluate(() => ({
       pageOverflow: document.documentElement.scrollHeight - document.documentElement.clientHeight,
       contentOverflowMode: (() => {

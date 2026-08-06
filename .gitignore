@@ -32,3 +32,9 @@ coverage/
 
 .DS_Store
 Thumbs.db
+
+# Local EGOIST control-room state; intentionally excluded from the public repo.
+/AGENTS.md
+/CLAUDE.md
+/STATUS.md
+/project.profile.json

@@ -48,10 +48,22 @@
   </tr>
 </table>
 
+## Лимит прямо в панели задач
+
+<table>
+  <tr>
+    <td width="48%"><img src="docs/images/tray-taskbar-3.1.6.png" width="410" alt="Процент лимита в Windows taskbar и открытая панель Codex Live" /></td>
+    <td>
+      <strong>Остаток виден без открытия Manager.</strong><br /><br />
+      Значок показывает процент фактически ограничивающего окна активного аккаунта. Нажатие открывает компактную панель с тем же значением, свежестью данных и быстрым переходом в приложение.
+    </td>
+  </tr>
+</table>
+
 <details>
-  <summary><strong>Живой индикатор лимита в Windows tray</strong></summary>
+  <summary><strong>Крупный план hover-панели</strong></summary>
   <br />
-  <img src="docs/images/tray-3.1.6.png" width="360" alt="Индикатор активного лимита в Windows tray" />
+  <img src="docs/images/tray-3.1.6.png" width="360" alt="Крупный план панели активного лимита" />
 </details>
 
 ## Как проходит переключение

@@ -4,6 +4,7 @@
 
 ## Recent notes
 
+- [2026-08-06T132713Z-public-root-tray](./2026-08-06T132713Z-public-root-tray.md)
 - [2026-08-06T123950Z-github-presentation](./2026-08-06T123950Z-github-presentation.md)
 - [2026-08-02T235740Z-v3-1-5-switch-recovery](./2026-08-02T235740Z-v3-1-5-switch-recovery.md)
 - [2026-08-02T193006Z-v3-1-4-public-claude-research](./2026-08-02T193006Z-v3-1-4-public-claude-research.md)
@@ -13,11 +14,10 @@
 - [2026-08-02T173029Z-v3-1-1-live-tray-sandbox](./2026-08-02T173029Z-v3-1-1-live-tray-sandbox.md)
 - [2026-08-02T155041Z-v3-1-0-publication](./2026-08-02T155041Z-v3-1-0-publication.md)
 - [2026-08-02T150644Z-v3-1-0-official-auth-release](./2026-08-02T150644Z-v3-1-0-official-auth-release.md)
-- [2026-08-02T134857Z-v3-0-10-current-session-viewport](./2026-08-02T134857Z-v3-0-10-current-session-viewport.md)
 
 ## Archive
 
-- [2026/08](./archive/2026/08/) - 7 notes
+- [2026/08](./archive/2026/08/) - 8 notes
 - [2026/07](./archive/2026/07/) - 1 notes
 
-Hot set: 10. Archived: 8.
+Hot set: 10. Archived: 9.

@@ -354,8 +354,8 @@ export async function fetchAntigravityQuota(input: {
     fetchImpl,
     requestTimeoutMs
   });
-  const project = accountContext.googleProjectId ?? input.googleProjectId ?? null;
-  const basePayload: Record<string, string> = project ? { project } : {};
+  const project = accountContext.googleProjectId ?? input.googleProjectId ?? "aicode-consumers";
+  const basePayload: Record<string, string> = { project };
   let lastError: Error | null = null;
   let retrieveResult: AntigravityQuotaResult | null = null;
   let collectedModels: ModelQuota[] = [];

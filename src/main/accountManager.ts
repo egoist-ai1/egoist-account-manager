@@ -63,9 +63,11 @@ import {
   type AntigravityProfileBackupManifest
 } from "./services/antigravityProfileBackup.js";
 import {
+  fetchAntigravityGoogleAccountContext,
   fetchAntigravityGoogleUserInfo,
   refreshAntigravityGoogleAccessToken,
   resolveAntigravityOAuthClient,
+  type AntigravityGoogleAccountContext,
   type AntigravityGoogleOAuthResult
 } from "./services/antigravityGoogleAuthService.js";
 import type {
@@ -76,7 +78,7 @@ import type {
 import { readAntigravityCredentialStorePayload } from "./services/antigravityCredentialStore.js";
 import type { AntigravityRestartResult } from "./services/antigravityProcessService.js";
 import { restartAntigravityIntegration } from "./services/antigravityProcessService.js";
-import { fetchAntigravityQuota } from "./services/antigravityQuotaService.js";
+import { fetchAntigravityQuota, type AntigravityQuotaResult } from "./services/antigravityQuotaService.js";
 import {
   parseAntigravityCredentialPayload,
   readAntigravityExternalCredentialPayloads,
@@ -120,6 +122,7 @@ export interface AccountManagerDependencies {
   ) => AntigravityCredentialStoreWriteResult;
   fetchAntigravityQuota?: typeof fetchAntigravityQuota;
   fetchAntigravityGoogleUserInfo?: typeof fetchAntigravityGoogleUserInfo;
+  fetchAntigravityGoogleAccountContext?: typeof fetchAntigravityGoogleAccountContext;
   restartAntigravityIntegration?: typeof restartAntigravityIntegration;
   desktopLifecycle?: Pick<WindowsDesktopLifecycleService, "quiesce" | "launchAndWaitReady">
     & Partial<Pick<WindowsDesktopLifecycleService, "getDiagnostics">>;
@@ -2422,6 +2425,53 @@ export class AccountManager extends EventEmitter {
     return { imported: true, account: saved ?? account, reason: "Активный профиль Codex успешно импортирован." };
   }
 
+  async importCurrentAntigravitySession(): Promise<{ imported: boolean; account: ManagedAccount | null; reason: string }> {
+    const credentialStoreReader = this.dependencies.readAntigravityCredentialStorePayload ?? readAntigravityCredentialStorePayload;
+    const credentialStorePayload = credentialStoreReader(process.platform);
+    if (!credentialStorePayload || !credentialStorePayload.payload) {
+      return {
+        imported: false,
+        account: null,
+        reason: "Сессия Antigravity не обнаружена в Windows Credential Manager (цель gemini:antigravity). Войдите в Antigravity IDE или используйте Google OAuth."
+      };
+    }
+
+    const parsed = parseAntigravityCredentialPayload({
+      payload: credentialStorePayload.payload,
+      source: credentialStorePayload.strategy
+    });
+
+    if (parsed.length === 0) {
+      return {
+        imported: false,
+        account: null,
+        reason: "Не удалось прочитать действительный токен Antigravity из диспетчера учётных данных."
+      };
+    }
+
+    const batch = await this.importParsedAntigravityCredentials(parsed);
+    const firstImported = batch.imported[0];
+    if (firstImported) {
+      const account = this.store.get(firstImported.accountId);
+      if (account) {
+        this.store.setActive(account.id);
+        this.emit("accounts-updated");
+        return {
+          imported: true,
+          account,
+          reason: `Сессия Antigravity (${account.email}) успешно подхвачена и активирована.`
+        };
+      }
+    }
+
+    const failureReason = batch.failures[0]?.reason ?? "Неизвестная ошибка импорта сессии Antigravity";
+    return {
+      imported: false,
+      account: null,
+      reason: `Не удалось авторизовать сессию Antigravity: ${failureReason}`
+    };
+  }
+
   async importAntigravityFromIde(pathInput: AntigravityPathInput = {}): Promise<AntigravityImportResult> {
     const status = getAntigravityProfileStatus(pathInput);
     if (!status.detected) {
@@ -3081,13 +3131,17 @@ export class AccountManager extends EventEmitter {
     }
 
     const now = Math.floor(Date.now() / 1000);
+    const client = resolveAntigravityOAuthClient({});
+    const clientId = googleOAuth.oauthClientId || client.clientId;
+    const clientSecret = client.clientSecret;
+
     if (!googleOAuth.expiresAt || googleOAuth.expiresAt <= now + antigravityRefreshSkewSeconds) {
       if (!googleOAuth.refreshToken) {
         throw new Error("Antigravity Google access token expired and no refresh token is available. Reauthorize through Google Sign-In.");
       }
       const refreshed = await refreshAntigravityGoogleAccessToken({
-        clientId: googleOAuth.oauthClientId,
-        clientSecret: null,
+        clientId,
+        clientSecret,
         refreshToken: googleOAuth.refreshToken
       });
       googleOAuth.accessToken = refreshed.accessToken;
@@ -3108,11 +3162,35 @@ export class AccountManager extends EventEmitter {
     }
 
     const quotaFetcher = this.dependencies.fetchAntigravityQuota ?? fetchAntigravityQuota;
-    const quota = await quotaFetcher({
-      accessToken: googleOAuth.accessToken,
-      googleProjectId: googleOAuth.googleProjectId ?? account.antigravity?.googleProjectId,
-      requestTimeoutMs: 10_000
-    });
+    const targetProject = googleOAuth.googleProjectId ?? account.antigravity?.googleProjectId ?? "aicode-consumers";
+    let quota: AntigravityQuotaResult;
+    try {
+      quota = await quotaFetcher({
+        accessToken: googleOAuth.accessToken,
+        googleProjectId: targetProject,
+        requestTimeoutMs: 15_000
+      });
+    } catch (firstError) {
+      const errStr = String(firstError);
+      if (errStr.includes("401") && googleOAuth.refreshToken) {
+        const refreshed = await refreshAntigravityGoogleAccessToken({
+          clientId,
+          clientSecret,
+          refreshToken: googleOAuth.refreshToken
+        });
+        googleOAuth.accessToken = refreshed.accessToken;
+        googleOAuth.refreshToken = refreshed.refreshToken ?? googleOAuth.refreshToken;
+        googleOAuth.expiresAt = refreshed.expiresAt ?? googleOAuth.expiresAt;
+        this.store.updateEncryptedAuthJson(account.id, this.vault.encryptUtf8(JSON.stringify(record)));
+        quota = await quotaFetcher({
+          accessToken: googleOAuth.accessToken,
+          googleProjectId: targetProject,
+          requestTimeoutMs: 15_000
+        });
+      } else {
+        throw firstError;
+      }
+    }
     let vaultChanged = false;
     if (quota.accountContext.googleProjectId && quota.accountContext.googleProjectId !== googleOAuth.googleProjectId) {
       googleOAuth.googleProjectId = quota.accountContext.googleProjectId;
@@ -3177,13 +3255,25 @@ export class AccountManager extends EventEmitter {
           accessToken: refreshed.accessToken,
           requestTimeoutMs: 15_000
         });
-        const accountContext = {
-          googleProjectId: credential.googleProjectId ?? null,
-          tier: "unknown" as const,
-          tierId: null,
-          source: credential.googleProjectId ? "code_assist" as const : "unavailable" as const,
-          errorReason: credential.googleProjectId ? null : "Imported from token/JSON; Code Assist quota refresh is pending."
-        };
+        const ctxFetcher = this.dependencies.fetchAntigravityGoogleAccountContext ?? fetchAntigravityGoogleAccountContext;
+        let accountContext: AntigravityGoogleAccountContext;
+        try {
+          accountContext = await ctxFetcher({
+            accessToken: refreshed.accessToken,
+            requestTimeoutMs: 15_000
+          });
+        } catch {
+          accountContext = {
+            googleProjectId: credential.googleProjectId ?? "aicode-consumers",
+            tier: "free",
+            tierId: "free-tier",
+            source: "code_assist",
+            errorReason: null
+          };
+        }
+        if (!accountContext.googleProjectId) {
+          accountContext.googleProjectId = "aicode-consumers";
+        }
         const result = await this.importAntigravityGoogleOAuth({
           clientId: client.clientId,
           redirectUri: credential.source,
@@ -3202,6 +3292,14 @@ export class AccountManager extends EventEmitter {
           }
         }, pathInput);
         if (result.account) {
+          const stored = this.store.get(result.account.id);
+          if (stored) {
+            try {
+              await this.refreshAntigravityGoogleQuota(stored);
+            } catch (probeError) {
+              this.emitLog(`Initial Antigravity quota probe after credential import: ${probeError instanceof Error ? probeError.message : String(probeError)}`);
+            }
+          }
           imported.push({
             accountId: result.account.id,
             email: result.account.email,

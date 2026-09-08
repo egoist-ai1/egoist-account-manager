@@ -59,6 +59,7 @@ const api: AppApi = {
   importAntigravityFromLocalFiles: () => ipcRenderer.invoke("antigravity:credentials:importFiles"),
   importAntigravityFromExternalSource: (source) => ipcRenderer.invoke("antigravity:credentials:importExternal", { source }),
   importCurrentCodexSession: () => ipcRenderer.invoke("accounts:importCurrentCodexSession"),
+  importCurrentAntigravitySession: () => ipcRenderer.invoke("accounts:importCurrentAntigravitySession"),
   detectLocalSessions: () => ipcRenderer.invoke("accounts:detectLocalSessions"),
   onAuthEvent: (callback: (event: AuthEvent) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: AuthEvent) => callback(payload);

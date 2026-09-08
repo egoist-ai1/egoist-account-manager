@@ -336,7 +336,8 @@ export function OverviewPage({
   onRefresh,
   onSwitch,
   onOpenAccounts,
-  onOpenActivity
+  onOpenActivity,
+  onPickupSession
 }: {
   accounts: ManagedAccount[];
   diagnostics: AppDiagnostics | null;
@@ -351,6 +352,7 @@ export function OverviewPage({
   onSwitch: (accountId: string) => void;
   onOpenAccounts: () => void;
   onOpenActivity: () => void;
+  onPickupSession?: () => void;
 }) {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
   useEffect(() => {
@@ -453,10 +455,32 @@ export function OverviewPage({
               <div>
                 <h2>{isEnglish ? "Connect your first account" : "Подключите первый аккаунт"}</h2>
                 <p>{isEnglish ? "Google OAuth, browser, device code and API keys are supported." : "Доступны Google OAuth, браузер, device code и API-ключи."}</p>
+                {onPickupSession ? (
+                  <button
+                    className="button overview-empty-pickup-btn"
+                    disabled={busy !== null}
+                    onClick={onPickupSession}
+                    style={{ marginTop: "14px", display: "inline-flex", alignItems: "center", gap: "8px" }}
+                  >
+                    <Zap />
+                    <span>{isEnglish ? "Pickup active session from PC" : "Подхватить активную сессию с этого ПК"}</span>
+                  </button>
+                ) : null}
               </div>
             </div>
           )}
           <div className="overview-actions">
+            {onPickupSession ? (
+              <button
+                className="button secondary overview-pickup-action-btn"
+                disabled={busy !== null}
+                onClick={onPickupSession}
+                title={isEnglish ? "Pickup active session from this PC" : "Подхватить активную сессию с этого ПК"}
+              >
+                <Zap style={{ color: "#a855f7" }} />
+                <span>{isEnglish ? "Pickup session" : "Подхват с ПК"}</span>
+              </button>
+            ) : null}
             {active ? (
               <button className="button" onClick={onOpenAccounts}>
                 {isEnglish ? "Accounts" : "Аккаунты"}<ArrowRight />

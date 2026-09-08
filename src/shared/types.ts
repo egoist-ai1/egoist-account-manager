@@ -670,6 +670,7 @@ export interface AppApi {
   importAntigravityFromLocalFiles(): Promise<AntigravityCredentialBatchImportResult>;
   importAntigravityFromExternalSource(source: Exclude<AntigravityCredentialImportSource, "token_json" | "local_files">): Promise<AntigravityCredentialBatchImportResult>;
   importCurrentCodexSession(): Promise<{ imported: boolean; account: ManagedAccount | null; reason: string }>;
+  importCurrentAntigravitySession(): Promise<{ imported: boolean; account: ManagedAccount | null; reason: string }>;
   detectLocalSessions(): Promise<{ codex: boolean; codexEmail: string | null; antigravity: boolean }>;
   onAuthEvent(callback: (event: AuthEvent) => void): () => void;
   onAccountsUpdated(callback: () => void): () => void;

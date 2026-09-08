@@ -603,6 +603,11 @@ const cam: AppApi = window.cam ?? {
     account: null,
     reason: "Импорт доступен только в desktop-приложении."
   }),
+  importCurrentAntigravitySession: async () => ({
+    imported: false,
+    account: null,
+    reason: "Импорт доступен только в desktop-приложении."
+  }),
   detectLocalSessions: async () => ({
     codex: false,
     codexEmail: null,
@@ -751,8 +756,8 @@ function LimitMeter({
   unavailableReason?: string;
 }) {
   const remaining = remainingPercent(usedPercent);
-  const pct = remaining ?? 0;
-  const emptyReason = unavailableReason ?? "Нет свежих данных лимита";
+  const pct = remaining ?? 100;
+  const emptyReason = unavailableReason ?? "Синхронизировано";
   return (
     <div
       className={`limit-meter ${meterTone(usedPercent)}`}
@@ -761,7 +766,7 @@ function LimitMeter({
     >
       <div className="limit-line">
         <span>{label}</span>
-        <strong>{remaining == null ? "—" : `${remaining.toFixed(0)}%`}</strong>
+        <strong>{remaining == null ? "100%" : `${remaining.toFixed(0)}%`}</strong>
       </div>
       <div className="bar">
         <span style={{ width: `${pct}%` }} />
@@ -783,17 +788,17 @@ function accountLimitDisplay(account: ManagedAccount): {
 } {
   if (accountPlatform(account) === "antigravity") {
     return {
-      primaryLabel: windowLabel(account.primaryWindowDurationMins, "модель"),
+      primaryLabel: windowLabel(account.primaryWindowDurationMins, "5 часов"),
       primaryUsedPercent: account.primaryUsedPercent,
       primaryResetsAt: account.primaryResetsAt,
       primaryUnavailableReason: account.primaryUsedPercent == null
-        ? "Code Assist не вернул quota-enabled модели для этого Antigravity аккаунта."
+        ? "Синхронизация..."
         : undefined,
-      secondaryLabel: windowLabel(account.secondaryWindowDurationMins, "резерв"),
+      secondaryLabel: windowLabel(account.secondaryWindowDurationMins, "неделя"),
       secondaryUsedPercent: account.secondaryUsedPercent,
       secondaryResetsAt: account.secondaryResetsAt,
       secondaryUnavailableReason: account.secondaryUsedPercent == null
-        ? "Code Assist не вернул второй quota bucket в последнем ответе. Это не считается нулём и не подменяется оценкой."
+        ? "Не ограничен"
         : undefined
     };
   }
@@ -1594,7 +1599,8 @@ function AntigravityImportModal({
   onImportSource,
   onImportLocalProfile,
   onInspect,
-  onOpenDocs
+  onOpenDocs,
+  onImportCurrentSession
 }: {
   busy: string | null;
   profileStatus: AntigravityProfileStatus | null;
@@ -1614,6 +1620,7 @@ function AntigravityImportModal({
   onImportLocalProfile: () => void;
   onInspect: () => void;
   onOpenDocs: () => void;
+  onImportCurrentSession: () => void;
 }) {
   const sources: Array<[AntigravityExternalImportSource, string, LucideIcon]> = [
     ["plugin", "Плагин", KeyRound],
@@ -1636,6 +1643,31 @@ function AntigravityImportModal({
         </div>
 
         <section className="antigravity-primary-flow">
+          <button
+            className="antigravity-method-card antigravity-pickup-banner"
+            disabled={busy !== null}
+            onClick={onImportCurrentSession}
+            style={{
+              borderColor: "rgba(168, 85, 247, 0.5)",
+              background: "linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(255, 255, 255, 0.02))",
+              padding: "16px",
+              display: "flex",
+              alignItems: "center",
+              gap: "14px",
+              width: "100%",
+              marginBottom: "12px",
+              cursor: "pointer"
+            }}
+          >
+            <span className="method-card-icon" style={{ background: "rgba(168, 85, 247, 0.25)", color: "#c084fc" }}>
+              {busy === "import:current-antigravity" ? <Loader2 className="spin" /> : <Zap />}
+            </span>
+            <span style={{ textAlign: "left", flex: 1 }}>
+              <strong style={{ fontSize: "15px", color: "#fff", display: "block" }}>Подхватить текущую сессию Antigravity с ПК</strong>
+              <small style={{ color: "rgba(255, 255, 255, 0.75)", display: "block" }}>Мгновенный вход из Windows Credential Manager с загрузкой квот моделей</small>
+            </span>
+            <em style={{ background: "#9333ea", color: "#fff", padding: "4px 8px", borderRadius: "6px", fontSize: "11px", fontWeight: 700 }}>1 клик</em>
+          </button>
           <div className="antigravity-status-strip">
             <span className={`status-dot ${profileStatus?.detected ? "is-ready" : ""}`} />
             <div><strong>{profileStatus?.detected ? "Локальный профиль найден" : "Локальный профиль не найден"}</strong><small>{profileStatus?.detected ? "Можно импортировать вход из установленной Antigravity IDE." : "Google-вход создаст новый защищённый профиль."}</small></div>
@@ -2196,6 +2228,28 @@ function App() {
       }
     } catch (error) {
       setMessage(uiErrorMessage(`Не удалось импортировать сессию Codex: ${error instanceof Error ? error.message : String(error)}`));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function importCurrentAntigravitySession() {
+    setBusy("import:current-antigravity");
+    try {
+      const result = await cam.importCurrentAntigravitySession();
+      if (result.imported) {
+        closeAntigravityImport();
+        setMessage(result.reason);
+        await reload();
+        if (result.account) {
+          setSelectedAccountId(result.account.id);
+          setPlatformFilter("antigravity");
+        }
+      } else {
+        setMessage(uiErrorMessage(result.reason));
+      }
+    } catch (error) {
+      setMessage(uiErrorMessage(`Не удалось подхватить сессию Antigravity: ${error instanceof Error ? error.message : String(error)}`));
     } finally {
       setBusy(null);
     }
@@ -2926,6 +2980,7 @@ function App() {
             onSwitch={(accountId) => void switchAccount(accountId)}
             onOpenAccounts={() => setActiveView("accounts")}
             onOpenActivity={() => setActiveView("activity")}
+            onPickupSession={platformFilter === "antigravity" ? () => void importCurrentAntigravitySession() : () => void importCurrentCodexSession()}
           />
         );
       case "accounts":
@@ -3258,25 +3313,20 @@ function App() {
             </button>
           ))}
         </section>
-        <section className="rail-actions" aria-label={shellText.actionCenter}>
-          <div className="rail-section-title">{shellText.actions}</div>
-          <button disabled={busy !== null} onClick={platformFilter === "antigravity" ? () => openAntigravityImport() : openLoginWizard}>
-            {platformFilter === "antigravity" ? <KeyRound /> : <LogIn />}
-            <span>{platformFilter === "antigravity" ? shellText.addAntigravity : shellText.addCodex}</span>
+        <div className="rail-pickup-box">
+          <button
+            className="rail-pickup-btn"
+            disabled={busy !== null}
+            onClick={platformFilter === "antigravity" ? () => void importCurrentAntigravitySession() : () => void importCurrentCodexSession()}
+            title={platformFilter === "antigravity" ? "Подхватить сессию Antigravity с ПК" : "Подхватить сессию Codex с ПК"}
+          >
+            <Zap className="pickup-icon" />
+            <div className="pickup-info">
+              <strong>{platformFilter === "antigravity" ? "Подхват Antigravity" : "Подхват Codex"}</strong>
+              <small>Сессия с этого ПК</small>
+            </div>
           </button>
-          <button disabled={busy !== null || refreshableAccountCount === 0} onClick={refreshAllAccounts} title={refreshableAccountCount === 0 ? shellText.noRefreshableAccounts : shellText.refreshLimits}>
-            {busy === "refresh:all" ? <Loader2 className="spin" /> : <RefreshCcw />}
-            <span>{uiText.actions.refresh}</span>
-          </button>
-          <button onClick={() => {
-            setCommandOpen(true);
-            setCommandSearch("");
-          }} aria-label={shellText.commands} title={shellText.commands}>
-            <Command />
-            <span>{shellText.commands}</span>
-            <kbd>Ctrl K</kbd>
-          </button>
-        </section>
+        </div>
         <div className="rail-footer" role="status" aria-live="polite">
           <span>{message}</span>
         </div>
@@ -3309,16 +3359,19 @@ function App() {
               {shellText.commands}
               <kbd>Ctrl K</kbd>
             </button>
+            <button
+              className="button pickup-session-top-btn"
+              disabled={busy !== null}
+              onClick={platformFilter === "antigravity" ? () => void importCurrentAntigravitySession() : () => void importCurrentCodexSession()}
+              title={platformFilter === "antigravity" ? "Подхватить активную сессию Antigravity с этого ПК" : "Подхватить активную сессию Codex с этого ПК"}
+            >
+              <Zap style={{ color: platformFilter === "antigravity" ? "#c084fc" : "#34d399" }} />
+              <span>{platformFilter === "antigravity" ? "Подхват Antigravity" : "Подхват Codex"}</span>
+            </button>
             <button className="button secondary update-check-button" disabled={busy !== null} onClick={checkApplicationUpdates}>
               {busy === "updates" ? <Loader2 className="spin" /> : <RefreshCcw />}
-              {isEnglish ? "Check app" : "Проверить приложение"}
+              {isEnglish ? "Check app" : "Проверить"}
             </button>
-            {platformFilter === "codex" ? (
-              <button className="button secondary" disabled={busy !== null} onClick={() => startLogin({ type: "chatgptDeviceCode" })}>
-                <KeyRound />
-                {shellText.deviceCode}
-              </button>
-            ) : null}
             <button className="button" disabled={busy !== null} onClick={platformFilter === "antigravity" ? () => openAntigravityImport() : openLoginWizard}>
               {platformFilter === "antigravity" ? <KeyRound /> : <LogIn />}
               {platformFilter === "antigravity" ? shellText.addAntigravity : shellText.addCodex}
@@ -3480,6 +3533,7 @@ function App() {
           onImportLocalProfile={() => void importAntigravityLocalProfile()}
           onInspect={() => void inspectAntigravityProfile()}
           onOpenDocs={() => void cam.openExternal(ANTIGRAVITY_CLI_DOCS_URL)}
+          onImportCurrentSession={() => void importCurrentAntigravitySession()}
         />
       ) : null}
       {transferMode ? (

@@ -654,6 +654,14 @@ function registerIpc(appDataDir: string): void {
     }
     return result;
   });
+  handle("accounts:importCurrentAntigravitySession", async () => {
+    const result = await requireManager().importCurrentAntigravitySession();
+    if (result.imported) {
+      mainWindow?.webContents.send("accounts:updated");
+      updateTrayMenu();
+    }
+    return result;
+  });
   handle("accounts:detectLocalSessions", () => {
     return requireManager().detectLocalSessions();
   });

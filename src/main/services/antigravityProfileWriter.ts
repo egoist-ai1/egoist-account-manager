@@ -113,6 +113,14 @@ export function writePreparedAntigravityProfile(input: AntigravityProfileWriteIn
   try {
     writeStateItems(paths.stateDbPath, input.stateItems);
     deleteStateItems(paths.stateDbPath, input.stateDeleteKeys ?? []);
+    if (paths.secondaryStateDbPath && fs.existsSync(path.dirname(paths.secondaryStateDbPath))) {
+      try {
+        writeStateItems(paths.secondaryStateDbPath, input.stateItems);
+        deleteStateItems(paths.secondaryStateDbPath, input.stateDeleteKeys ?? []);
+      } catch {
+        // Best-effort secondary sync; primary state.vscdb is already written.
+      }
+    }
     input.hooks?.afterStateWrite?.();
     const writtenStorageKeys = writeStoragePatch(paths.storageJsonPath, input.storagePatch);
     const machineIdWritten = input.machineId !== undefined;

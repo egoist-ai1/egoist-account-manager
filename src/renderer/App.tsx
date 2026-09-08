@@ -1842,10 +1842,11 @@ function App() {
     const antigravity = accounts.filter((account) => accountPlatform(account) === "antigravity").length;
     return { active, low, avg, usable, stale, codex, antigravity };
   }, [accounts]);
-  const overviewAccounts = useMemo(
-    () => accounts.filter((account) => accountPlatform(account) === "codex"),
-    [accounts]
-  );
+  const overviewAccounts = useMemo(() => {
+    if (platformFilter === "all") return accounts;
+    const scoped = accounts.filter((account) => accountPlatform(account) === platformFilter);
+    return scoped.length > 0 ? scoped : accounts;
+  }, [accounts, platformFilter]);
 
   const smartRecommendation = useMemo(() => selectSmartAccount(accounts, workspaceBinding), [accounts, workspaceBinding]);
   const bestAccount = useMemo(() => {
@@ -1906,9 +1907,13 @@ function App() {
       id: "antigravity",
       label: "Antigravity",
       count: stats.antigravity,
-      state: isEnglish ? "in development" : "в разработке",
-      tone: "muted",
-      available: false
+      state: platformFilter === "antigravity"
+        ? (isEnglish ? "selected" : "выбран")
+        : antigravityProfileStatus?.detected || stats.antigravity > 0
+          ? (isEnglish ? "ready" : "готов")
+          : (isEnglish ? "login needed" : "нужен вход"),
+      tone: antigravityProfileStatus?.detected || stats.antigravity > 0 ? "ready" : "warn",
+      available: true
     }
   ];
 
@@ -2817,7 +2822,11 @@ function App() {
       return;
     }
     if (command.action === "login") {
-      openLoginWizard();
+      if (command.platform === "antigravity" || (platformFilter === "antigravity" && !command.platform)) {
+        openAntigravityImport();
+      } else {
+        openLoginWizard();
+      }
       return;
     }
     if (command.action === "refreshAll") {
@@ -2858,7 +2867,7 @@ function App() {
             smartSwitchThresholdPercent={settingsData?.smartSwitchThresholdPercent ?? 10}
             isEnglish={isEnglish}
             displayEmail={displayEmail}
-            onAdd={openLoginWizard}
+            onAdd={platformFilter === "antigravity" ? () => openAntigravityImport() : openLoginWizard}
             onRefresh={() => void refreshAllAccounts()}
             onSwitch={(accountId) => void switchAccount(accountId)}
             onOpenAccounts={() => setActiveView("accounts")}

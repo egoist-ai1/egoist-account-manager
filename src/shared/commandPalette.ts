@@ -45,8 +45,7 @@ const navigation: Array<Pick<CommandPaletteCommand, "id" | "title" | "subtitle" 
 ];
 
 function isSwitchTarget(account: ManagedAccount): boolean {
-  return account.platform === "codex"
-    && !account.isActive
+  return !account.isActive
     && !account.archived
     && account.status !== "limited"
     && account.status !== "error";
@@ -76,8 +75,18 @@ export function buildCommandPalette(input: BuildCommandPaletteInput): CommandPal
       group: "Аккаунты",
       title: "Добавить ChatGPT-профиль",
       subtitle: "Запустить вход через браузер или код устройства",
-      keywords: ["добавить", "логин", "chatgpt", "device"],
-      action: "login"
+      keywords: ["добавить", "логин", "chatgpt", "device", "codex"],
+      action: "login",
+      platform: "codex"
+    },
+    {
+      id: "account.login.antigravity",
+      group: "Аккаунты",
+      title: "Добавить профиль Antigravity",
+      subtitle: "Вход через Google OAuth или импорт из IDE",
+      keywords: ["добавить", "antigravity", "google", "oauth", "import"],
+      action: "login",
+      platform: "antigravity"
     },
     {
       id: "accounts.refreshAll",
@@ -102,12 +111,11 @@ export function buildCommandPalette(input: BuildCommandPaletteInput): CommandPal
       id: "platform.filter.antigravity",
       group: "Платформы",
       title: "Показать профили Antigravity",
-      subtitle: "В разработке · основной режим сейчас Codex",
+      subtitle: "Открыть список профилей с фильтром по Antigravity",
       keywords: ["antigravity", "платформа", "профили", "фильтр"],
       action: "filterPlatform",
       view: "accounts",
-      platform: "antigravity",
-      disabled: true
+      platform: "antigravity"
     },
     {
       id: "platform.filter.codex",
@@ -123,12 +131,11 @@ export function buildCommandPalette(input: BuildCommandPaletteInput): CommandPal
       id: "diagnostics.antigravity",
       group: "Диагностика",
       title: "Диагностика Antigravity",
-      subtitle: "В разработке · пока недоступно",
+      subtitle: "Проверить состояние профиля и хранилищ Antigravity",
       keywords: ["antigravity", "state.vscdb", "storage", "machineid", "диагностика"],
       action: "filterPlatform",
       view: "accounts",
-      platform: "antigravity",
-      disabled: true
+      platform: "antigravity"
     },
     {
       id: "accounts.export",

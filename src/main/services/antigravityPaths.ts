@@ -14,6 +14,7 @@ export interface AntigravityPaths {
   userDataDir: string;
   globalStorageDir: string;
   stateDbPath: string;
+  secondaryStateDbPath?: string | null;
   storageJsonPath: string;
   machineIdPath: string;
   appStoragePath: string;
@@ -76,11 +77,18 @@ export function resolveAntigravityPaths(input: AntigravityPathInput = {}): Antig
     machineIdPath = installationIdPath;
   }
 
+  const secondaryStateDbPath = profileKind === "vscode_ide" && (fs.existsSync(legacyStateDbPath) || fs.existsSync(platformDirs.hub))
+    ? legacyStateDbPath
+    : profileKind === "legacy_vscode_ide" && (fs.existsSync(currentStateDbPath) || fs.existsSync(platformDirs.currentIde))
+      ? currentStateDbPath
+      : null;
+
   return {
     profileKind,
     userDataDir,
     globalStorageDir,
     stateDbPath: path.join(globalStorageDir, "state.vscdb"),
+    secondaryStateDbPath,
     storageJsonPath,
     machineIdPath,
     appStoragePath,

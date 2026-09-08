@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -24,6 +25,28 @@ import {
 } from "../../../shared/providerAdapter";
 import { buildQuotaFreshness, hasCurrentQuotaRefreshFailure } from "../../../shared/quotaFreshness";
 import { rankSwitchCandidates, type RankedSwitchCandidate } from "../../../shared/smartSelection";
+
+export function formatLiveCountdown(secondsRemaining: number | null, isEnglish: boolean): string | null {
+  if (secondsRemaining === null || secondsRemaining <= 0) return null;
+  const s = Math.floor(secondsRemaining);
+  if (s < 60) {
+    return isEnglish ? `${s}s` : `${s} сек`;
+  }
+  if (s < 3600) {
+    const m = Math.floor(s / 60);
+    const remS = s % 60;
+    return isEnglish ? `${m}m ${remS}s` : `${m} мин ${remS} сек`;
+  }
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const remS = s % 60;
+  if (s < 86400) {
+    return isEnglish ? `${h}h ${m}m ${remS}s` : `${h} ч ${m} мин ${remS} сек`;
+  }
+  const d = Math.floor(s / 86400);
+  const remH = Math.floor((s % 86400) / 3600);
+  return isEnglish ? `${d}d ${remH}h` : `${d} д ${remH} ч`;
+}
 
 function remaining(usedPercent: number | null): number | null {
   return usedPercent === null ? null : Math.max(0, Math.min(100, 100 - usedPercent));
@@ -204,17 +227,27 @@ function candidateStateLabel(candidate: RankedSwitchCandidate, isEnglish: boolea
 }
 
 function sessionCopy(account: ManagedAccount, isEnglish: boolean): { title: string; body: string; tone: string } {
+  const isAntigravity = account.platform === "antigravity";
+  const platformName = isAntigravity ? "Antigravity" : "Codex";
   if (account.credentialState === "ready") {
     return {
       title: isEnglish ? "Encrypted profile is saved" : "Зашифрованный профиль сохранён",
-      body: isEnglish ? "The current session is copied to protected local storage every 30 seconds." : "Актуальная сессия сохраняется в локальное защищённое хранилище каждые 30 секунд.",
+      body: isEnglish
+        ? (isAntigravity
+          ? "The current Antigravity session is protected in the DPAPI vault and synced with Windows Credential Manager."
+          : "The current session is copied to protected local storage every 30 seconds.")
+        : (isAntigravity
+          ? "Актуальная сессия Antigravity защищена в хранилище DPAPI и синхронизирована с Windows Credential Manager."
+          : "Актуальная сессия сохраняется в локальное защищённое хранилище каждые 30 секунд."),
       tone: "ready"
     };
   }
   if (account.credentialState === "needs_reauth") {
     return {
       title: isEnglish ? "Saved profile retained" : "Сохранённый профиль не потерян",
-      body: isEnglish ? "Codex requires sign-in again; the encrypted account record remains available." : "Codex запросил повторный вход, но зашифрованная запись аккаунта осталась в менеджере.",
+      body: isEnglish
+        ? `${platformName} requires sign-in again; the encrypted account record remains available.`
+        : `${platformName} запросил повторный вход, но зашифрованная запись аккаунта осталась в менеджере.`,
       tone: "warning"
     };
   }
@@ -258,6 +291,8 @@ function quotaCard(
   const ariaLabel = value === null
     ? `${label}: ${isEnglish ? "data unavailable" : "данные недоступны"}`
     : `${label}: ${valueLabel} ${isEnglish ? "remaining" : "доступно"}`;
+  const secondsToReset = resetAt && resetAt > now ? resetAt - now : null;
+  const liveCountdown = formatLiveCountdown(secondsToReset, isEnglish);
   return (
     <article className={`quota-card ${quotaTone(value)}`} key={id}>
       <header className="quota-card-head">
@@ -280,6 +315,7 @@ function quotaCard(
         <div className="quota-copy">
           <span>{isEnglish ? "Next reset" : "Следующий сброс"}</span>
           <strong>{formatQuotaReset(resetAt, now, isEnglish)}</strong>
+          {liveCountdown ? <small className="quota-live-countdown">{liveCountdown}</small> : null}
         </div>
       </div>
       <div className="quota-meter" aria-hidden="true"><i style={{ width: `${value ?? 0}%` }} /></div>
@@ -316,15 +352,36 @@ export function OverviewPage({
   onOpenAccounts: () => void;
   onOpenActivity: () => void;
 }) {
-  const now = Math.floor(Date.now() / 1000);
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNow(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   const active = accounts.find((account) => account.isActive) ?? null;
-  const fiveHourRemaining = remaining(active?.fiveHourUsedPercent ?? null);
-  const weeklyRemaining = remaining(active?.weeklyUsedPercent ?? null);
+  const isAntigravity = active?.platform === "antigravity";
+  const primaryRemaining = isAntigravity
+    ? remaining(active?.primaryUsedPercent ?? null)
+    : remaining(active?.fiveHourUsedPercent ?? null);
+  const secondaryRemaining = isAntigravity
+    ? remaining(active?.secondaryUsedPercent ?? null)
+    : remaining(active?.weeklyUsedPercent ?? null);
+  const primaryLabel = isAntigravity
+    ? (isEnglish ? "Active model" : "Активная модель")
+    : (isEnglish ? "5 hours" : "5 часов");
+  const secondaryLabel = isAntigravity
+    ? (isEnglish ? "Quota reserve" : "Резерв квоты")
+    : (isEnglish ? "Week" : "Неделя");
+  const primaryResetAt = isAntigravity ? (active?.primaryResetsAt ?? null) : (active?.fiveHourResetsAt ?? null);
+  const secondaryResetAt = isAntigravity ? (active?.secondaryResetsAt ?? null) : (active?.weeklyResetsAt ?? null);
+
   const desktop = diagnostics?.desktopLifecycle;
-  const protocolReady = diagnostics?.codexCapabilities?.protocol.compatible === true;
-  const identityReady = Boolean(diagnostics?.codexCapabilities?.identity.authMode);
-  const credentialStoreReady = diagnostics?.credentialStore?.managerCompatible === true;
-  const environmentReady = desktop?.status === "ready" || desktop?.status === "running";
+  const protocolReady = isAntigravity ? true : diagnostics?.codexCapabilities?.protocol.compatible === true;
+  const identityReady = isAntigravity ? Boolean(active?.id) : Boolean(diagnostics?.codexCapabilities?.identity.authMode);
+  const credentialStoreReady = isAntigravity ? true : diagnostics?.credentialStore?.managerCompatible === true;
+  const environmentReady = isAntigravity ? true : (desktop?.status === "ready" || desktop?.status === "running");
   const switchReady = environmentReady && protocolReady && credentialStoreReady && (accounts.length === 0 || identityReady);
   const transactionNeedsAttention = latestTransaction?.status === "recovery_required" || latestTransaction?.status === "failed";
   const activeSession = active ? sessionCopy(active, isEnglish) : null;
@@ -341,7 +398,7 @@ export function OverviewPage({
   const switchCandidates = rankSwitchCandidates(accounts, { now, staleAfterSeconds: 15 * 60 });
   const nextCandidate = switchCandidates.find((candidate) => candidate.state === "ready") ?? null;
   const visibleCandidates = switchCandidates.slice(0, 3);
-  const activeKnownRemaining = [fiveHourRemaining, weeklyRemaining].filter((value): value is number => value !== null);
+  const activeKnownRemaining = [primaryRemaining, secondaryRemaining].filter((value): value is number => value !== null);
   const activeMinimumRemaining = activeKnownRemaining.length ? Math.min(...activeKnownRemaining) : null;
   const threshold = Math.max(5, Math.min(50, Math.round(smartSwitchThresholdPercent)));
   const activeNearThreshold = activeMinimumRemaining !== null && activeMinimumRemaining <= threshold;
@@ -351,8 +408,10 @@ export function OverviewPage({
   const transactionDuration = latestTransaction
     ? Math.max(0, (latestTransaction.completedAt ?? latestTransaction.updatedAt) - latestTransaction.createdAt)
     : null;
-  const resetPlatform = active?.platform ?? "codex";
+  const resetPlatform = active?.platform ?? (accounts[0]?.platform ?? "codex");
   const nearestReset = selectNearestQuotaReset(accounts, now, resetPlatform);
+  const nearestResetSeconds = nearestReset?.resetAt && nearestReset.resetAt > now ? nearestReset.resetAt - now : null;
+  const nearestLiveCountdown = formatLiveCountdown(nearestResetSeconds, isEnglish);
 
   return (
     <div className="v3-page overview-page overview-v304 overview-v306">
@@ -371,6 +430,12 @@ export function OverviewPage({
                   <p>
                     <span>{displayEmail(active.email)}</span>
                     <span className="plan-chip">{formatPlan(active.planType)}</span>
+                    <span className="platform-chip">{active.platform === "antigravity" ? "Antigravity" : "Codex"}</span>
+                    {active.antigravity?.googleProjectId ? (
+                      <span className="gcp-chip" title={`GCP: ${active.antigravity.googleProjectId}`}>
+                        {active.antigravity.googleProjectId}
+                      </span>
+                    ) : null}
                   </p>
                 </div>
               </div>
@@ -386,8 +451,8 @@ export function OverviewPage({
             <div className="overview-empty-account">
               <KeyRound />
               <div>
-                <h2>{isEnglish ? "Connect your first Codex account" : "Подключите первый Codex-аккаунт"}</h2>
-                <p>{isEnglish ? "Browser, device code, API key and enterprise token are supported." : "Доступны браузер, device code, API key и enterprise token."}</p>
+                <h2>{isEnglish ? "Connect your first account" : "Подключите первый аккаунт"}</h2>
+                <p>{isEnglish ? "Google OAuth, browser, device code and API keys are supported." : "Доступны Google OAuth, браузер, device code и API-ключи."}</p>
               </div>
             </div>
           )}
@@ -417,14 +482,18 @@ export function OverviewPage({
             <span className={activeQuotaError ? "has-refresh-error" : ""}>{activeQuotaError ? (isEnglish ? "Refresh failed · showing saved snapshot" : "Сбой обновления · показан сохранённый снимок") : formatLastRefresh(active?.lastRefreshAt ?? null, now, isEnglish)}</span>
           </div>
           <div className="quota-grid">
-            {quotaCard("five-hour", isEnglish ? "5 hours" : "5 часов", fiveHourRemaining, active?.fiveHourResetsAt ?? null, now, isEnglish)}
-            {quotaCard("weekly", isEnglish ? "Week" : "Неделя", weeklyRemaining, active?.weeklyResetsAt ?? null, now, isEnglish)}
+            {quotaCard("primary-quota", primaryLabel, primaryRemaining, primaryResetAt, now, isEnglish)}
+            {quotaCard("secondary-quota", secondaryLabel, secondaryRemaining, secondaryResetAt, now, isEnglish)}
           </div>
           <div className="quota-refresh-line">
             <RefreshCcw />
             <span>{isEnglish ? "Background refresh" : "Фоновое обновление"}</span>
             <strong>{autoRefreshLabel}</strong>
-            <i>{activeQuotaError ? (isEnglish ? "last good snapshot kept" : "последний снимок сохранён") : (isEnglish ? "official app-server" : "официальный app-server")}</i>
+            <i>{activeQuotaError
+              ? (isEnglish ? "last good snapshot kept" : "последний снимок сохранён")
+              : isAntigravity
+                ? "Google Code Assist API"
+                : (isEnglish ? "official app-server" : "официальный app-server")}</i>
           </div>
         </div>
       </section>
@@ -488,7 +557,7 @@ export function OverviewPage({
               ))}
             </div>
           ) : (
-            <p className="continuation-empty">{isEnglish ? "A second protected Codex sign-in will appear here." : "Здесь появится второй защищённый вход Codex."}</p>
+            <p className="continuation-empty">{isEnglish ? "A second protected sign-in will appear here." : "Здесь появится второй защищённый вход."}</p>
           )}
 
           <div className="continuation-guardrails" aria-label={isEnglish ? "Switch safety policy" : "Правила безопасного переключения"}>
@@ -527,13 +596,13 @@ export function OverviewPage({
           <p>{latestTransaction?.errorMessage ?? (isEnglish ? "Every switch is verified and can be rolled back." : "Каждое переключение проверяется и допускает безопасный откат.")}</p>
           <div className="overview-operation-route" aria-label={isEnglish ? "Verified switch route" : "Проверенный маршрут переключения"}>
             <span><i>1</i><b>{isEnglish ? "Snapshot" : "Снимок"}</b><small>{isEnglish ? "DPAPI vault" : "DPAPI vault"}</small></span>
-            <span><i>2</i><b>{isEnglish ? "Restart" : "Перезапуск"}</b><small>{isEnglish ? "Exact Codex tree" : "Точное дерево Codex"}</small></span>
+            <span><i>2</i><b>{isEnglish ? "Restart" : "Перезапуск"}</b><small>{isAntigravity ? (isEnglish ? "Antigravity Process" : "Процесс Antigravity") : (isEnglish ? "Exact Codex tree" : "Точное дерево Codex")}</small></span>
             <span><i>3</i><b>{isEnglish ? "Identity" : "Личность"}</b><small>{isEnglish ? "Account verified" : "Аккаунт подтверждён"}</small></span>
           </div>
           <div className="overview-operation-signals" aria-label={isEnglish ? "Operational readiness" : "Готовность системы"}>
             <div className={savedProfiles === accounts.length ? "is-ready" : "is-warning"}><ShieldCheck /><span>{isEnglish ? "Saved sign-ins" : "Сохранённые входы"}</span><strong>{savedProfiles}/{accounts.length}</strong></div>
             <div className={freshProfiles === accounts.length ? "is-ready" : "is-warning"}><RefreshCcw /><span>{isEnglish ? "Fresh profiles" : "Свежие профили"}</span><strong>{freshProfiles}/{accounts.length}</strong></div>
-            <div className={protocolReady ? "is-ready" : "is-warning"}><CheckCircle2 /><span>App-server</span><strong>{protocolReady ? (isEnglish ? "Ready" : "Готов") : (isEnglish ? "Review" : "Проверить")}</strong></div>
+            <div className={protocolReady ? "is-ready" : "is-warning"}><CheckCircle2 /><span>{isAntigravity ? "Antigravity" : "App-server"}</span><strong>{protocolReady ? (isEnglish ? "Ready" : "Готов") : (isEnglish ? "Review" : "Проверить")}</strong></div>
             <div
               className={`overview-reset-signal ${nearestReset?.freshness === "fresh" ? "is-fresh" : "is-saved"}`}
               aria-label={`${isEnglish ? "Nearest reset across profiles" : "Ближайший сброс по профилям"}: ${formatQuotaResetMoment(nearestReset?.resetAt ?? null, isEnglish)}`}
@@ -548,6 +617,12 @@ export function OverviewPage({
               </span>
               <span className="reset-signal-time">
                 <strong>{formatQuotaReset(nearestReset?.resetAt ?? null, now, isEnglish)}</strong>
+                {nearestLiveCountdown && nearestReset?.resetAt ? (
+                  <span className="reset-countdown-live is-ticking" title={isEnglish ? "Live countdown" : "Точный таймер до сброса"}>
+                    <Clock3 />
+                    <span>{nearestLiveCountdown}</span>
+                  </span>
+                ) : null}
                 <small>{nearestReset
                   ? (isEnglish
                     ? `${nearestReset.freshness === "fresh" ? "fresh" : "saved"} · ${nearestReset.profilesWithReset} of ${nearestReset.protectedProfiles} profiles`
@@ -563,7 +638,7 @@ export function OverviewPage({
         </article>
       </section>
 
-      {!switchReady && diagnostics ? (
+      {!switchReady && diagnostics && !isAntigravity ? (
         <section className="overview-attention-bar">
           <TriangleAlert />
           <span>{!credentialStoreReady ? (isEnglish ? "Codex must use file credentials before switching." : "Для переключения Codex должен использовать файловое хранение входа.") : (isEnglish ? "One of the switch-chain checks needs attention." : "Одна из проверок цепочки переключения требует внимания.")}</span>

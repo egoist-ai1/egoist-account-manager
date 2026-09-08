@@ -21,8 +21,11 @@ export function resolveAntigravityExecutablePath(input: AntigravityRestartInput 
   if (input.exePath && fs.existsSync(input.exePath)) return input.exePath;
   const localAppData = input.env?.LOCALAPPDATA ?? process.env.LOCALAPPDATA;
   if (!localAppData) return null;
-  const candidate = path.join(localAppData, "Programs", "antigravity", "Antigravity.exe");
-  return fs.existsSync(candidate) ? candidate : null;
+  const candidates = [
+    path.join(localAppData, "Programs", "antigravity", "Antigravity.exe"),
+    path.join(localAppData, "Programs", "Antigravity IDE", "Antigravity IDE.exe")
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
 }
 
 function quotePowerShellSingle(value: string): string {
@@ -33,7 +36,7 @@ export function buildAntigravityWindowsRestartScript(exePath: string): string {
   return `
 $ErrorActionPreference = 'Stop'
 $exePath = ${quotePowerShellSingle(exePath)}
-Get-Process -Name 'Antigravity','language_server' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process -Name 'Antigravity','Antigravity IDE','language_server' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 350
 Start-Process -FilePath $exePath
 `;

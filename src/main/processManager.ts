@@ -130,9 +130,63 @@ function findDesktopFromRunningProcesses(): string | null {
   return firstExisting([result.stdout.trim()]);
 }
 
+export function ensureExecutableCodexPath(rawPath: string | null): string | null {
+  if (!rawPath) return null;
+  if (process.platform !== "win32") return rawPath;
+
+  // When installed via Windows Store / Appx, codex.exe is located inside
+  // "C:\Program Files\WindowsApps\..." where Windows security policy prevents Win32
+  // child_process.spawn() with EPERM (errno -4048). We bridge/stage the binary into
+  // %LOCALAPPDATA%\egoist-account-manager\bin\codex\ so it can be spawned freely.
+  if (rawPath.toLowerCase().includes("windowsapps")) {
+    try {
+      const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
+      const targetDir = path.join(localAppData, "egoist-account-manager", "bin", "codex");
+      fs.mkdirSync(targetDir, { recursive: true });
+      const targetFile = path.join(targetDir, path.basename(rawPath));
+      let shouldCopy = true;
+      if (fs.existsSync(targetFile)) {
+        try {
+          const srcStat = fs.statSync(rawPath);
+          const dstStat = fs.statSync(targetFile);
+          if (srcStat.size === dstStat.size && Math.abs(srcStat.mtimeMs - dstStat.mtimeMs) < 2000) {
+            shouldCopy = false;
+          }
+        } catch {
+          shouldCopy = true;
+        }
+      }
+      if (shouldCopy) {
+        fs.copyFileSync(rawPath, targetFile);
+        try {
+          const srcStat = fs.statSync(rawPath);
+          fs.utimesSync(targetFile, srcStat.atime, srcStat.mtime);
+        } catch {
+          // ignore utimes error
+        }
+        // Copy companion rg.exe if available in source directory
+        const srcDir = path.dirname(rawPath);
+        const rgSrc = path.join(srcDir, "rg.exe");
+        const rgDst = path.join(targetDir, "rg.exe");
+        if (fs.existsSync(rgSrc) && !fs.existsSync(rgDst)) {
+          try {
+            fs.copyFileSync(rgSrc, rgDst);
+          } catch {
+            // ignore companion copy error
+          }
+        }
+      }
+      return targetFile;
+    } catch {
+      return rawPath;
+    }
+  }
+  return rawPath;
+}
+
 export function resolveCodexPath(): string | null {
   const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
-  return (
+  const candidate = (
     firstExisting([
       path.join(localAppData, "OpenAI", "Codex", "bin", "codex.exe"),
       path.join(os.homedir(), "AppData", "Local", "OpenAI", "Codex", "bin", "codex.exe")
@@ -141,6 +195,7 @@ export function resolveCodexPath(): string | null {
     findFromAppxPackage() ??
     findFromRunningProcesses()
   );
+  return ensureExecutableCodexPath(candidate);
 }
 
 export function resolveCodexDesktopPath(): string | null {

@@ -2289,6 +2289,139 @@ export class AccountManager extends EventEmitter {
     return { importedCount: imported.length, accounts: this.list() };
   }
 
+  detectLocalSessions(): { codex: boolean; codexEmail: string | null; antigravity: boolean } {
+    let codex = false;
+    let codexEmail: string | null = null;
+    try {
+      const authPath = getAuthJsonPath(this.getGlobalCodexHome());
+      if (fs.existsSync(authPath)) {
+        const text = fs.readFileSync(authPath, "utf8");
+        const parsed = JSON.parse(text);
+        if (parsed.tokens || parsed.OPENAI_API_KEY) {
+          codex = true;
+          const token = parsed.tokens?.id_token || parsed.tokens?.access_token;
+          if (token && typeof token === "string") {
+            const parts = token.split(".");
+            if (parts.length >= 2) {
+              const jwt = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+              if (jwt.email) codexEmail = jwt.email;
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore read error
+    }
+
+    let antigravity = false;
+    try {
+      const payload = readAntigravityCredentialStorePayload(process.platform);
+      if (payload?.payload) antigravity = true;
+    } catch {
+      // ignore cred store error
+    }
+
+    return { codex, codexEmail, antigravity };
+  }
+
+  async importCurrentCodexSession(): Promise<{ imported: boolean; account: ManagedAccount | null; reason: string }> {
+    const globalHome = this.getGlobalCodexHome();
+    const authPath = getAuthJsonPath(globalHome);
+    if (!fs.existsSync(authPath)) {
+      return { imported: false, account: null, reason: "Файл auth.json не найден в ~/.codex" };
+    }
+    const authJson = readStableAuthJson(authPath);
+    const metadata = inspectCodexAuthJson(authJson);
+    if (!metadata.authFingerprint) {
+      return { imported: false, account: null, reason: "Файл auth.json не содержит действительной авторизации" };
+    }
+
+    const existing = this.store.list().find((a) => a.platform === "codex" && a.authFingerprint === metadata.authFingerprint);
+    if (existing) {
+      this.store.setActive(existing.id);
+      this.emit("accounts-updated");
+      return { imported: true, account: existing, reason: "Аккаунт уже добавлен и выбран как активный." };
+    }
+
+    const profileId = crypto.randomUUID();
+    const profileDir = getProfileDir(this.appDataDir, profileId);
+    fs.mkdirSync(profileDir, { recursive: true });
+    fs.writeFileSync(getAuthFilePath(profileDir), authJson, "utf8");
+
+    const globalConfig = path.join(globalHome, "config.toml");
+    if (fs.existsSync(globalConfig)) {
+      try {
+        fs.copyFileSync(globalConfig, path.join(profileDir, "config.toml"));
+      } catch {
+        // ignore copy error
+      }
+    }
+
+    const encryptedAuthJson = this.vault.encryptUtf8(authJson);
+    let email: string | null = null;
+    let planType: PlanType = "unknown";
+    let parsedJson: Record<string, unknown> | null = null;
+
+    try {
+      parsedJson = JSON.parse(authJson) as Record<string, unknown>;
+      const tokens = parsedJson.tokens as { id_token?: string; access_token?: string } | undefined;
+      const token = tokens?.id_token || tokens?.access_token;
+      if (token && typeof token === "string") {
+        const parts = token.split(".");
+        if (parts.length >= 2) {
+          const payloadJson = Buffer.from(parts[1], "base64url").toString("utf8");
+          const jwtPayload = JSON.parse(payloadJson);
+          if (jwtPayload.email) email = jwtPayload.email;
+          if (jwtPayload["https://api.openai.com/auth"]?.plan_type) {
+            planType = jwtPayload["https://api.openai.com/auth"].plan_type;
+          }
+          if (jwtPayload["https://api.openai.com/profile"]?.email) {
+            email = jwtPayload["https://api.openai.com/profile"].email;
+          }
+        }
+      }
+    } catch {
+      // ignore parse error
+    }
+
+    const identitySuffix = metadata.providerAccountId ?? metadata.authFingerprint.slice(0, 8);
+    const resolvedEmail = email ?? `codex:${identitySuffix}`;
+    const label = email ? getDisplayLabel(email) : `Codex · ${identitySuffix}`;
+
+    const account = this.store.upsert({
+      id: profileId,
+      label,
+      email: resolvedEmail,
+      planType,
+      profileDir,
+      encryptedAuthJson,
+      rateLimits: null,
+      authMode: (parsedJson?.auth_mode === "apiKey" || parsedJson?.auth_mode === "enterpriseAccessToken")
+        ? parsedJson.auth_mode
+        : parsedJson?.OPENAI_API_KEY ? "apiKey" : "chatgpt",
+      providerAccountId: metadata.providerAccountId,
+      workspaceAccountId: metadata.workspaceAccountId,
+      workspaceLabel: metadata.workspaceLabel,
+      authFingerprint: metadata.authFingerprint,
+      credentialState: "ready",
+      clearRefreshError: true,
+      lastAuthenticatedAt: Math.floor(Date.now() / 1000),
+      expiresAt: metadata.expiresAt,
+      version: 1,
+      status: "active",
+      statusReason: null
+    });
+
+    this.store.setActive(account.id);
+    const saved = this.store.get(account.id);
+    if (saved) {
+      this.syncProfileAuthToVault(saved);
+      void this.refreshAccount(account.id).catch(() => {});
+    }
+    this.emit("accounts-updated");
+    return { imported: true, account: saved ?? account, reason: "Активный профиль Codex успешно импортирован." };
+  }
+
   async importAntigravityFromIde(pathInput: AntigravityPathInput = {}): Promise<AntigravityImportResult> {
     const status = getAntigravityProfileStatus(pathInput);
     if (!status.detected) {

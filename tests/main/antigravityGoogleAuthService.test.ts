@@ -5,6 +5,8 @@ import {
   createAntigravityGoogleOAuthAuthorization,
   createAntigravityPkce,
   exchangeAntigravityGoogleCode,
+  DEFAULT_ANTIGRAVITY_OAUTH_CLIENT_ID,
+  DEFAULT_ANTIGRAVITY_OAUTH_CLIENT_SECRET,
   fetchAntigravityGoogleAccountContext,
   fetchAntigravityGoogleUserInfo,
   resolveAntigravityOAuthClient,
@@ -33,8 +35,12 @@ describe("antigravityGoogleAuthService", () => {
     }
   });
 
-  it("requires a user-configured PKCE client and never falls back to an embedded secret", () => {
-    expect(() => resolveAntigravityOAuthClient({})).toThrow("requires your own PKCE desktop client ID");
+  it("provides official Antigravity OAuth credentials by default and allows custom override", () => {
+    expect(resolveAntigravityOAuthClient({})).toEqual({
+      clientId: DEFAULT_ANTIGRAVITY_OAUTH_CLIENT_ID,
+      clientSecret: DEFAULT_ANTIGRAVITY_OAUTH_CLIENT_SECRET,
+      usesBundledPublicClient: true
+    });
     expect(resolveAntigravityOAuthClient({
       CAM_ANTIGRAVITY_OAUTH_CLIENT_ID: "client-id",
       CAM_ANTIGRAVITY_OAUTH_CLIENT_SECRET: "client-secret"

@@ -1297,4 +1297,35 @@ describe.skipIf(process.platform !== "win32")("AccountManager Codex auth modes",
       storeTwo.close();
     }
   });
+
+  it("imports the active global Codex session from auth.json and activates it", async () => {
+    const appDataDir = tempDir();
+    const globalCodexHome = path.join(appDataDir, "global-codex-home");
+    fs.mkdirSync(globalCodexHome, { recursive: true });
+    const authPayload = JSON.stringify({
+      tokens: {
+        access_token: "test-token",
+        id_token: `header.${Buffer.from(JSON.stringify({ email: "local.user@example.com" })).toString("base64url")}.sig`
+      },
+      auth_mode: "chatgpt"
+    });
+    fs.writeFileSync(path.join(globalCodexHome, "auth.json"), authPayload, "utf8");
+
+    const store = new AccountStore(appDataDir);
+    const vault = new Vault(appDataDir);
+    const manager = new AccountManager(store, vault, appDataDir, installFakeCodex(appDataDir), {
+      codexHome: globalCodexHome
+    });
+    try {
+      const result = await manager.importCurrentCodexSession();
+      expect(result.imported).toBe(true);
+      expect(result.account).not.toBeNull();
+      expect(result.account?.email).toBe("local.user@example.com");
+      expect(result.account?.isActive).toBe(true);
+      expect(store.get(result.account!.id)?.isActive).toBe(true);
+    } finally {
+      await manager.shutdown();
+      store.close();
+    }
+  });
 });

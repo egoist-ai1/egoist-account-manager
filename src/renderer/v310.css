@@ -766,3 +766,34 @@
   box-shadow: 0 8px 24px rgba(124, 58, 237, 0.14);
 }
 
+.queue-fast-switch {
+  min-height: 26px !important;
+  padding: 3px 10px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  border-radius: 6px !important;
+  background: rgba(139, 92, 246, 0.16) !important;
+  border: 1px solid rgba(139, 92, 246, 0.35) !important;
+  color: #ddd6fe !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  transition: all 0.15s ease !important;
+  cursor: pointer !important;
+}
+
+.queue-fast-switch:hover:not(:disabled) {
+  background: rgba(139, 92, 246, 0.32) !important;
+  border-color: rgba(167, 139, 250, 0.6) !important;
+  box-shadow: 0 0 10px rgba(139, 92, 246, 0.35) !important;
+  transform: scale(1.03);
+}
+
+.continuation-row {
+  transition: background-color 0.18s ease, transform 0.18s ease;
+}
+
+.continuation-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+

@@ -1,4 +1,4 @@
-﻿import path from "node:path";
+import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -644,6 +644,18 @@ function registerIpc(appDataDir: string): void {
     deviceCodeHandoff.copy(parsed.userCode);
     await openExternalUrl(parsed.url, "device-code-reopen");
     return { copied: true, opened: true };
+  });
+  handle("accounts:importCurrentCodexSession", async () => {
+    log("Importing current local Codex session from ~/.codex");
+    const result = await requireManager().importCurrentCodexSession();
+    if (result.imported) {
+      mainWindow?.webContents.send("accounts:updated");
+      updateTrayMenu();
+    }
+    return result;
+  });
+  handle("accounts:detectLocalSessions", () => {
+    return requireManager().detectLocalSessions();
   });
   handle("accounts:refresh", (_event, input) => {
     const parsed = accountActionInputSchema.parse(input);

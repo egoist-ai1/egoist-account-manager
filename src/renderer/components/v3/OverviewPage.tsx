@@ -548,11 +548,31 @@ export function OverviewPage({
           {visibleCandidates.length > 0 ? (
             <div className="continuation-queue" aria-label={isEnglish ? "Backup profile readiness" : "Готовность резервных профилей"}>
               {visibleCandidates.map((candidate, index) => (
-                <div className={`continuation-row is-${candidate.state}`} key={candidate.account.id}>
+                <div
+                  className={`continuation-row is-${candidate.state}`}
+                  key={candidate.account.id}
+                  onClick={() => {
+                    if (busy === null) onSwitch(candidate.account.id);
+                  }}
+                  style={{ cursor: "pointer" }}
+                  title={isEnglish ? "Click to switch to this profile" : "Нажмите для переключения на этот профиль"}
+                >
                   <span className="queue-index">{String(index + 1).padStart(2, "0")}</span>
                   <span className="queue-account"><b title={candidate.account.label}>{candidate.account.label}</b><small>{formatPlan(candidate.account.planType)}</small></span>
                   <span className="queue-state">{candidateStateLabel(candidate, isEnglish)}</span>
                   <strong>{candidate.remainingPercent === null ? "—" : `${candidate.remainingPercent}%`}</strong>
+                  <button
+                    className="button secondary compact-button queue-fast-switch"
+                    disabled={busy !== null}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSwitch(candidate.account.id);
+                    }}
+                    title={isEnglish ? "Switch" : "Переключить"}
+                  >
+                    <Zap />
+                    {isEnglish ? "Use" : "Использовать"}
+                  </button>
                 </div>
               ))}
             </div>

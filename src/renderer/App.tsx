@@ -598,6 +598,16 @@ const cam: AppApi = window.cam ?? {
     status: demoAntigravityProfileStatus,
     identity: null
   }),
+  importCurrentCodexSession: async () => ({
+    imported: false,
+    account: null,
+    reason: "Импорт доступен только в desktop-приложении."
+  }),
+  detectLocalSessions: async () => ({
+    codex: false,
+    codexEmail: null,
+    antigravity: false
+  }),
   onAuthEvent: () => () => undefined,
   onAccountsUpdated: () => () => undefined,
   onSwitchTransaction: () => () => undefined,
@@ -1236,6 +1246,7 @@ function AddAccountWizard({
   onOpen,
   onCopyDeviceCode,
   onOpenDeviceLogin,
+  onImportCurrentSession,
   onClose
 }: {
   state: LoginWizardState;
@@ -1245,6 +1256,7 @@ function AddAccountWizard({
   onOpen: (url: string) => void;
   onCopyDeviceCode: (userCode: string) => Promise<unknown>;
   onOpenDeviceLogin: (url: string, userCode: string) => Promise<unknown>;
+  onImportCurrentSession?: () => void;
   onClose: () => void;
 }) {
   const [credentialType, setCredentialType] = useState<"apiKey" | "enterpriseAccessToken" | null>(null);
@@ -1329,6 +1341,22 @@ function AddAccountWizard({
               <p>Каждый профиль создаётся в отдельном локальном <code>CODEX_HOME</code>, проверяется официальным app-server и сохраняется в зашифрованном Windows vault.</p>
             </section>
             <div className="choice-grid codex-login-choice-grid">
+            {onImportCurrentSession ? (
+              <button
+                className="choice-card"
+                disabled={busy !== null}
+                onClick={onImportCurrentSession}
+                style={{
+                  gridColumn: "1 / -1",
+                  borderColor: "rgba(99, 220, 165, 0.4)",
+                  background: "linear-gradient(135deg, rgba(48, 157, 111, 0.16), rgba(255, 255, 255, 0.02))"
+                }}
+              >
+                <Zap style={{ color: "#5ed9a1" }} />
+                <strong>Подхватить текущую сессию с ПК</strong>
+                <span>Быстрый импорт уже авторизованной сессии из ~/.codex/auth.json без повторного входа.</span>
+              </button>
+            ) : null}
             <button className="choice-card" disabled={busy !== null || !methodAvailable("chatgptDeviceCode")} onClick={() => onStart({ type: "chatgptDeviceCode" })}>
               <KeyRound />
               <strong>Код устройства</strong>
@@ -1433,7 +1461,14 @@ function AddAccountWizard({
             <AlertTriangle />
             <strong>Не удалось добавить аккаунт</strong>
             <span>{state.error ?? "Подробности доступны в журнале диагностики."}</span>
-            <button className="button secondary" onClick={() => onStart({ type: "chatgptDeviceCode" })}>Повторить через код</button>
+            <div style={{ display: "flex", gap: "8px", justifyContent: "center", marginTop: "12px", flexWrap: "wrap" }}>
+              {onImportCurrentSession ? (
+                <button className="button" onClick={onImportCurrentSession}>
+                  Подхватить сессию с этого ПК
+                </button>
+              ) : null}
+              <button className="button secondary" onClick={() => onStart({ type: "chatgptDeviceCode" })}>Повторить через код</button>
+            </div>
           </div>
         ) : null}
       </div>
@@ -2146,6 +2181,25 @@ function App() {
       offAppNotification();
     };
   }, []);
+
+  async function importCurrentCodexSession() {
+    setBusy("import:current-codex");
+    try {
+      const result = await cam.importCurrentCodexSession();
+      if (result.imported) {
+        closeLoginWizard();
+        setMessage(result.reason);
+        await reload();
+        if (result.account) setSelectedAccountId(result.account.id);
+      } else {
+        setMessage(uiErrorMessage(result.reason));
+      }
+    } catch (error) {
+      setMessage(uiErrorMessage(`Не удалось импортировать сессию Codex: ${error instanceof Error ? error.message : String(error)}`));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function startLogin(input: CodexLoginRequest) {
     const type = input.type;
@@ -3353,6 +3407,7 @@ function App() {
         onOpen={(url) => void cam.openExternal(url)}
         onCopyDeviceCode={(userCode) => cam.copyDeviceCode(userCode)}
         onOpenDeviceLogin={(url, userCode) => cam.openDeviceLogin(url, userCode)}
+        onImportCurrentSession={() => void importCurrentCodexSession()}
         onClose={closeLoginWizard}
       />
       <ConfirmDialog state={confirmState} onClose={closeConfirm} />

@@ -5,6 +5,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import {
   buildOpenAiDesktopRestartScript,
+  ensureExecutableCodexPath,
   getOpenAiDesktopCandidates,
   pickCodexPathFromWhereOutput
 } from "../../src/main/processManager";
@@ -79,4 +80,23 @@ describe("processManager", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }, 20_000);
+
+  it.runIf(process.platform === "win32")("stages a WindowsApps binary to a local user folder to avoid spawn EPERM", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cam-appx-test-"));
+    const fakeWindowsAppsExe = path.join(dir, "WindowsApps", "OpenAI.Codex_test", "app", "resources", "codex.exe");
+    fs.mkdirSync(path.dirname(fakeWindowsAppsExe), { recursive: true });
+    fs.writeFileSync(fakeWindowsAppsExe, "test-binary-content");
+
+    try {
+      const staged = ensureExecutableCodexPath(fakeWindowsAppsExe);
+      expect(staged).not.toBeNull();
+      expect(staged).not.toContain("WindowsApps");
+      expect(staged).toContain("egoist-account-manager");
+      expect(staged).toContain("codex.exe");
+      expect(fs.existsSync(staged!)).toBe(true);
+      expect(fs.readFileSync(staged!, "utf8")).toBe("test-binary-content");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

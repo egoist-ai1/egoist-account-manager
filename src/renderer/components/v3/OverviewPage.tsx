@@ -207,6 +207,12 @@ function formatLastRefresh(lastRefreshAt: number | null, now: number, isEnglish:
 
 function formatPlan(plan: string | null): string {
   if (!plan) return "ChatGPT";
+  if (plan === "google-ai-pro" || plan === "g1-pro-tier") return "Google AI Pro";
+  if (plan === "google-ai-ultra") return "Google AI Ultra";
+  if (plan === "free") return "Free";
+  if (plan === "pro-x20") return "Pro (20x)";
+  if (plan === "pro-x10") return "Pro (10x)";
+  if (plan === "pro") return "Pro";
   return plan.charAt(0).toUpperCase() + plan.slice(1);
 }
 
@@ -285,40 +291,46 @@ function quotaCard(
   value: number | null,
   resetAt: number | null,
   now: number,
-  isEnglish: boolean
+  isEnglish: boolean,
+  isUnlimited = false
 ) {
-  const valueLabel = formatRemaining(value);
-  const ariaLabel = value === null
-    ? `${label}: ${isEnglish ? "data unavailable" : "данные недоступны"}`
-    : `${label}: ${valueLabel} ${isEnglish ? "remaining" : "доступно"}`;
+  const valueLabel = isUnlimited ? (isEnglish ? "Unlimited" : "Не ограничен") : formatRemaining(value);
+  const ariaLabel = isUnlimited
+    ? `${label}: ${isEnglish ? "unlimited" : "не ограничен"}`
+    : value === null
+      ? `${label}: ${isEnglish ? "data unavailable" : "данные недоступны"}`
+      : `${label}: ${valueLabel} ${isEnglish ? "remaining" : "доступно"}`;
   const secondsToReset = resetAt && resetAt > now ? resetAt - now : null;
   const liveCountdown = formatLiveCountdown(secondsToReset, isEnglish);
+  const resetCopy = isUnlimited
+    ? (isEnglish ? "Included in Pro plan" : "В рамках подписки Pro")
+    : formatQuotaReset(resetAt, now, isEnglish);
   return (
-    <article className={`quota-card ${quotaTone(value)}`} key={id}>
+    <article className={`quota-card ${isUnlimited ? "ready is-unlimited" : quotaTone(value)}`} key={id}>
       <header className="quota-card-head">
         <strong>{label}</strong>
-        <span>{quotaStateLabel(value, isEnglish)}</span>
+        <span>{isUnlimited ? (isEnglish ? "Unlimited" : "Не ограничен") : quotaStateLabel(value, isEnglish)}</span>
       </header>
       <div className="quota-card-visual">
         <div
-          className="quota-ring"
-          style={{ "--quota-value": `${value ?? 0}%` } as React.CSSProperties}
+          className={`quota-ring ${isUnlimited ? "is-unlimited" : ""}`}
+          style={{ "--quota-value": isUnlimited ? "100%" : `${value ?? 0}%` } as React.CSSProperties}
           role="progressbar"
           aria-label={ariaLabel}
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={value ?? undefined}
+          aria-valuenow={isUnlimited ? 100 : (value ?? undefined)}
         >
-          <strong>{valueLabel}</strong>
-          <span>{isEnglish ? "left" : "остаток"}</span>
+          <strong>{isUnlimited ? "∞" : valueLabel}</strong>
+          <span>{isUnlimited ? (isEnglish ? "no cap" : "без лимита") : (isEnglish ? "left" : "остаток")}</span>
         </div>
         <div className="quota-copy">
           <span>{isEnglish ? "Next reset" : "Следующий сброс"}</span>
-          <strong>{formatQuotaReset(resetAt, now, isEnglish)}</strong>
+          <strong>{resetCopy}</strong>
           {liveCountdown ? <small className="quota-live-countdown">{liveCountdown}</small> : null}
         </div>
       </div>
-      <div className="quota-meter" aria-hidden="true"><i style={{ width: `${value ?? 0}%` }} /></div>
+      <div className="quota-meter" aria-hidden="true"><i style={{ width: isUnlimited ? "100%" : `${value ?? 0}%` }} /></div>
     </article>
   );
 }
@@ -336,8 +348,7 @@ export function OverviewPage({
   onRefresh,
   onSwitch,
   onOpenAccounts,
-  onOpenActivity,
-  onPickupSession
+  onOpenActivity
 }: {
   accounts: ManagedAccount[];
   diagnostics: AppDiagnostics | null;
@@ -352,7 +363,6 @@ export function OverviewPage({
   onSwitch: (accountId: string) => void;
   onOpenAccounts: () => void;
   onOpenActivity: () => void;
-  onPickupSession?: () => void;
 }) {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
   useEffect(() => {
@@ -364,20 +374,66 @@ export function OverviewPage({
 
   const active = accounts.find((account) => account.isActive) ?? null;
   const isAntigravity = active?.platform === "antigravity";
-  const primaryRemaining = isAntigravity
-    ? remaining(active?.primaryUsedPercent ?? null)
-    : remaining(active?.fiveHourUsedPercent ?? null);
-  const secondaryRemaining = isAntigravity
-    ? remaining(active?.secondaryUsedPercent ?? null)
-    : remaining(active?.weeklyUsedPercent ?? null);
-  const primaryLabel = isAntigravity
-    ? (isEnglish ? "Active model" : "Активная модель")
-    : (isEnglish ? "5 hours" : "5 часов");
-  const secondaryLabel = isAntigravity
-    ? (isEnglish ? "Quota reserve" : "Резерв квоты")
-    : (isEnglish ? "Week" : "Неделя");
-  const primaryResetAt = isAntigravity ? (active?.primaryResetsAt ?? null) : (active?.fiveHourResetsAt ?? null);
-  const secondaryResetAt = isAntigravity ? (active?.secondaryResetsAt ?? null) : (active?.weeklyResetsAt ?? null);
+
+  let primaryRemaining: number | null = null;
+  let primaryLabel = isEnglish ? "5 hours" : "5 часов";
+  let primaryResetAt: number | null = null;
+
+  let secondaryRemaining: number | null = null;
+  let secondaryLabel = isEnglish ? "Week" : "Неделя";
+  let secondaryResetAt: number | null = null;
+  let secondaryIsUnlimited = false;
+
+  if (isAntigravity) {
+    primaryRemaining = remaining(active?.primaryUsedPercent ?? null);
+    primaryLabel = isEnglish ? "Active model" : "Лимит модели";
+    primaryResetAt = active?.primaryResetsAt ?? null;
+
+    secondaryRemaining = remaining(active?.secondaryUsedPercent ?? null);
+    secondaryLabel = isEnglish ? "Weekly limit" : "Недельный лимит";
+    secondaryResetAt = active?.secondaryResetsAt ?? null;
+    secondaryIsUnlimited = active?.secondaryUsedPercent === null && active?.secondaryResetsAt === null;
+  } else {
+    // For Codex:
+    const has5h = active?.fiveHourUsedPercent !== null;
+    const hasWeekly = active?.weeklyUsedPercent !== null && (active?.weeklyResetsAt !== null || active?.secondaryWindowDurationMins === 10080);
+
+    if (!has5h && hasWeekly) {
+      primaryRemaining = remaining(active?.weeklyUsedPercent ?? null);
+      primaryLabel = isEnglish ? "Weekly limit" : "Недельный лимит";
+      primaryResetAt = active?.weeklyResetsAt ?? null;
+
+      secondaryLabel = isEnglish ? "5-hour window" : "5-часовой лимит";
+      secondaryRemaining = null;
+      secondaryResetAt = null;
+      secondaryIsUnlimited = true;
+    } else if (has5h) {
+      primaryRemaining = remaining(active?.fiveHourUsedPercent ?? null);
+      primaryLabel = isEnglish ? "5 hours" : "5 часов";
+      primaryResetAt = active?.fiveHourResetsAt ?? null;
+
+      if (hasWeekly) {
+        secondaryRemaining = remaining(active?.weeklyUsedPercent ?? null);
+        secondaryLabel = isEnglish ? "Weekly limit" : "Недельный лимит";
+        secondaryResetAt = active?.weeklyResetsAt ?? null;
+        secondaryIsUnlimited = false;
+      } else {
+        secondaryLabel = isEnglish ? "Weekly limit" : "Недельный лимит";
+        secondaryRemaining = null;
+        secondaryResetAt = null;
+        secondaryIsUnlimited = true;
+      }
+    } else {
+      primaryRemaining = remaining(active?.primaryUsedPercent ?? null);
+      primaryLabel = isEnglish ? "Current limit" : "Текущий лимит";
+      primaryResetAt = active?.primaryResetsAt ?? null;
+
+      secondaryLabel = isEnglish ? "Weekly limit" : "Недельный лимит";
+      secondaryRemaining = null;
+      secondaryResetAt = null;
+      secondaryIsUnlimited = true;
+    }
+  }
 
   const desktop = diagnostics?.desktopLifecycle;
   const protocolReady = isAntigravity ? true : diagnostics?.codexCapabilities?.protocol.compatible === true;
@@ -455,32 +511,10 @@ export function OverviewPage({
               <div>
                 <h2>{isEnglish ? "Connect your first account" : "Подключите первый аккаунт"}</h2>
                 <p>{isEnglish ? "Google OAuth, browser, device code and API keys are supported." : "Доступны Google OAuth, браузер, device code и API-ключи."}</p>
-                {onPickupSession ? (
-                  <button
-                    className="button overview-empty-pickup-btn"
-                    disabled={busy !== null}
-                    onClick={onPickupSession}
-                    style={{ marginTop: "14px", display: "inline-flex", alignItems: "center", gap: "8px" }}
-                  >
-                    <Zap />
-                    <span>{isEnglish ? "Pickup active session from PC" : "Подхватить активную сессию с этого ПК"}</span>
-                  </button>
-                ) : null}
               </div>
             </div>
           )}
           <div className="overview-actions">
-            {onPickupSession ? (
-              <button
-                className="button secondary overview-pickup-action-btn"
-                disabled={busy !== null}
-                onClick={onPickupSession}
-                title={isEnglish ? "Pickup active session from this PC" : "Подхватить активную сессию с этого ПК"}
-              >
-                <Zap style={{ color: "#a855f7" }} />
-                <span>{isEnglish ? "Pickup session" : "Подхват с ПК"}</span>
-              </button>
-            ) : null}
             {active ? (
               <button className="button" onClick={onOpenAccounts}>
                 {isEnglish ? "Accounts" : "Аккаунты"}<ArrowRight />
@@ -507,7 +541,7 @@ export function OverviewPage({
           </div>
           <div className="quota-grid">
             {quotaCard("primary-quota", primaryLabel, primaryRemaining, primaryResetAt, now, isEnglish)}
-            {quotaCard("secondary-quota", secondaryLabel, secondaryRemaining, secondaryResetAt, now, isEnglish)}
+            {quotaCard("secondary-quota", secondaryLabel, secondaryRemaining, secondaryResetAt, now, isEnglish, secondaryIsUnlimited)}
           </div>
           <div className="quota-refresh-line">
             <RefreshCcw />

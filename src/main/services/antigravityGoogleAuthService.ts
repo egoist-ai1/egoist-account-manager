@@ -605,14 +605,17 @@ function collectPlanInfoStrings(value: unknown, depth = 0): string[] {
   if (typeof value !== "object") return [];
   if (Array.isArray(value)) return value.flatMap((item) => collectPlanInfoStrings(item, depth + 1)).slice(0, 32);
   return Object.entries(value as Record<string, unknown>)
-    .filter(([key]) => /plan|tier|subscription|sku|product/i.test(key))
-    .flatMap(([, item]) => collectPlanInfoStrings(item, depth + 1))
+    .filter(([key]) => !/timestamp|date|uuid|token|hash/i.test(key))
+    .flatMap(([, nested]) => collectPlanInfoStrings(nested, depth + 1))
     .slice(0, 32);
 }
 
 function strongPlanInfoLabel(body: LoadCodeAssistResponse): string | null {
-  for (const label of collectPlanInfoStrings(body.planInfo)) {
-    if (classifyTierLabel(label) === "paid") return label;
+  const planInfo = collectPlanInfoStrings(body.planInfo);
+  for (const item of planInfo) {
+    if (classifyTierLabel(item) === "paid") {
+      return item;
+    }
   }
   return null;
 }
@@ -627,6 +630,8 @@ function tierHasUsableCredits(tier: LoadCodeAssistTier | null | undefined): bool
   return credits.some((credit) => {
     if (!credit || typeof credit !== "object") return false;
     const record = credit as Record<string, unknown>;
+    // Google One AI Premium subscriptions report creditType GOOGLE_ONE_AI without numeric creditAmount
+    if (record.creditType === "GOOGLE_ONE_AI") return true;
     const amount = creditNumber(record.creditAmount ?? record.amount ?? record.balance);
     const minimum = creditNumber(record.minimumCreditAmountForUsage ?? record.minimumAmount ?? 0) ?? 0;
     return amount !== null && amount > 0 && amount >= minimum;
@@ -644,9 +649,10 @@ function defaultAllowedTier(body: LoadCodeAssistResponse): LoadCodeAssistTier | 
 }
 
 function selectedTier(body: LoadCodeAssistResponse): LoadCodeAssistTier | null {
+  // If user has an active paid tier (e.g. g1-pro-tier), prioritize it over default currentTier
+  if (isActivePaidTier(body.paidTier)) return body.paidTier ?? null;
   const currentClass = classifyTierLabel(tierLabel(body.currentTier));
   if (currentClass === "paid") return body.currentTier ?? null;
-  if (isActivePaidTier(body.paidTier)) return body.paidTier ?? null;
   if (currentClass !== "unknown") return body.currentTier ?? null;
   const defaultTier = defaultAllowedTier(body);
   if (defaultTier && classifyTierLabel(tierLabel(defaultTier)) !== "unknown") return defaultTier;

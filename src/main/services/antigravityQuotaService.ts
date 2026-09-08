@@ -84,7 +84,7 @@ function normalizePlanFromTier(tierId: string | null, fallback: AntigravityGoogl
   if (fallback !== "paid") return "unknown";
   if (compact.includes("googleaiultrax20") || (compact.includes("ultra") && compact.includes("20"))) return "google-ai-ultra-x20";
   if (compact.includes("googleaiultra") || compact.includes("ultra")) return "google-ai-ultra";
-  if (compact.includes("googleaipro") || compact.includes("aipro")) return "google-ai-pro";
+  if (compact.includes("googleaipro") || compact.includes("aipro") || compact.includes("g1pro") || normalized.includes("pro")) return "google-ai-pro";
   if (normalized.includes("team")) return "team";
   if (normalized.includes("business")) return "business";
   if (normalized.includes("enterprise")) return "enterprise";

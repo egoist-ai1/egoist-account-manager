@@ -756,20 +756,20 @@ function LimitMeter({
   unavailableReason?: string;
 }) {
   const remaining = remainingPercent(usedPercent);
-  const pct = remaining ?? 100;
-  const emptyReason = unavailableReason ?? "Синхронизировано";
+  const isAvailable = usedPercent !== null;
+  const emptyReason = unavailableReason ?? "Синхронизация...";
   return (
     <div
-      className={`limit-meter ${meterTone(usedPercent)}`}
-      title={usedPercent == null ? emptyReason : `Осталось ${remaining?.toFixed(0)}%, использовано ${usedPercent.toFixed(0)}%`}
-      aria-label={usedPercent == null ? `${label}: ${emptyReason}` : `${label}: осталось ${remaining?.toFixed(0)} процентов`}
+      className={`limit-meter ${isAvailable ? meterTone(usedPercent) : "is-inactive"}`}
+      title={isAvailable ? `Осталось ${remaining?.toFixed(0)}%, использовано ${usedPercent?.toFixed(0)}%` : emptyReason}
+      aria-label={isAvailable ? `${label}: осталось ${remaining?.toFixed(0)} процентов` : `${label}: ${emptyReason}`}
     >
       <div className="limit-line">
         <span>{label}</span>
-        <strong>{remaining == null ? "100%" : `${remaining.toFixed(0)}%`}</strong>
+        <strong>{isAvailable ? `${remaining?.toFixed(0)}%` : emptyReason}</strong>
       </div>
       <div className="bar">
-        <span style={{ width: `${pct}%` }} />
+        <span style={{ width: `${isAvailable ? (remaining ?? 0) : 0}%` }} />
       </div>
       <small>{resetsAt ? `сброс ${formatTime(resetsAt)}` : emptyReason}</small>
     </div>
@@ -802,13 +802,31 @@ function accountLimitDisplay(account: ManagedAccount): {
         : undefined
     };
   }
+
+  const has5h = account.fiveHourUsedPercent !== null;
+  const hasWeekly = account.weeklyUsedPercent !== null;
+
+  if (!has5h && hasWeekly) {
+    return {
+      primaryLabel: "неделя",
+      primaryUsedPercent: account.weeklyUsedPercent,
+      primaryResetsAt: account.weeklyResetsAt,
+      secondaryLabel: "5 часов",
+      secondaryUsedPercent: null,
+      secondaryResetsAt: null,
+      secondaryUnavailableReason: "Не применимо"
+    };
+  }
+
   return {
     primaryLabel: "5 часов",
     primaryUsedPercent: account.fiveHourUsedPercent,
     primaryResetsAt: account.fiveHourResetsAt,
+    primaryUnavailableReason: !has5h ? "Синхронизация..." : undefined,
     secondaryLabel: "неделя",
     secondaryUsedPercent: account.weeklyUsedPercent,
-    secondaryResetsAt: account.weeklyResetsAt
+    secondaryResetsAt: account.weeklyResetsAt,
+    secondaryUnavailableReason: !hasWeekly ? "Не ограничен" : undefined
   };
 }
 
@@ -2980,7 +2998,6 @@ function App() {
             onSwitch={(accountId) => void switchAccount(accountId)}
             onOpenAccounts={() => setActiveView("accounts")}
             onOpenActivity={() => setActiveView("activity")}
-            onPickupSession={platformFilter === "antigravity" ? () => void importCurrentAntigravitySession() : () => void importCurrentCodexSession()}
           />
         );
       case "accounts":
@@ -3313,20 +3330,6 @@ function App() {
             </button>
           ))}
         </section>
-        <div className="rail-pickup-box">
-          <button
-            className="rail-pickup-btn"
-            disabled={busy !== null}
-            onClick={platformFilter === "antigravity" ? () => void importCurrentAntigravitySession() : () => void importCurrentCodexSession()}
-            title={platformFilter === "antigravity" ? "Подхватить сессию Antigravity с ПК" : "Подхватить сессию Codex с ПК"}
-          >
-            <Zap className="pickup-icon" />
-            <div className="pickup-info">
-              <strong>{platformFilter === "antigravity" ? "Подхват Antigravity" : "Подхват Codex"}</strong>
-              <small>Сессия с этого ПК</small>
-            </div>
-          </button>
-        </div>
         <div className="rail-footer" role="status" aria-live="polite">
           <span>{message}</span>
         </div>
@@ -3358,15 +3361,6 @@ function App() {
               <Command />
               {shellText.commands}
               <kbd>Ctrl K</kbd>
-            </button>
-            <button
-              className="button pickup-session-top-btn"
-              disabled={busy !== null}
-              onClick={platformFilter === "antigravity" ? () => void importCurrentAntigravitySession() : () => void importCurrentCodexSession()}
-              title={platformFilter === "antigravity" ? "Подхватить активную сессию Antigravity с этого ПК" : "Подхватить активную сессию Codex с этого ПК"}
-            >
-              <Zap style={{ color: platformFilter === "antigravity" ? "#c084fc" : "#34d399" }} />
-              <span>{platformFilter === "antigravity" ? "Подхват Antigravity" : "Подхват Codex"}</span>
             </button>
             <button className="button secondary update-check-button" disabled={busy !== null} onClick={checkApplicationUpdates}>
               {busy === "updates" ? <Loader2 className="spin" /> : <RefreshCcw />}

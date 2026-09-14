@@ -40,7 +40,8 @@
     "verify:sandbox:live": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-windows-sandbox-live-e2e.ps1",
     "verify:sandbox:live:apply": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-windows-sandbox-live-e2e.ps1 -Apply",
     "verify:sandbox:live:finalize": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-windows-sandbox-live-e2e.ps1 -Apply -Finalize",
-    "release:checksums": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/write-checksums.ps1"
+    "release:checksums": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/write-checksums.ps1",
+    "release:publish": "node scripts/publish-github-release.mjs"
   },
   "dependencies": {
     "@fontsource-variable/montserrat": "^5.2.8",

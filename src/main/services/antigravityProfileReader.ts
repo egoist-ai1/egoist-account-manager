@@ -317,11 +317,12 @@ export interface AntigravityLiveSession {
   tier: string | null;
 }
 
-/**
- * Connect directly to Antigravity's live local language server RPC to detect
- * the account currently active and running in the editor window.
- */
-export async function detectAntigravityLiveSession(input: AntigravityPathInput = {}): Promise<AntigravityLiveSession | null> {
+export interface AntigravityLanguageServerEndpoint {
+  port: number;
+  csrf: string;
+}
+
+export function resolveAntigravityLanguageServerEndpoint(input: AntigravityPathInput = {}): AntigravityLanguageServerEndpoint | null {
   const platform = input.platform ?? process.platform;
   const home = input.home ?? os.homedir();
   const appData = input.appData ?? (platform === "win32"
@@ -352,19 +353,33 @@ export async function detectAntigravityLiveSession(input: AntigravityPathInput =
     }
 
     if (!lastPort || !lastCsrf) return null;
+    return { port: lastPort, csrf: lastCsrf };
+  } catch {
+    return null;
+  }
+}
 
+/**
+ * Connect directly to Antigravity's live local language server RPC to detect
+ * the account currently active and running in the editor window.
+ */
+export async function detectAntigravityLiveSession(input: AntigravityPathInput = {}): Promise<AntigravityLiveSession | null> {
+  const endpoint = resolveAntigravityLanguageServerEndpoint(input);
+  if (!endpoint) return null;
+
+  try {
     const agent = new https.Agent({ rejectUnauthorized: false });
 
     return await new Promise<AntigravityLiveSession | null>((resolve) => {
       const req = https.request(
         {
           hostname: "127.0.0.1",
-          port: lastPort,
+          port: endpoint.port,
           path: "/exa.language_server_pb.LanguageServerService/GetUserStatus",
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-Codeium-Csrf-Token": lastCsrf,
+            "X-Codeium-Csrf-Token": endpoint.csrf,
             "Content-Length": "2"
           },
           agent,
@@ -387,6 +402,84 @@ export async function detectAntigravityLiveSession(input: AntigravityPathInput =
                   name: typeof userStatus.name === "string" ? userStatus.name : null,
                   tier: data?.userTier?.name ?? null
                 });
+              } else {
+                resolve(null);
+              }
+            } catch {
+              resolve(null);
+            }
+          });
+        }
+      );
+
+      req.on("error", () => resolve(null));
+      req.on("timeout", () => {
+        req.destroy();
+        resolve(null);
+      });
+      req.write("{}");
+      req.end();
+    });
+  } catch {
+    return null;
+  }
+}
+
+export interface AntigravityLiveQuotaSummaryResponse {
+  groups?: Array<{
+    displayName?: unknown;
+    description?: unknown;
+    buckets?: Array<{
+      bucketId?: unknown;
+      displayName?: unknown;
+      window?: unknown;
+      resetTime?: unknown;
+      description?: unknown;
+      remainingFraction?: unknown;
+      remainingAmount?: unknown;
+    }>;
+  }>;
+}
+
+/**
+ * Connect directly to Antigravity's live local language server RPC to fetch
+ * real-time quota telemetry for the active session.
+ */
+export async function fetchAntigravityLiveQuota(input: AntigravityPathInput = {}): Promise<AntigravityLiveQuotaSummaryResponse | null> {
+  const endpoint = resolveAntigravityLanguageServerEndpoint(input);
+  if (!endpoint) return null;
+
+  try {
+    const agent = new https.Agent({ rejectUnauthorized: false });
+
+    return await new Promise<AntigravityLiveQuotaSummaryResponse | null>((resolve) => {
+      const req = https.request(
+        {
+          hostname: "127.0.0.1",
+          port: endpoint.port,
+          path: "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary",
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Codeium-Csrf-Token": endpoint.csrf,
+            "Content-Length": "2"
+          },
+          agent,
+          timeout: 4000
+        },
+        (res) => {
+          let body = "";
+          res.on("data", (chunk: Buffer | string) => (body += chunk.toString()));
+          res.on("end", () => {
+            try {
+              if (res.statusCode !== 200) return resolve(null);
+              const data = JSON.parse(body) as {
+                response?: AntigravityLiveQuotaSummaryResponse;
+                groups?: AntigravityLiveQuotaSummaryResponse["groups"];
+              };
+              const groups = data.response?.groups ?? data.groups;
+              if (Array.isArray(groups) && groups.length > 0) {
+                resolve({ groups });
               } else {
                 resolve(null);
               }

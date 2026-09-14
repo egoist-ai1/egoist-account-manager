@@ -113,7 +113,7 @@
         "nsis",
         "portable"
       ],
-      "requestedExecutionLevel": "requireAdministrator",
+      "requestedExecutionLevel": "asInvoker",
       "signAndEditExecutable": true,
       "signExecutable": false,
       "verifyUpdateCodeSignature": false

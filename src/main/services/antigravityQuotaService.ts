@@ -15,7 +15,25 @@ const fetchAvailableModelsEndpoints = [
   "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels"
 ] as const;
 
+interface QuotaApiDetail {
+  "@type"?: string;
+  reason?: string;
+  domain?: string;
+  metadata?: Record<string, string>;
+}
+
 interface QuotaApiResponse {
+  response?: {
+    groups?: QuotaApiResponse["groups"];
+    buckets?: QuotaApiResponse["buckets"];
+    models?: QuotaApiResponse["models"];
+  };
+  error?: {
+    code?: number;
+    message?: string;
+    status?: string;
+    details?: QuotaApiDetail[];
+  };
   groups?: Array<{
     displayName?: unknown;
     description?: unknown;
@@ -179,9 +197,10 @@ function shouldKeepQuotaModel(modelName: string): boolean {
   ) && !/gemini-1(\.|$|-)/.test(lower);
 }
 
-function parseSummaryGroups(body: QuotaApiResponse, nowSeconds: number): ModelQuota[] {
+export function parseSummaryGroups(body: QuotaApiResponse, nowSeconds: number): ModelQuota[] {
   const models: ModelQuota[] = [];
-  for (const group of body.groups ?? []) {
+  const rawGroups = body.groups ?? body.response?.groups ?? [];
+  for (const group of rawGroups) {
     const groupName = typeof group.displayName === "string" && group.displayName.trim() ? group.displayName.trim() : "Models";
     for (const bucket of group.buckets ?? []) {
       const bucketId = typeof bucket.bucketId === "string" ? bucket.bucketId.trim() : "";
@@ -339,8 +358,8 @@ function buildQuotaWindows(models: ModelQuota[]): QuotaWindow[] {
   }));
 }
 
-function classify(models: ModelQuota[], forbidden: boolean): { status: ManagedAccount["status"]; reason: string | null } {
-  if (forbidden) return { status: "active", reason: "Antigravity quota endpoint returned 403 (regional restriction)." };
+function classify(models: ModelQuota[], forbidden: boolean, forbiddenReason?: string | null): { status: ManagedAccount["status"]; reason: string | null } {
+  if (forbidden) return { status: "active", reason: forbiddenReason || "Antigravity quota endpoint returned 403 (regional restriction)." };
   if (models.length === 0) return { status: "unknown", reason: "Antigravity quota API returned no quota-enabled models." };
   const maxUsed = Math.max(...models.map((model) => model.usedPercent));
   if (maxUsed >= 100) {
@@ -354,6 +373,17 @@ function classify(models: ModelQuota[], forbidden: boolean): { status: ManagedAc
 }
 
 function toRateLimitSnapshot(models: ModelQuota[], context: AntigravityGoogleAccountContext, forbidden: boolean, hasProModels = false): RateLimitSnapshot {
+  if (forbidden) {
+    return {
+      limitId: null,
+      limitName: null,
+      primary: null,
+      secondary: null,
+      credits: null,
+      planType: normalizePlanFromTier(context.tierId, context.tier, hasProModels),
+      rateLimitReachedType: "forbidden"
+    };
+  }
   const windows = buildQuotaWindows(models);
   const primary = windows[0] ?? null;
   const secondary = windows.find((window) => window.id !== primary?.id) ?? null;
@@ -372,17 +402,18 @@ function toRateLimitSnapshot(models: ModelQuota[], context: AntigravityGoogleAcc
     } : null,
     credits: null,
     planType: normalizePlanFromTier(context.tierId, context.tier, hasProModels),
-    rateLimitReachedType: forbidden ? "forbidden" : null
+    rateLimitReachedType: null
   };
 }
 
-function quotaResultFromModels(
+export function quotaResultFromModels(
   models: ModelQuota[],
   context: AntigravityGoogleAccountContext,
   forbidden: boolean,
-  hasProModels = false
+  hasProModels = false,
+  forbiddenReason?: string | null
 ): AntigravityQuotaResult {
-  const classified = classify(models, forbidden);
+  const classified = classify(models, forbidden, forbiddenReason);
   return {
     limits: toRateLimitSnapshot(models, context, forbidden, hasProModels),
     status: classified.status,
@@ -455,148 +486,185 @@ export async function fetchAntigravityQuota(input: {
   let collectedModels: ModelQuota[] = [];
   let bestResult: AntigravityQuotaResult | null = null;
   let sawForbidden = false;
+  let forbiddenReason: string | null = null;
 
-  // 1. In production (fetchImpl not mocked), query the official retrieveUserQuotaSummary endpoint
-  if (!input.fetchImpl) {
-    for (const endpoint of retrieveUserQuotaSummaryEndpoints) {
-      let payload: Record<string, string> = basePayload;
-      let projectHeader: string | null = project;
-      let retriedWithoutProject = false;
-      while (true) {
-        try {
-          const { response, body } = await requestQuotaEndpoint({
-            endpoint,
-            accessToken: input.accessToken,
-            payload,
-            projectHeader,
-            fetchImpl,
-            requestTimeoutMs
-          });
-          if (response.ok) {
-            const summaryModels = body.groups && body.groups.length > 0 ? parseSummaryGroups(body, nowSeconds) : [];
-            if (summaryModels.length > 0) {
-              collectedModels = summaryModels;
-              retrieveResult = quotaResultFromModels(summaryModels, accountContext, false);
-              bestResult = retrieveResult;
-              if (buildQuotaWindows(summaryModels).length >= 2) return retrieveResult;
-            }
-            break;
+  function extractForbiddenReason(body: QuotaApiResponse): string | null {
+    const details = body.error?.details ?? [];
+    const validation = details.find((d) => d.reason === "VALIDATION_REQUIRED" || d.metadata?.validation_error_message);
+    if (validation?.metadata?.validation_error_message) {
+      return `Требуется верификация Google: ${validation.metadata.validation_error_message}`;
+    }
+    if (validation || body.error?.message?.includes("Verify your account")) {
+      return "Требуется верификация аккаунта Google (Verify your account to continue)";
+    }
+    return body.error?.message || null;
+  }
+
+  // 1. Query the official retrieveUserQuotaSummary endpoint
+  for (const endpoint of retrieveUserQuotaSummaryEndpoints) {
+    let payload: Record<string, string> = basePayload;
+    let projectHeader: string | null = project;
+    let retriedWithoutProject = false;
+    while (true) {
+      try {
+        const { response, body } = await requestQuotaEndpoint({
+          endpoint,
+          accessToken: input.accessToken,
+          payload,
+          projectHeader,
+          fetchImpl,
+          requestTimeoutMs
+        });
+        if (response.ok) {
+          const rawGroups = body.groups ?? body.response?.groups ?? [];
+          const summaryModels = rawGroups.length > 0 ? parseSummaryGroups(body, nowSeconds) : [];
+          if (summaryModels.length > 0) {
+            collectedModels = summaryModels;
+            retrieveResult = quotaResultFromModels(summaryModels, accountContext, false);
+            bestResult = retrieveResult;
+            if (buildQuotaWindows(summaryModels).length >= 2) return retrieveResult;
           }
-          if (response.status === 403 && "project" in payload && !retriedWithoutProject) {
-            payload = {};
-            projectHeader = null;
-            retriedWithoutProject = true;
-            continue;
-          }
-          if (response.status === 403) {
-            sawForbidden = true;
-            break;
-          }
-        } catch {
           break;
         }
+        if (response.status === 403 && "project" in payload && !retriedWithoutProject) {
+          payload = {};
+          projectHeader = null;
+          retriedWithoutProject = true;
+          continue;
+        }
+        if (response.status === 403) {
+          sawForbidden = true;
+          forbiddenReason = extractForbiddenReason(body);
+          break;
+        }
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
         break;
       }
-      if (bestResult && buildQuotaWindows(collectedModels).length >= 2) return bestResult;
+      break;
     }
+    if (sawForbidden) {
+      return quotaResultFromModels([], accountContext, true, false, forbiddenReason);
+    }
+    if (bestResult && buildQuotaWindows(collectedModels).length >= 2) return bestResult;
   }
 
   // 2. Fallback to retrieveUserQuotaEndpoint
-  if (collectedModels.length === 0 || buildQuotaWindows(collectedModels).length < 2) {
-    const { response, body } = await requestQuotaEndpoint({
-      endpoint: retrieveUserQuotaEndpoint,
-      accessToken: input.accessToken,
-      payload: basePayload,
-      projectHeader: project,
-      fetchImpl,
-      requestTimeoutMs
-    });
-    if (response.ok) {
-      const parsed = body.groups && body.groups.length > 0
-        ? parseSummaryGroups(body, nowSeconds)
-        : parseBuckets(body, nowSeconds);
-      if (parsed.length > 0) {
-        collectedModels = mergeQuotaModels(collectedModels, parsed);
-        retrieveResult = quotaResultFromModels(collectedModels, accountContext, false);
-        bestResult = retrieveResult;
-        if (buildQuotaWindows(collectedModels).length >= 2) return retrieveResult;
-      }
-      lastError = new Error("Antigravity retrieveUserQuota returned no quota buckets.");
-    } else if (response.status === 403 && project) {
-      const retry = await requestQuotaEndpoint({
+  if (!sawForbidden && (collectedModels.length === 0 || buildQuotaWindows(collectedModels).length < 2)) {
+    try {
+      const { response, body } = await requestQuotaEndpoint({
         endpoint: retrieveUserQuotaEndpoint,
         accessToken: input.accessToken,
-        payload: {},
-        projectHeader: null,
+        payload: basePayload,
+        projectHeader: project,
         fetchImpl,
         requestTimeoutMs
       });
-      if (retry.response.ok) {
-        const parsed = retry.body.groups && retry.body.groups.length > 0
-          ? parseSummaryGroups(retry.body, nowSeconds)
-          : parseBuckets(retry.body, nowSeconds);
+      if (response.ok) {
+        const rawGroups = body.groups ?? body.response?.groups ?? [];
+        const parsed = rawGroups.length > 0
+          ? parseSummaryGroups(body, nowSeconds)
+          : parseBuckets(body, nowSeconds);
         if (parsed.length > 0) {
           collectedModels = mergeQuotaModels(collectedModels, parsed);
           retrieveResult = quotaResultFromModels(collectedModels, accountContext, false);
           bestResult = retrieveResult;
           if (buildQuotaWindows(collectedModels).length >= 2) return retrieveResult;
         }
-        lastError = new Error("Antigravity retrieveUserQuota returned no quota buckets after project-header fallback.");
-      } else if (retry.response.status === 403) {
-        return quotaResultFromModels([], accountContext, true);
+        lastError = new Error("Antigravity retrieveUserQuota returned no quota buckets.");
+      } else if (response.status === 403 && project) {
+        const retry = await requestQuotaEndpoint({
+          endpoint: retrieveUserQuotaEndpoint,
+          accessToken: input.accessToken,
+          payload: {},
+          projectHeader: null,
+          fetchImpl,
+          requestTimeoutMs
+        });
+        if (retry.response.ok) {
+          const rawGroups = retry.body.groups ?? retry.body.response?.groups ?? [];
+          const parsed = rawGroups.length > 0
+            ? parseSummaryGroups(retry.body, nowSeconds)
+            : parseBuckets(retry.body, nowSeconds);
+          if (parsed.length > 0) {
+            collectedModels = mergeQuotaModels(collectedModels, parsed);
+            retrieveResult = quotaResultFromModels(collectedModels, accountContext, false);
+            bestResult = retrieveResult;
+            if (buildQuotaWindows(collectedModels).length >= 2) return retrieveResult;
+          }
+          lastError = new Error("Antigravity retrieveUserQuota returned no quota buckets after project-header fallback.");
+        } else if (retry.response.status === 403) {
+          sawForbidden = true;
+          forbiddenReason = extractForbiddenReason(retry.body);
+          return quotaResultFromModels([], accountContext, true, false, forbiddenReason);
+        } else {
+          lastError = new Error(`Antigravity retrieveUserQuota retry failed with HTTP ${retry.response.status}`);
+        }
+      } else if (response.status === 403) {
+        sawForbidden = true;
+        forbiddenReason = extractForbiddenReason(body);
+        return quotaResultFromModels([], accountContext, true, false, forbiddenReason);
       } else {
-        lastError = new Error(`Antigravity retrieveUserQuota retry failed with HTTP ${retry.response.status}`);
+        lastError = new Error(`Antigravity retrieveUserQuota failed with HTTP ${response.status}`);
       }
-    } else if (response.status === 403) {
-      sawForbidden = true;
-    } else {
-      lastError = new Error(`Antigravity retrieveUserQuota failed with HTTP ${response.status}`);
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
     }
   }
 
-  // 3. Fallback across candidate fetchAvailableModels endpoints
+  if (sawForbidden) {
+    return quotaResultFromModels([], accountContext, true, false, forbiddenReason);
+  }
+  if (bestResult && buildQuotaWindows(collectedModels).length >= 2) return bestResult;
+
+  // 3. Fallback across candidate fetchAvailableModels endpoints (legacy)
   const candidateEndpoints = fetchAvailableModelsEndpoints;
   for (const endpoint of candidateEndpoints) {
     let payload: Record<string, string> = basePayload;
     let projectHeader: string | null = project;
     let retriedWithoutProject = false;
     while (true) {
-      const { response, body } = await requestQuotaEndpoint({
-        endpoint,
-        accessToken: input.accessToken,
-        payload,
-        projectHeader,
-        fetchImpl,
-        requestTimeoutMs
-      });
-      if (response.ok) {
-        const hasPro = hasProModelAccess(body);
-        const models = parseModels(body, nowSeconds);
-        const merged = mergeQuotaModels(collectedModels, models);
-        if (merged.length > 0) {
-          collectedModels = merged;
-          bestResult = quotaResultFromModels(merged, accountContext, false, hasPro);
-          if (buildQuotaWindows(merged).length >= 2) return bestResult;
+      try {
+        const { response, body } = await requestQuotaEndpoint({
+          endpoint,
+          accessToken: input.accessToken,
+          payload,
+          projectHeader,
+          fetchImpl,
+          requestTimeoutMs
+        });
+        if (response.ok) {
+          const hasPro = hasProModelAccess(body);
+          const models = parseModels(body, nowSeconds);
+          const merged = mergeQuotaModels(collectedModels, models);
+          if (merged.length > 0) {
+            collectedModels = merged;
+            bestResult = quotaResultFromModels(merged, accountContext, false, hasPro);
+            if (buildQuotaWindows(merged).length >= 2) return bestResult;
+          }
+          break;
         }
-        break;
+        if (response.status === 403 && "project" in payload && !retriedWithoutProject) {
+          payload = {};
+          projectHeader = null;
+          retriedWithoutProject = true;
+          continue;
+        }
+        if (response.status === 403) {
+          sawForbidden = true;
+          forbiddenReason = extractForbiddenReason(body);
+          return quotaResultFromModels([], accountContext, true, false, forbiddenReason);
+        }
+        lastError = new Error(`Antigravity quota API failed with HTTP ${response.status}`);
+        if (!bestResult && response.status !== 429 && response.status < 500) throw lastError;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
       }
-      if (response.status === 403 && "project" in payload && !retriedWithoutProject) {
-        payload = {};
-        projectHeader = null;
-        retriedWithoutProject = true;
-        continue;
-      }
-      if (response.status === 403) {
-        sawForbidden = true;
-        break;
-      }
-      lastError = new Error(`Antigravity quota API failed with HTTP ${response.status}`);
-      if (!bestResult && response.status !== 429 && response.status < 500) throw lastError;
       break;
     }
   }
   if (bestResult) return bestResult;
   if (retrieveResult) return retrieveResult;
-  if (sawForbidden) return quotaResultFromModels([], accountContext, true);
+  if (sawForbidden) return quotaResultFromModels([], accountContext, true, false, forbiddenReason);
   throw lastError ?? new Error("Antigravity quota API failed");
 }

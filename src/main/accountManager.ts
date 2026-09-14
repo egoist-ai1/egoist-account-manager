@@ -58,6 +58,7 @@ import { getAntigravityProfileStatus } from "./services/antigravityProfileServic
 import {
   detectAntigravityLiveSession,
   extractAntigravityLocalIdentity,
+  fetchAntigravityLiveQuota,
   readAntigravityOfficialAuthState
 } from "./services/antigravityProfileReader.js";
 import {
@@ -96,7 +97,7 @@ import {
   quiesceAntigravity,
   restartAntigravityIntegration
 } from "./services/antigravityProcessService.js";
-import { fetchAntigravityQuota, type AntigravityQuotaResult } from "./services/antigravityQuotaService.js";
+import { fetchAntigravityQuota, parseSummaryGroups, quotaResultFromModels, type AntigravityQuotaResult } from "./services/antigravityQuotaService.js";
 import {
   parseAntigravityCredentialPayload,
   readAntigravityExternalCredentialPayloads,
@@ -141,6 +142,7 @@ export interface AccountManagerDependencies {
   detectAntigravityLiveSession?: typeof detectAntigravityLiveSession;
   readAntigravityOfficialAuthState?: typeof readAntigravityOfficialAuthState;
   fetchAntigravityQuota?: typeof fetchAntigravityQuota;
+  fetchAntigravityLiveQuota?: typeof fetchAntigravityLiveQuota;
   fetchAntigravityGoogleUserInfo?: typeof fetchAntigravityGoogleUserInfo;
   fetchAntigravityGoogleAccountContext?: typeof fetchAntigravityGoogleAccountContext;
   restartAntigravityIntegration?: typeof restartAntigravityIntegration;
@@ -833,6 +835,52 @@ export class AccountManager extends EventEmitter {
       saved = this.store.setActive(matched.id);
       this.emitLog(`Synchronized active Antigravity session to ${saved.email} (${saved.id}) via ${detectionSource}.`);
       changed = true;
+    }
+
+    // 1. Sync live tokens from Windows Credential Manager (gemini:antigravity)
+    try {
+      const credReader = this.dependencies.readAntigravityCredentialStorePayload ?? readAntigravityCredentialStorePayload;
+      const credResult = credReader(process.platform);
+      if (credResult?.payload) {
+        const parsedCred = JSON.parse(credResult.payload) as {
+          token?: { refresh_token?: string; access_token?: string; expiry?: string };
+        };
+        const credAccessToken = parsedCred?.token?.access_token?.trim();
+        const credRefreshToken = parsedCred?.token?.refresh_token?.trim();
+        if (credAccessToken || credRefreshToken) {
+          const fullAccount = this.store.get(saved.id);
+          if (fullAccount) {
+            let vaultRecord = this.readAntigravityVaultRecord(fullAccount);
+            const currentAccessToken = vaultRecord.googleOAuth?.accessToken;
+            const currentRefreshToken = vaultRecord.googleOAuth?.refreshToken;
+            const needsTokenUpdate = (credAccessToken && credAccessToken !== currentAccessToken)
+              || (credRefreshToken && credRefreshToken !== currentRefreshToken);
+
+            if (needsTokenUpdate && vaultRecord.googleOAuth) {
+              let expiresAt: number | null = null;
+              if (parsedCred?.token?.expiry) {
+                const parsedMs = Date.parse(parsedCred.token.expiry);
+                if (Number.isFinite(parsedMs)) expiresAt = Math.floor(parsedMs / 1000);
+              }
+              const updatedGoogleOAuth = {
+                ...vaultRecord.googleOAuth,
+                refreshToken: credRefreshToken ?? currentRefreshToken ?? vaultRecord.googleOAuth.refreshToken,
+                accessToken: credAccessToken ?? currentAccessToken ?? vaultRecord.googleOAuth.accessToken,
+                expiresAt: expiresAt ?? vaultRecord.googleOAuth.expiresAt ?? (Math.floor(Date.now() / 1000) + 3600)
+              };
+              vaultRecord = {
+                ...vaultRecord,
+                googleOAuth: updatedGoogleOAuth
+              };
+              this.store.updateEncryptedAuthJson(saved.id, this.vault.encryptUtf8(JSON.stringify(vaultRecord)));
+              this.emitLog(`Synchronized live Antigravity tokens from Windows Credential Manager to ${saved.email}.`);
+              changed = true;
+            }
+          }
+        }
+      }
+    } catch (_error) {
+      // Credential manager token sync failure should not break active session sync
     }
 
     if (officialState) {
@@ -3398,6 +3446,38 @@ export class AccountManager extends EventEmitter {
     const client = resolveAntigravityOAuthClient({});
     const clientId = googleOAuth.oauthClientId || client.clientId;
     const clientSecret = client.clientSecret;
+    const isCurrentlyActive = this.store.list().some((item) => item.platform === "antigravity" && item.isActive && item.id === account.id);
+
+    // If account is currently active, synchronize live tokens from Windows Credential Manager
+    if (isCurrentlyActive) {
+      try {
+        const credReader = this.dependencies.readAntigravityCredentialStorePayload ?? readAntigravityCredentialStorePayload;
+        const credResult = credReader(process.platform);
+        if (credResult?.payload) {
+          const parsedCred = JSON.parse(credResult.payload) as {
+            token?: { refresh_token?: string; access_token?: string; expiry?: string };
+          };
+          const credAccessToken = parsedCred?.token?.access_token?.trim();
+          const credRefreshToken = parsedCred?.token?.refresh_token?.trim();
+          if (credAccessToken) {
+            let credExpiresAt: number | null = null;
+            if (parsedCred?.token?.expiry) {
+              const ms = Date.parse(parsedCred.token.expiry);
+              if (Number.isFinite(ms)) credExpiresAt = Math.floor(ms / 1000);
+            }
+            if (credAccessToken !== googleOAuth.accessToken || (credRefreshToken && credRefreshToken !== googleOAuth.refreshToken)) {
+              googleOAuth.accessToken = credAccessToken;
+              if (credRefreshToken) googleOAuth.refreshToken = credRefreshToken;
+              if (credExpiresAt) googleOAuth.expiresAt = credExpiresAt;
+              this.store.updateEncryptedAuthJson(account.id, this.vault.encryptUtf8(JSON.stringify(record)));
+              this.emitLog(`Refreshed live credentials from Windows Credential Manager for active account ${account.email}.`);
+            }
+          }
+        }
+      } catch (_credErr) {
+        // Fall back to stored tokens
+      }
+    }
 
     if (!googleOAuth.expiresAt || !googleOAuth.accessToken || googleOAuth.expiresAt <= now + antigravityRefreshSkewSeconds) {
       if (!googleOAuth.refreshToken) {
@@ -3414,18 +3494,6 @@ export class AccountManager extends EventEmitter {
       googleOAuth.scope = refreshed.scope.length ? refreshed.scope : googleOAuth.scope;
       googleOAuth.tokenType = refreshed.tokenType ?? googleOAuth.tokenType;
       this.store.updateEncryptedAuthJson(account.id, this.vault.encryptUtf8(JSON.stringify(record)));
-      const isCurrentlyActive = this.store.list().some((item) => item.platform === "antigravity" && item.isActive && item.id === account.id);
-      if (isCurrentlyActive) {
-        this.scheduleAntigravityGoogleCredentialStoreWrite(account.id, googleOAuth);
-        try {
-          const ideWrite = this.writeAntigravityGoogleIdeProfile(googleOAuth, account);
-          if (ideWrite?.applied) {
-            this.emitLog(`Antigravity IDE unified auth state refreshed after Google token refresh for ${account.email}. Backup=${ideWrite.backupId}`);
-          }
-        } catch (error) {
-          this.emitLog(`Antigravity IDE unified auth state refresh after token update failed: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
     }
 
     const quotaFetcher = this.dependencies.fetchAntigravityQuota ?? fetchAntigravityQuota;
@@ -3440,36 +3508,67 @@ export class AccountManager extends EventEmitter {
             errorReason: null
           }
         : undefined;
-    let quota: AntigravityQuotaResult;
-    try {
-      quota = await quotaFetcher({
-        accessToken: googleOAuth.accessToken,
-        googleProjectId: targetProject,
-        accountContext: cachedContext,
-        requestTimeoutMs: 15_000
-      });
-    } catch (firstError) {
-      const errStr = String(firstError);
-      if (errStr.includes("401") && googleOAuth.refreshToken) {
-        const refreshed = await refreshAntigravityGoogleAccessToken({
-          clientId,
-          clientSecret,
-          refreshToken: googleOAuth.refreshToken
-        });
-        googleOAuth.accessToken = refreshed.accessToken;
-        googleOAuth.refreshToken = refreshed.refreshToken ?? googleOAuth.refreshToken;
-        googleOAuth.expiresAt = refreshed.expiresAt ?? googleOAuth.expiresAt;
-        this.store.updateEncryptedAuthJson(account.id, this.vault.encryptUtf8(JSON.stringify(record)));
+    let quota: AntigravityQuotaResult | null = null;
+
+    // For the active account, query live telemetry from local Language Server first if running (only in real runtime or if specifically injected)
+    const liveQuotaFetcher = this.dependencies.fetchAntigravityLiveQuota ?? fetchAntigravityLiveQuota;
+    const shouldFetchLiveQuota =
+      Boolean(this.dependencies.fetchAntigravityLiveQuota) ||
+      (process.env.NODE_ENV !== "test" && !this.dependencies.fetchAntigravityQuota);
+    if (isCurrentlyActive && shouldFetchLiveQuota) {
+      try {
+        const liveQuota = await liveQuotaFetcher();
+        if (liveQuota?.groups && liveQuota.groups.length > 0) {
+          const nowSeconds = Math.floor(Date.now() / 1000);
+          const models = parseSummaryGroups(liveQuota, nowSeconds);
+          if (models.length > 0) {
+            quota = quotaResultFromModels(models, cachedContext ?? {
+              googleProjectId: targetProject,
+              tier: googleOAuth.tier ?? "unknown",
+              tierId: googleOAuth.tierId ?? null,
+              source: "code_assist",
+              errorReason: null
+            }, false);
+            this.emitLog(`Fetched live quota telemetry from Antigravity Language Server for ${account.email}.`);
+          }
+        }
+      } catch (_liveErr) {
+        // Fall back to Google API
+      }
+    }
+
+    if (!quota) {
+      try {
         quota = await quotaFetcher({
           accessToken: googleOAuth.accessToken,
           googleProjectId: targetProject,
           accountContext: cachedContext,
           requestTimeoutMs: 15_000
         });
-      } else {
-        throw firstError;
+      } catch (firstError) {
+        const errStr = String(firstError);
+        if (errStr.includes("401") && googleOAuth.refreshToken) {
+          const refreshed = await refreshAntigravityGoogleAccessToken({
+            clientId,
+            clientSecret,
+            refreshToken: googleOAuth.refreshToken
+          });
+          googleOAuth.accessToken = refreshed.accessToken;
+          googleOAuth.refreshToken = refreshed.refreshToken ?? googleOAuth.refreshToken;
+          googleOAuth.expiresAt = refreshed.expiresAt ?? googleOAuth.expiresAt;
+          this.store.updateEncryptedAuthJson(account.id, this.vault.encryptUtf8(JSON.stringify(record)));
+          quota = await quotaFetcher({
+            accessToken: googleOAuth.accessToken,
+            googleProjectId: targetProject,
+            accountContext: cachedContext,
+            requestTimeoutMs: 15_000
+          });
+        } else {
+          throw firstError;
+        }
       }
     }
+
     let vaultChanged = false;
     if (quota.accountContext.googleProjectId && quota.accountContext.googleProjectId !== googleOAuth.googleProjectId) {
       googleOAuth.googleProjectId = quota.accountContext.googleProjectId;
@@ -3485,17 +3584,6 @@ export class AccountManager extends EventEmitter {
     }
     if (vaultChanged) {
       this.store.updateEncryptedAuthJson(account.id, this.vault.encryptUtf8(JSON.stringify(record)));
-      const isCurrentlyActive = this.store.list().some((item) => item.platform === "antigravity" && item.isActive && item.id === account.id);
-      if (isCurrentlyActive) {
-        try {
-          const ideWrite = this.writeAntigravityGoogleIdeProfile(googleOAuth, account);
-          if (ideWrite?.applied) {
-            this.emitLog(`Antigravity IDE unified auth state refreshed after Code Assist context update for ${account.email}. Backup=${ideWrite.backupId}`);
-          }
-        } catch (error) {
-          this.emitLog(`Antigravity IDE unified auth state refresh after quota update failed: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
     }
 
     const safeLimits = sanitizeAntigravityLimits(quota.limits);

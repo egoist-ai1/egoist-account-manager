@@ -325,4 +325,84 @@ describe("WindowsDesktopLifecycleService", () => {
 
     await expect(service.launchAndWaitReady()).rejects.toThrow("stable visible window");
   });
+
+  it("captures companion processes from AppData Local OpenAI Codex and terminates them with exact-tree-fallback", async () => {
+    const codex = desktopPackage("OpenAI.Codex");
+    const root = desktopProcess(700, 1, "2026-07-30T13:00:00.000Z", codex.executablePath!);
+    const codexServer = desktopProcess(
+      701,
+      700,
+      "2026-07-30T13:00:01.000Z",
+      "C:\\Users\\test\\AppData\\Local\\OpenAI\\Codex\\bin\\hash\\codex.exe",
+      "\"C:\\Users\\test\\AppData\\Local\\OpenAI\\Codex\\bin\\hash\\codex.exe\" -c ... app-server",
+      "codex.exe"
+    );
+    const codeModeHost = desktopProcess(
+      702,
+      701,
+      "2026-07-30T13:00:02.000Z",
+      "C:\\Users\\test\\AppData\\Local\\OpenAI\\Codex\\bin\\hash\\codex-code-mode-host.exe",
+      "\"C:\\Users\\test\\AppData\\Local\\OpenAI\\Codex\\bin\\hash\\codex-code-mode-host.exe\"",
+      "codex-code-mode-host.exe"
+    );
+    const computerUseSwift = desktopProcess(
+      703,
+      700,
+      "2026-07-30T13:00:03.000Z",
+      "C:\\Users\\test\\AppData\\Local\\OpenAI\\Codex\\runtimes\\cua_node\\hash\\bin\\codex-computer-use-swift.exe",
+      "\"C:\\Users\\test\\AppData\\Local\\OpenAI\\Codex\\runtimes\\cua_node\\hash\\bin\\codex-computer-use-swift.exe\"",
+      "codex-computer-use-swift.exe"
+    );
+    const adapter = new FakeAdapter(snapshot([codex], [root, codexServer, codeModeHost, computerUseSwift]));
+    adapter.closeResult = "refused";
+    const service = new WindowsDesktopLifecycleService(adapter, {
+      gracefulTimeoutMs: 0,
+      forceTimeoutMs: 0
+    });
+
+    const result = await service.quiesce("exact-tree-fallback");
+
+    expect(result).toMatchObject({
+      status: "quiesced",
+      capturedProcessCount: 4,
+      remainingProcessCount: 0,
+      usedExactTreeFallback: true
+    });
+    expect(adapter.terminateCalls.map((p) => p.pid).sort()).toEqual([700, 701, 702, 703]);
+  });
+
+  it("captures and terminates orphaned companion processes when root has already exited", async () => {
+    const codex = desktopPackage("OpenAI.Codex");
+    const orphanedServer = desktopProcess(
+      801,
+      9999, // dead parent
+      "2026-07-30T13:10:01.000Z",
+      "C:\\Users\\test\\AppData\\Local\\OpenAI\\Codex\\bin\\hash\\codex.exe",
+      "\"C:\\Users\\test\\AppData\\Local\\OpenAI\\Codex\\bin\\hash\\codex.exe\" -c ... app-server",
+      "codex.exe"
+    );
+    const orphanedCodeModeHost = desktopProcess(
+      802,
+      801,
+      "2026-07-30T13:10:02.000Z",
+      "C:\\Users\\test\\AppData\\Local\\OpenAI\\Codex\\bin\\hash\\codex-code-mode-host.exe",
+      "\"C:\\Users\\test\\AppData\\Local\\OpenAI\\Codex\\bin\\hash\\codex-code-mode-host.exe\"",
+      "codex-code-mode-host.exe"
+    );
+    const adapter = new FakeAdapter(snapshot([codex], [orphanedServer, orphanedCodeModeHost]));
+    const service = new WindowsDesktopLifecycleService(adapter, {
+      gracefulTimeoutMs: 0,
+      forceTimeoutMs: 0
+    });
+
+    const result = await service.quiesce("exact-tree-fallback");
+
+    expect(result).toMatchObject({
+      status: "quiesced",
+      capturedProcessCount: 2,
+      remainingProcessCount: 0,
+      usedExactTreeFallback: true
+    });
+    expect(adapter.terminateCalls.map((p) => p.pid).sort()).toEqual([801, 802]);
+  });
 });

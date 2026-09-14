@@ -98,6 +98,49 @@ function isInsideInstallRoot(
   );
 }
 
+function isInsideCompanionRoot(
+  process: WindowsProcessSnapshot,
+  identity: OpenAiDesktopIdentity
+): boolean {
+  const executablePath = normalized(process.executablePath).replace(/\//g, "\\").toLowerCase();
+  if (!executablePath) return false;
+
+  const productName = identity.product === "codex" ? "codex" : "chatgpt";
+  const env = globalThis.process?.env ?? {};
+  const localAppData = normalized(env.LOCALAPPDATA ?? "").replace(/\//g, "\\").toLowerCase();
+  const appData = normalized(env.APPDATA ?? "").replace(/\//g, "\\").toLowerCase();
+
+  const prefixes = [
+    localAppData ? `${localAppData}\\openai\\${productName}` : null,
+    localAppData ? `${localAppData}\\openai` : null,
+    appData ? `${appData}\\openai\\${productName}` : null,
+    appData ? `${appData}\\openai` : null
+  ].filter(Boolean) as string[];
+
+  for (const prefix of prefixes) {
+    if (executablePath === prefix || executablePath.startsWith(`${prefix}\\`)) {
+      return true;
+    }
+  }
+
+  if (
+    executablePath.includes(`\\appdata\\local\\openai\\${productName}\\`)
+    || executablePath.includes(`\\appdata\\roaming\\openai\\${productName}\\`)
+    || (productName === "codex" && executablePath.includes("\\appdata\\local\\openai\\codex\\"))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function isPackageOrCompanionProcess(
+  process: WindowsProcessSnapshot,
+  identity: OpenAiDesktopIdentity
+): boolean {
+  return isInsideInstallRoot(process, identity) || isInsideCompanionRoot(process, identity);
+}
+
 function hasSelectedPackageAncestor(
   processes: WindowsProcessSnapshot[],
   controllerPid: number,
@@ -108,7 +151,7 @@ function hasSelectedPackageAncestor(
   let current = byPid.get(controllerPid);
   while (current && !visited.has(current.pid)) {
     visited.add(current.pid);
-    if (current.pid !== controllerPid && isInsideInstallRoot(current, identity)) return true;
+    if (current.pid !== controllerPid && isPackageOrCompanionProcess(current, identity)) return true;
     current = byPid.get(current.parentPid);
   }
   return false;
@@ -119,16 +162,22 @@ function descendantsOf(
   processes: WindowsProcessSnapshot[],
   identity: OpenAiDesktopIdentity
 ): WindowsProcessSnapshot[] {
-  const packageProcesses = processes.filter((process) => isInsideInstallRoot(process, identity));
+  const eligibleProcesses = processes.filter((process) => isPackageOrCompanionProcess(process, identity));
   const selected = new Map<number, WindowsProcessSnapshot>();
   const pending = roots.map((root) => root.pid);
   roots.forEach((root) => selected.set(root.pid, root));
   while (pending.length > 0) {
     const parentPid = pending.shift();
-    for (const process of packageProcesses) {
+    for (const process of eligibleProcesses) {
       if (process.parentPid !== parentPid || selected.has(process.pid)) continue;
       selected.set(process.pid, process);
       pending.push(process.pid);
+    }
+  }
+  for (const process of eligibleProcesses) {
+    if (selected.has(process.pid)) continue;
+    if (isInsideCompanionRoot(process, identity)) {
+      selected.set(process.pid, process);
     }
   }
   return [...selected.values()];
@@ -494,6 +543,9 @@ $ErrorActionPreference = 'Stop'
 ${exactProcessGuard(process)}
 try {
   Stop-Process -Id ${process.pid} -Force -ErrorAction SilentlyContinue
+  if (Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue) {
+    taskkill.exe /F /PID ${process.pid} 2>$null | Out-Null
+  }
   [PSCustomObject]@{ status = 'terminated' } | ConvertTo-Json -Compress
 } catch {
   [PSCustomObject]@{ status = 'vanished' } | ConvertTo-Json -Compress
@@ -514,7 +566,8 @@ try {
       })));
       const script = `
 $ErrorActionPreference = 'SilentlyContinue'
-$targets = ConvertFrom-Json ${decodeBase64PowerShell(targetsJson)}
+$raw = ${decodeBase64PowerShell(targetsJson)}
+[object[]]$targets = ConvertFrom-Json -InputObject $raw
 foreach ($t in $targets) {
   $target = Get-CimInstance Win32_Process -Filter "ProcessId = $($t.pid)" -ErrorAction SilentlyContinue
   if ($target) {
@@ -529,6 +582,9 @@ foreach ($t in $targets) {
     $dateMatches = [string]::IsNullOrEmpty($t.creationDate) -or [string]::IsNullOrEmpty($actualCreationDate) -or ($actualCreationDate -ieq $t.creationDate)
     if ($nameMatches -and ($pathMatches -or $dateMatches)) {
       Stop-Process -Id $t.pid -Force -ErrorAction SilentlyContinue
+      if (Get-Process -Id $t.pid -ErrorAction SilentlyContinue) {
+        taskkill.exe /F /PID $t.pid 2>$null | Out-Null
+      }
     }
   }
 }
@@ -691,9 +747,11 @@ export class WindowsDesktopLifecycleService {
       resolved.roots.map((root) => this.adapter.requestGracefulClose(root))
     );
     const gracefulCloseAccepted = closeResults.some((result) => result === "accepted");
-    const gracefulWaitMs = gracefulCloseAccepted || policy === "graceful-only" || policy === "exact-tree-fallback"
-      ? this.options.gracefulTimeoutMs
-      : Math.min(this.options.gracefulTimeoutMs, 1000);
+    const gracefulWaitMs = resolved.roots.length === 0
+      ? 0
+      : (gracefulCloseAccepted || policy === "graceful-only" || policy === "exact-tree-fallback"
+        ? this.options.gracefulTimeoutMs
+        : Math.min(this.options.gracefulTimeoutMs, 1000));
     let alive = await this.waitForExit(captured, gracefulWaitMs);
     if (alive.length === 0) {
       return {

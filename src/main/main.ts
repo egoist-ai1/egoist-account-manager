@@ -2,7 +2,7 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { BrowserWindow, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, nativeImage, powerMonitor, screen, shell, type IpcMainInvokeEvent } from "electron";
+import { BrowserWindow, Menu, Tray, app, clipboard, dialog, ipcMain, nativeImage, powerMonitor, screen, shell, type IpcMainInvokeEvent } from "electron";
 import { AccountStore } from "./db.js";
 import { Vault } from "./security.js";
 import { getAppDataDir, getDefaultCodexHome } from "./paths.js";
@@ -63,7 +63,6 @@ import { restartAntigravityIntegration } from "./services/antigravityProcessServ
 import { createProviderRuntimeAdapters } from "./services/providerRuntimeAdapter.js";
 import { WindowsDesktopLifecycleService } from "./services/windowsDesktopLifecycleService.js";
 import { QuotaAlertService } from "./services/quotaAlertService.js";
-import { QuotaResetNotificationService } from "./services/quotaResetNotificationService.js";
 import { DeviceCodeHandoffService } from "./services/deviceCodeHandoffService.js";
 import {
   InAppNotificationService,
@@ -99,8 +98,6 @@ let updaterService: UpdaterService | null = null;
 let codexCapabilityService: CodexCapabilityService | null = null;
 let desktopLifecycleService: WindowsDesktopLifecycleService | null = null;
 let quotaAlertService: QuotaAlertService | null = null;
-let quotaResetNotificationService: QuotaResetNotificationService | null = null;
-let quotaResetTimer: NodeJS.Timeout | null = null;
 let antigravityGoogleLoginInFlight: Promise<unknown> | null = null;
 const deviceCodeHandoff = new DeviceCodeHandoffService(clipboard);
 const inAppNotificationService = new InAppNotificationService();
@@ -680,9 +677,7 @@ function registerIpc(appDataDir: string): void {
     }),
     assertTrustedSender
   );
-  handle("accounts:list", async () => {
-    syncActiveCodexSession("accounts:list");
-    await syncActiveAntigravitySession("accounts:list");
+  handle("accounts:list", () => {
     return requireManager().list();
   });
   handle("app:getInfo", () => ({
@@ -1097,26 +1092,7 @@ function publishInAppNotification(payload: AppNotificationPayload): void {
   mainWindow.webContents.send("app:notification", safePayload);
 }
 
-function showQuotaResetNativeNotification(title: string, body: string): void {
-  try {
-    if (Notification && typeof Notification.isSupported === "function" && Notification.isSupported()) {
-      const toast = Reflect.construct(Notification, [{
-        title: redactSensitiveText(title),
-        body: redactSensitiveText(body),
-        silent: false
-      }]) as Notification;
-      toast.on("click", () => {
-        showMainWindow();
-      });
-      toast.show();
-    }
-  } catch (err) {
-    log("Failed to show native quota reset notification", err);
-  }
-}
-
 function publishQuotaAlerts(accounts: ManagedAccount[]): void {
-  quotaResetNotificationService?.onAccountsUpdated(accounts);
   const settings = settingsService?.get();
   const alerts = quotaAlertService?.evaluate(accounts, settings?.smartSwitchThresholdPercent ?? 10) ?? [];
   for (const alert of alerts) {
@@ -1614,8 +1590,15 @@ function syncActiveCodexSession(reason: string): void {
   }
 }
 
+let lastAntigravitySyncAt = 0;
+
 async function syncActiveAntigravitySession(reason: string): Promise<void> {
   if (!manager) return;
+  const now = Date.now();
+  if (reason !== "startup" && reason !== "explicit" && now - lastAntigravitySyncAt < 10_000) {
+    return;
+  }
+  lastAntigravitySyncAt = now;
   try {
     const result = await manager.syncActiveAntigravitySession();
     if (result.status === "updated" || result.status === "signed_out" || result.status === "unmanaged") {
@@ -1641,7 +1624,7 @@ function startSessionSnapshotSync(): void {
   void syncActiveSessions("startup");
   sessionSnapshotTimer = setInterval(() => {
     void syncActiveSessions("periodic");
-  }, 3_500);
+  }, 60_000);
 
   try {
     const appData = process.env.APPDATA || (process.platform === "win32" ? path.join(process.env.USERPROFILE || "C:\\Users\\Default", "AppData", "Roaming") : "");
@@ -1815,32 +1798,6 @@ if (!gotLock) {
         readState: () => store.getSetting("quotaAlertState.v1"),
         writeState: (value) => store.setSetting("quotaAlertState.v1", value)
       });
-      quotaResetNotificationService = new QuotaResetNotificationService({
-        onNotify: (item) => {
-          showQuotaResetNativeNotification(item.title, item.body);
-          publishInAppNotification({
-            key: `quota-reset-${item.accountId}-${Date.now()}`,
-            title: item.title,
-            body: item.body,
-            tone: "success",
-            silent: false,
-            timeoutType: "default",
-            createdAt: Math.floor(Date.now() / 1000)
-          });
-        },
-        onTriggerRefresh: (accountId) => {
-          if (manager) {
-            void manager.refreshAccount(accountId).then(() => {
-              broadcastAccountsUpdated();
-              updateTrayMenu();
-            }).catch((err) => {
-              log(`Auto refresh after quota reset failed for account ${accountId}`, err);
-            });
-          }
-        },
-        now: () => Math.floor(Date.now() / 1000),
-        isEnglish: () => settingsService?.get().language === "en"
-      });
       desktopLifecycleService = new WindowsDesktopLifecycleService();
       manager = new AccountManager(store, vault, appDataDir, codexPath, {
         readAntigravityCredentialStorePayload,
@@ -1863,7 +1820,6 @@ if (!gotLock) {
         if (payload) publishInAppNotification(payload);
       });
       manager.on("accounts-updated", () => {
-        quotaResetNotificationService?.onAccountsUpdated(manager?.list() ?? []);
         broadcastAccountsUpdated();
         updateTrayMenu();
       });
@@ -1894,11 +1850,6 @@ if (!gotLock) {
       startAutoRefresh(currentRateLimitRefreshIntervalMs);
       applyDesktopIntegrationSettings(settingsService.get());
       startTrayRefresh(currentTrayRefreshIntervalMs);
-      quotaResetNotificationService.onAccountsUpdated(manager.list());
-      if (quotaResetTimer) clearInterval(quotaResetTimer);
-      quotaResetTimer = setInterval(() => {
-        quotaResetNotificationService?.checkTimeBasedResets();
-      }, 15_000);
       log("Application services initialized");
     } catch (error) {
       startupError = error instanceof Error ? error.message : String(error);

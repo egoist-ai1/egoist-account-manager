@@ -1254,8 +1254,7 @@ function AccountInspector({
   onOpenFolder,
   onMetadata,
   onDelete,
-  onRegenerateFingerprint,
-  onWarmup
+  onRegenerateFingerprint
 }: {
   account: ManagedAccount | null;
   privacyMode: boolean;
@@ -1270,7 +1269,6 @@ function AccountInspector({
   onMetadata: (id: string, input: { tags?: string[]; favorite?: boolean; archived?: boolean }) => void;
   onDelete: (id: string) => void;
   onRegenerateFingerprint?: (id: string) => void;
-  onWarmup?: (id: string) => void;
 }) {
   const isEnglish = language === "en";
   const text = getUiText(language);
@@ -1404,18 +1402,6 @@ function AccountInspector({
           >
             {busy === `fp:${account.id}` ? <Loader2 className="spin" /> : <Fingerprint />}
             <span className="action-label">{isEnglish ? "New Fingerprint" : "Новый отпечаток"}</span>
-          </button>
-        ) : null}
-        {onWarmup ? (
-          <button
-            className="button secondary"
-            aria-label={isEnglish ? "Start reset cooldown timer" : "Запустить таймер сброса"}
-            disabled={busy !== null}
-            onClick={() => onWarmup(account.id)}
-            title={isEnglish ? "Send a test ping to start the rolling quota countdown timer" : "Отправить тестовый запрос для запуска таймера сброса квот"}
-          >
-            {busy === `warmup:${account.id}` ? <Loader2 className="spin" /> : <Clock />}
-            <span className="action-label">{isEnglish ? "Start Timer" : "Запуск таймера"}</span>
           </button>
         ) : null}
         <button className="button danger-action" aria-label={isEnglish ? "Delete profile" : "Удалить профиль"} disabled={busy !== null || account.isActive} onClick={() => onDelete(account.id)} title={account.isActive ? (isEnglish ? "Activate another profile first" : "Сначала переключись на другой аккаунт") : undefined}><Trash2 />{isEnglish ? "Delete profile" : "Удалить профиль"}</button>
@@ -2589,35 +2575,6 @@ function App() {
     }
   }
 
-  async function warmupAccount(id: string) {
-    setBusy(`warmup:${id}`);
-    try {
-      const result = await cam.warmupAccountQuotaTimer(id);
-      await reload();
-      setMessage(result.message);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function warmupAllAccounts() {
-    setBusy("warmupAll");
-    try {
-      const result = await cam.warmupAllQuotaTimers();
-      await reload();
-      const msg = isEnglish
-        ? `Timers triggered: ${result.triggered}, already active: ${result.alreadyActive}, failed: ${result.failed}`
-        : `Таймеров запущено: ${result.triggered}, уже активных: ${result.alreadyActive}, ошибок: ${result.failed}`;
-      setMessage(msg);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(null);
-    }
-  }
-
   async function toggleGodMode(enabled: boolean) {
     setBusy("godMode");
     try {
@@ -3348,15 +3305,6 @@ function App() {
                     {busy === "refresh:all" ? <Loader2 className="spin" /> : <RefreshCcw />}
                     {uiText.actions.refresh}
                   </button>
-                  <button
-                    className="button secondary"
-                    disabled={busy !== null || accounts.length === 0}
-                    onClick={warmupAllAccounts}
-                    title={isEnglish ? "Send test pings to all accounts to start rolling quota countdown timers" : "Отправить тестовые запросы во все аккаунты для предварительного запуска таймеров сброса"}
-                  >
-                    {busy === "warmupAll" ? <Loader2 className="spin" /> : <Clock />}
-                    <span>{isEnglish ? "Warm Up Timers" : "Запустить таймеры"}</span>
-                  </button>
                   <details className="account-tools-menu">
                     <summary className="icon-btn" title={isEnglish ? "Import and export" : "Импорт и экспорт"} aria-label={isEnglish ? "Import and export" : "Импорт и экспорт"}><MoreHorizontal /></summary>
                     <div>
@@ -3703,7 +3651,6 @@ function App() {
                 void deleteAccount(id);
               }}
               onRegenerateFingerprint={regenerateFingerprint}
-              onWarmup={warmupAccount}
             />
           </div>
         </div>

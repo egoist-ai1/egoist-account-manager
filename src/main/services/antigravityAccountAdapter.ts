@@ -17,6 +17,11 @@ export const ANTIGRAVITY_ENTERPRISE_PREFERENCES_STATE_KEY = "antigravityUnifiedS
 export const ANTIGRAVITY_AUTH_STATUS_STATE_KEY = "antigravityAuthStatus";
 export const ANTIGRAVITY_ONBOARDING_STATE_KEY = "antigravityOnboarding";
 export const ANTIGRAVITY_LEGACY_GOOGLE_STATE_KEY = "google.antigravity";
+import {
+  injectAntigravitySecondaryPersona,
+  type AntigravityHardwarePersona
+} from "./antigravityHardwarePersonaService.js";
+
 export const ANTIGRAVITY_ACTIVE_ACCOUNT_STORAGE_KEY = "storage.serviceMachineId";
 
 export interface AntigravityCredentialPackage {
@@ -28,6 +33,7 @@ export interface AntigravityCredentialPackage {
   googleProjectId?: string | null;
   scopes?: string[];
   machineId?: string | null;
+  persona?: AntigravityHardwarePersona | null;
 }
 
 export interface AntigravityAccountWriteSummary {
@@ -133,23 +139,50 @@ export function createAntigravityAccountWritePlan(input: AntigravityCredentialPa
     ANTIGRAVITY_LEGACY_GOOGLE_STATE_KEY,
     ...(normalizedProjectId ? [] : [ANTIGRAVITY_ENTERPRISE_PREFERENCES_STATE_KEY])
   ];
-  const storagePatch = input.machineId ? { [ANTIGRAVITY_ACTIVE_ACCOUNT_STORAGE_KEY]: input.machineId } : {};
+  const allowedStorageKeys = [ANTIGRAVITY_ACTIVE_ACCOUNT_STORAGE_KEY];
+  const storagePatch: Record<string, unknown> = input.machineId
+    ? { [ANTIGRAVITY_ACTIVE_ACCOUNT_STORAGE_KEY]: input.machineId }
+    : {};
+
+  let effectiveMachineId = input.machineId ?? undefined;
+
+  if (input.persona) {
+    allowedStorageKeys.push(
+      "telemetry.machineId",
+      "telemetry.macMachineId",
+      "telemetry.devDeviceId",
+      "telemetry.sqmId"
+    );
+    storagePatch["telemetry.machineId"] = input.persona.telemetryMachineId;
+    storagePatch["telemetry.macMachineId"] = input.persona.telemetryMacMachineId;
+    storagePatch["telemetry.devDeviceId"] = input.persona.devDeviceId;
+    storagePatch["telemetry.sqmId"] = input.persona.sqmId;
+
+    allowedStateKeys.push("storage.serviceMachineId");
+    stateItems.push({
+      key: "storage.serviceMachineId",
+      value: input.persona.serviceMachineId
+    });
+
+    effectiveMachineId = input.persona.machineId;
+  }
+
   const tokenFields: Array<"refreshToken" | "accessToken"> = ["refreshToken"];
   if (input.accessToken) tokenFields.push("accessToken");
   return {
     allowedStateKeys,
     stateItems,
     stateDeleteKeys,
-    allowedStorageKeys: [ANTIGRAVITY_ACTIVE_ACCOUNT_STORAGE_KEY],
+    allowedStorageKeys,
     storagePatch,
-    machineId: input.machineId ?? undefined,
-    allowMachineIdWrite: input.machineId !== undefined && input.machineId !== null,
+    machineId: effectiveMachineId,
+    allowMachineIdWrite: effectiveMachineId !== undefined && effectiveMachineId !== null,
     summary: {
       accountId: input.accountId,
       email: input.email,
       stateKeys: stateItems.map((item) => item.key),
       storageKeys: Object.keys(storagePatch),
-      writesMachineId: input.machineId !== undefined && input.machineId !== null,
+      writesMachineId: effectiveMachineId !== undefined && effectiveMachineId !== null,
       tokenFields
     }
   };
@@ -179,5 +212,9 @@ export function applyAntigravityAccountWritePlan(input: AntigravityAccountApplyI
     machineId: plan.machineId,
     allowMachineIdWrite: plan.allowMachineIdWrite
   };
-  return sanitizeWriterResult(plan, writePreparedAntigravityProfile(writerInput));
+  const result = writePreparedAntigravityProfile(writerInput);
+  if (input.credentials.persona) {
+    injectAntigravitySecondaryPersona(input.credentials.persona, input);
+  }
+  return sanitizeWriterResult(plan, result);
 }

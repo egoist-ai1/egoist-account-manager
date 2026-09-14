@@ -69,6 +69,41 @@ export interface AntigravityAccountDetails {
   ideStateDetected: boolean;
 }
 
+export interface AntigravityGodModeStatus {
+  enabled: boolean;
+  settingsPath: string;
+  details: {
+    workspaceTrustDisabled: boolean;
+    chatAlwaysConfirmDisabled: boolean;
+    terminalConfirmNever: boolean;
+    telemetryOff: boolean;
+  };
+}
+
+export interface AntigravityHygieneResult {
+  cleanedLocks: string[];
+  cleanedCaches: string[];
+  freedBytes: number;
+  errors: string[];
+}
+
+export interface QuotaWarmupAccountResult {
+  accountId: string;
+  accountLabel: string;
+  platform: AccountPlatform;
+  status: "triggered" | "already_active" | "skipped" | "failed";
+  message: string;
+  resetsAt: number | null;
+}
+
+export interface QuotaWarmupFleetResult {
+  total: number;
+  triggered: number;
+  alreadyActive: number;
+  failed: number;
+  results: QuotaWarmupAccountResult[];
+}
+
 export interface AntigravityDiagnostics {
   profileKind: "hub" | "vscode_ide" | "legacy_vscode_ide" | "unknown";
   userDataDir: string;
@@ -669,6 +704,12 @@ export interface AppApi {
   importAntigravityCredentialPayload(input: AntigravityCredentialPayloadImportInput): Promise<AntigravityCredentialBatchImportResult>;
   importAntigravityFromLocalFiles(): Promise<AntigravityCredentialBatchImportResult>;
   importAntigravityFromExternalSource(source: Exclude<AntigravityCredentialImportSource, "token_json" | "local_files">): Promise<AntigravityCredentialBatchImportResult>;
+  getAntigravityGodMode(): Promise<AntigravityGodModeStatus>;
+  setAntigravityGodMode(enabled: boolean): Promise<{ enabled: boolean; settingsPath: string; updatedKeys: string[] }>;
+  regenerateAntigravityFingerprint(accountId: string): Promise<ManagedAccount>;
+  cleanAntigravityHygiene(): Promise<AntigravityHygieneResult>;
+  warmupAllQuotaTimers(): Promise<QuotaWarmupFleetResult>;
+  warmupAccountQuotaTimer(accountId: string): Promise<QuotaWarmupAccountResult>;
   importCurrentCodexSession(): Promise<{ imported: boolean; account: ManagedAccount | null; reason: string }>;
   importCurrentAntigravitySession(): Promise<{ imported: boolean; account: ManagedAccount | null; reason: string }>;
   detectLocalSessions(): Promise<{ codex: boolean; codexEmail: string | null; antigravity: boolean }>;

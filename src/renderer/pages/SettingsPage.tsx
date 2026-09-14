@@ -8,7 +8,9 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   TerminalSquare,
-  Volume2
+  Trash2,
+  Volume2,
+  Zap
 } from "lucide-react";
 import type { AntigravityProfileStatus, AppDiagnostics, AppSettings, ManagedAccount } from "../../shared/types";
 import { getUiText } from "../i18n";
@@ -53,6 +55,10 @@ export interface SettingsPageProps {
   antigravityStatus?: AntigravityProfileStatus | null;
   accounts?: ManagedAccount[];
   busy?: boolean;
+  godModeEnabled?: boolean;
+  hygieneBusy?: boolean;
+  onToggleGodMode?: (enabled: boolean) => void;
+  onCleanHygiene?: () => void;
   onUpdate: (input: Partial<AppSettings>) => void;
   onSelectWorkspace?: () => void;
   onOpenLogViewer?: () => void;
@@ -66,6 +72,10 @@ export function SettingsPage({
   antigravityStatus,
   accounts = [],
   busy,
+  godModeEnabled = false,
+  hygieneBusy = false,
+  onToggleGodMode,
+  onCleanHygiene,
   onUpdate,
   onSelectWorkspace,
   onOpenLogViewer,
@@ -438,6 +448,49 @@ export function SettingsPage({
               </div>
             </div>
           </div>
+
+          {/* Antigravity God Mode (Zero Confirmations) */}
+          <div className="settings-item">
+            <div>
+              <strong>
+                <Zap size={14} />
+                {isEnglish ? "God Mode (Zero Confirmations)" : "Режим Бога (Zero Confirmations)"}
+              </strong>
+              <span>
+                {isEnglish
+                  ? "Suppresses IDE prompts, auto-allows commands, and disables telemetry."
+                  : "Отключает подтверждения команд и телеметрию в Antigravity IDE."}
+              </span>
+            </div>
+            <Toggle
+              checked={godModeEnabled === true}
+              disabled={disabled || !onToggleGodMode}
+              label={isEnglish ? "God Mode" : "Режим Бога"}
+              onClick={() => onToggleGodMode?.(!godModeEnabled)}
+            />
+          </div>
+
+          {/* Context & Session Hygiene */}
+          {onCleanHygiene && (
+            <div className="settings-item settings-workspace-item">
+              <div className="settings-workspace-info">
+                <strong>{isEnglish ? "Context & Session Hygiene" : "Гигиена контекста и блокировок"}</strong>
+                <span className="settings-workspace-path">
+                  {isEnglish
+                    ? "Purges stale lockfiles, crash dumps, and GPU shader caches."
+                    : "Очистка зависших lockfile, кэшей и дампов сбоев."}
+                </span>
+              </div>
+              <button
+                className="button secondary compact-button"
+                onClick={onCleanHygiene}
+                disabled={disabled || hygieneBusy}
+              >
+                <Trash2 size={13} />
+                <span>{hygieneBusy ? (isEnglish ? "Purging…" : "Очистка…") : (isEnglish ? "Clean" : "Очистить")}</span>
+              </button>
+            </div>
+          )}
 
           {/* Diagnostics Actions */}
           <div className="settings-item settings-diagnostics-actions-item">

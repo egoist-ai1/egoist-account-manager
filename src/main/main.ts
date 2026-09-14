@@ -20,6 +20,9 @@ import {
   antigravityExternalImportInputSchema,
   antigravityOAuthCancelInputSchema,
   antigravityOAuthFinishInputSchema,
+  antigravitySetGodModeInputSchema,
+  antigravityRegenerateFingerprintInputSchema,
+  warmupAccountInputSchema,
   accountActionInputSchema,
   deviceCodeActionInputSchema,
   deviceCodeOpenInputSchema,
@@ -46,6 +49,8 @@ import { syncWindowsShortcutIcon } from "./services/windowsShortcutIconService.j
 import { getAntigravityDiagnostics } from "./services/antigravityPaths.js";
 import { inspectAntigravityProfile } from "./services/antigravityProfileReader.js";
 import { getAntigravityProfileStatus } from "./services/antigravityProfileService.js";
+import { getAntigravityGodModeStatus, setAntigravityGodMode } from "./services/antigravityGodModeService.js";
+import { performAntigravityHygiene } from "./services/antigravityHygieneService.js";
 import {
   createAntigravityGoogleOAuthAuthorization,
   finishAntigravityGoogleOAuthAuthorization,
@@ -755,6 +760,21 @@ function registerIpc(appDataDir: string): void {
     return createProviderRuntimeAdapters(activeManager)[account.platform].getQuotaState(parsed.accountId);
   });
   handle("accounts:refreshAll", () => refreshAllRateLimits("manual"));
+  handle("accounts:warmupAll", async () => {
+    log("Warming up all accounts to trigger quota reset countdown timers");
+    const result = await requireManager().warmupAllQuotaTimers();
+    broadcastAccountsUpdated();
+    updateTrayMenu();
+    return result;
+  });
+  handle("accounts:warmup", async (_event, input) => {
+    const parsed = warmupAccountInputSchema.parse(input);
+    log(`Warming up account ${parsed.accountId} to trigger quota reset countdown timer`);
+    const result = await requireManager().warmupAccountQuotaTimer(parsed.accountId);
+    broadcastAccountsUpdated();
+    updateTrayMenu();
+    return result;
+  });
   handle("accounts:export", async (_event, passphrase: string) => {
     const stamp = new Date().toISOString().slice(0, 10);
     const options: Electron.SaveDialogOptions = {
@@ -973,6 +993,37 @@ function registerIpc(appDataDir: string): void {
       }
       return result;
     });
+  });
+  handle("antigravity:godMode:get", () => getAntigravityGodModeStatus({
+    platform: process.platform,
+    appData: process.env.APPDATA,
+    home: process.env.USERPROFILE
+  }));
+  handle("antigravity:godMode:set", (_event, input) => {
+    const parsed = antigravitySetGodModeInputSchema.parse(input);
+    const result = setAntigravityGodMode(parsed.enabled, {
+      platform: process.platform,
+      appData: process.env.APPDATA,
+      home: process.env.USERPROFILE
+    });
+    log(`Antigravity God Mode (Zero Confirmations) ${parsed.enabled ? "enabled" : "disabled"}`);
+    return result;
+  });
+  handle("antigravity:fingerprint:regenerate", (_event, input) => {
+    const parsed = antigravityRegenerateFingerprintInputSchema.parse(input);
+    const updated = requireManager().regenerateAntigravityFingerprint(parsed.accountId);
+    broadcastAccountsUpdated();
+    updateTrayMenu();
+    return updated;
+  });
+  handle("antigravity:hygiene:clean", () => {
+    const result = performAntigravityHygiene({
+      platform: process.platform,
+      appData: process.env.APPDATA,
+      home: process.env.USERPROFILE
+    });
+    log(`Antigravity Context Hygiene completed: ${result.cleanedLocks.length} locks, ${result.cleanedCaches.length} caches freed (${result.freedBytes} bytes)`);
+    return result;
   });
   handle("app:openExternal", (_event, input) => {
     const parsed = openExternalInputSchema.parse(input);

@@ -23,6 +23,7 @@ interface TrackedReset {
   windowId: string;
   resetAt: number;
   notified: boolean;
+  wasConstrained: boolean;
 }
 
 export class QuotaResetNotificationService {
@@ -34,6 +35,7 @@ export class QuotaResetNotificationService {
   private readonly trackedResets = new Map<string, TrackedReset>();
   private readonly notifiedKeys = new Set<string>();
   private readonly previousRemaining = new Map<string, number>();
+  private readonly accountLastNotifiedAt = new Map<string, number>();
   private isInitialized = false;
 
   constructor(options: QuotaResetNotificationServiceOptions) {
@@ -58,6 +60,14 @@ export class QuotaResetNotificationService {
         if (window.resetAt === null || window.resetAt === undefined) continue;
         const key = `${account.id}:${window.id}:${window.resetAt}`;
 
+        // An account is constrained if usage is >= 40% (or remaining <= 60%) or in a limited status
+        const isConstrained =
+          account.status === "near_limit" ||
+          account.status === "limited" ||
+          (typeof currentRem === "number" && currentRem <= 60) ||
+          (window.used !== null && window.used !== undefined && window.used >= 40) ||
+          (window.remaining !== null && window.remaining !== undefined && window.remaining <= 60);
+
         if (!this.isInitialized) {
           // On first initialization at app boot:
           // Do not send notifications for already passed timestamps
@@ -70,33 +80,43 @@ export class QuotaResetNotificationService {
               platform: account.platform,
               windowId: window.id,
               resetAt: window.resetAt,
-              notified: false
+              notified: false,
+              wasConstrained: isConstrained
             });
           }
         } else {
           // Running state:
           if (!this.notifiedKeys.has(key)) {
             if (window.resetAt > now) {
-              if (!this.trackedResets.has(key)) {
+              const existing = this.trackedResets.get(key);
+              if (existing) {
+                if (isConstrained) existing.wasConstrained = true;
+              } else {
                 this.trackedResets.set(key, {
                   accountId: account.id,
                   accountLabel: account.label,
                   platform: account.platform,
                   windowId: window.id,
                   resetAt: window.resetAt,
-                  notified: false
+                  notified: false,
+                  wasConstrained: isConstrained
                 });
               }
             } else if (window.resetAt <= now && window.resetAt >= now - 180) {
-              // Reset time just passed in the last 3 minutes and wasn't notified yet
-              this.notifyReset(account.id, account.label, account.platform, key, en);
+              // Reset time just passed in the last 3 minutes and wasn't notified yet.
+              // Only notify if the account was actually constrained (not at 100% / idle).
+              if (isConstrained || (prevRem !== undefined && prevRem <= 60)) {
+                this.notifyReset(account.id, account.label, account.platform, key, en);
+              } else {
+                this.notifiedKeys.add(key);
+              }
             }
           }
         }
       }
 
       // Detect quota jump after refresh:
-      // If account was previously constrained (e.g. <= 30% remaining) and now jumped to >= 80%
+      // If account was previously constrained (<= 30% remaining) and now jumped to >= 80%
       if (
         this.isInitialized &&
         typeof prevRem === "number" &&
@@ -106,8 +126,12 @@ export class QuotaResetNotificationService {
       ) {
         const jumpKey = `${account.id}:jump:${Math.floor(now / 300)}`;
         if (!this.notifiedKeys.has(jumpKey)) {
-          this.notifiedKeys.add(jumpKey);
-          this.emitNotification(account.id, account.label, account.platform, en);
+          const lastNotified = this.accountLastNotifiedAt.get(account.id) ?? 0;
+          if (now - lastNotified >= 300) {
+            this.notifiedKeys.add(jumpKey);
+            this.accountLastNotifiedAt.set(account.id, now);
+            this.emitNotification(account.id, account.label, account.platform, en);
+          }
         }
       }
 
@@ -124,11 +148,15 @@ export class QuotaResetNotificationService {
     const en = this.isEnglish();
 
     for (const [key, tracked] of this.trackedResets.entries()) {
-      if (!tracked.notified && now >= tracked.resetAt) {
-        this.notifyReset(tracked.accountId, tracked.accountLabel, tracked.platform, key, en);
-        if (this.onTriggerRefresh) {
-          this.onTriggerRefresh(tracked.accountId);
+      if (now >= tracked.resetAt) {
+        if (!tracked.notified && tracked.wasConstrained) {
+          this.notifyReset(tracked.accountId, tracked.accountLabel, tracked.platform, key, en);
+          if (this.onTriggerRefresh) {
+            this.onTriggerRefresh(tracked.accountId);
+          }
         }
+        // Clean up expired entries to avoid memory leaks and night-time spam loops
+        this.trackedResets.delete(key);
       }
     }
   }
@@ -141,7 +169,15 @@ export class QuotaResetNotificationService {
     en: boolean
   ): void {
     if (this.notifiedKeys.has(key)) return;
+    const now = this.now();
+    const lastNotified = this.accountLastNotifiedAt.get(accountId) ?? 0;
+    if (now - lastNotified < 300) {
+      // 5-minute cooldown between reset notifications for the exact same account
+      this.notifiedKeys.add(key);
+      return;
+    }
     this.notifiedKeys.add(key);
+    this.accountLastNotifiedAt.set(accountId, now);
     const tracked = this.trackedResets.get(key);
     if (tracked) tracked.notified = true;
     this.emitNotification(accountId, accountLabel, platform, en);

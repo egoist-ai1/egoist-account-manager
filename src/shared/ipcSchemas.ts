@@ -153,3 +153,17 @@ export const antigravityExternalImportInputSchema = z.object({
     z.literal("local_db")
   ])
 }).strict();
+
+export const antigravitySetGodModeInputSchema = z.object({
+  enabled: z.boolean()
+}).strict();
+
+export const antigravityRegenerateFingerprintInputSchema = z.object({
+  accountId: accountIdSchema
+}).strict();
+
+export const warmupAccountInputSchema = z.object({
+  accountId: accountIdSchema
+}).strict();
+
+

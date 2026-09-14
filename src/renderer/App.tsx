@@ -12,6 +12,7 @@ import {
   ExternalLink,
   FileDown,
   FileUp,
+  Fingerprint,
   FolderOpen,
   KeyRound,
   LayoutDashboard,
@@ -599,6 +600,56 @@ const cam: AppApi = window.cam ?? {
     failures: [{ source: "demo", email: null, reason: "Источник доступен только в desktop-приложении." }],
     accounts: demoAccounts
   }),
+  getAntigravityGodMode: async () => ({
+    enabled: false,
+    settingsPath: "browser-preview/settings.json",
+    details: {
+      workspaceTrustDisabled: false,
+      chatAlwaysConfirmDisabled: false,
+      terminalConfirmNever: false,
+      telemetryOff: false
+    }
+  }),
+  setAntigravityGodMode: async (enabled: boolean) => ({
+    enabled,
+    settingsPath: "browser-preview/settings.json",
+    updatedKeys: ["chat.editing.alwaysConfirm", "telemetry.telemetryLevel"]
+  }),
+  regenerateAntigravityFingerprint: async (accountId: string) => {
+    const target = demoAccounts.find((a) => a.id === accountId) ?? demoAccounts[0];
+    return target;
+  },
+  cleanAntigravityHygiene: async () => ({
+    cleanedLocks: [],
+    cleanedCaches: [],
+    freedBytes: 0,
+    errors: []
+  }),
+  warmupAllQuotaTimers: async () => ({
+    total: demoAccounts.length,
+    triggered: demoAccounts.length,
+    alreadyActive: 0,
+    failed: 0,
+    results: demoAccounts.map((a) => ({
+      accountId: a.id,
+      accountLabel: a.label,
+      platform: a.platform,
+      status: "triggered" as const,
+      message: "Тестовый запрос отправлен в демо-режиме",
+      resetsAt: nowSeconds() + 18000
+    }))
+  }),
+  warmupAccountQuotaTimer: async (accountId: string) => {
+    const acc = demoAccounts.find((a) => a.id === accountId) ?? demoAccounts[0];
+    return {
+      accountId: acc.id,
+      accountLabel: acc.label,
+      platform: acc.platform,
+      status: "triggered" as const,
+      message: "Таймер успешно запущен (демо)",
+      resetsAt: nowSeconds() + 18000
+    };
+  },
   importAntigravityFromIde: async () => ({
     imported: false,
     account: null,
@@ -1202,7 +1253,9 @@ function AccountInspector({
   onReauth,
   onOpenFolder,
   onMetadata,
-  onDelete
+  onDelete,
+  onRegenerateFingerprint,
+  onWarmup
 }: {
   account: ManagedAccount | null;
   privacyMode: boolean;
@@ -1216,6 +1269,8 @@ function AccountInspector({
   onOpenFolder: (id: string) => void;
   onMetadata: (id: string, input: { tags?: string[]; favorite?: boolean; archived?: boolean }) => void;
   onDelete: (id: string) => void;
+  onRegenerateFingerprint?: (id: string) => void;
+  onWarmup?: (id: string) => void;
 }) {
   const isEnglish = language === "en";
   const text = getUiText(language);
@@ -1339,6 +1394,30 @@ function AccountInspector({
         </button>
         <button className="button secondary" aria-label={isEnglish ? "Authorize" : "Авторизация"} disabled={busy !== null} onClick={() => onReauth(account.id)}><KeyRound />{isEnglish ? "Authorize again" : "Авторизовать заново"}</button>
         <button className="button secondary" aria-label={isEnglish ? "Open folder" : "Открыть папку"} disabled={busy !== null} onClick={() => onOpenFolder(account.id)}><FolderOpen />{isEnglish ? "Open profile folder" : "Открыть папку профиля"}</button>
+        {isAntigravity && onRegenerateFingerprint ? (
+          <button
+            className="button secondary"
+            aria-label={isEnglish ? "Regenerate device fingerprint" : "Обновить отпечаток оборудования"}
+            disabled={busy !== null}
+            onClick={() => onRegenerateFingerprint(account.id)}
+            title={isEnglish ? "Generate a new isolated hardware fingerprint for this profile" : "Сгенерировать новый изолированный отпечаток оборудования для этого профиля"}
+          >
+            {busy === `fp:${account.id}` ? <Loader2 className="spin" /> : <Fingerprint />}
+            <span className="action-label">{isEnglish ? "New Fingerprint" : "Новый отпечаток"}</span>
+          </button>
+        ) : null}
+        {onWarmup ? (
+          <button
+            className="button secondary"
+            aria-label={isEnglish ? "Start reset cooldown timer" : "Запустить таймер сброса"}
+            disabled={busy !== null}
+            onClick={() => onWarmup(account.id)}
+            title={isEnglish ? "Send a test ping to start the rolling quota countdown timer" : "Отправить тестовый запрос для запуска таймера сброса квот"}
+          >
+            {busy === `warmup:${account.id}` ? <Loader2 className="spin" /> : <Clock />}
+            <span className="action-label">{isEnglish ? "Start Timer" : "Запуск таймера"}</span>
+          </button>
+        ) : null}
         <button className="button danger-action" aria-label={isEnglish ? "Delete profile" : "Удалить профиль"} disabled={busy !== null || account.isActive} onClick={() => onDelete(account.id)} title={account.isActive ? (isEnglish ? "Activate another profile first" : "Сначала переключись на другой аккаунт") : undefined}><Trash2 />{isEnglish ? "Delete profile" : "Удалить профиль"}</button>
         </div>
       </section>
@@ -1961,6 +2040,8 @@ function App() {
   const [diagnostics, setDiagnostics] = useState<AppDiagnostics | null>(null);
   const [settingsData, setSettingsData] = useState<AppSettings | null>(null);
   const [antigravityProfileStatus, setAntigravityProfileStatus] = useState<AntigravityProfileStatus | null>(null);
+  const [antigravityGodMode, setAntigravityGodModeState] = useState<boolean>(false);
+  const [hygieneBusy, setHygieneBusy] = useState<boolean>(false);
   const [workspaceBinding, setWorkspaceBinding] = useState<WorkspaceBinding | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [showLogViewer, setShowLogViewer] = useState(false);
@@ -2228,7 +2309,8 @@ function App() {
         nextAntigravityProfileStatus,
         nextBinding,
         nextSwitchTransactions,
-        nextSwitchHistory
+        nextSwitchHistory,
+        nextGodMode
       ] = await Promise.all([
         cam.listAccounts(),
         cam.getDiagnostics(),
@@ -2236,13 +2318,15 @@ function App() {
         cam.getAntigravityProfileStatus().catch(() => null),
         cam.getWorkspaceBinding().catch(() => null),
         cam.listSwitchTransactions().catch(() => []),
-        cam.getSwitchHistory().catch(() => [])
+        cam.getSwitchHistory().catch(() => []),
+        cam.getAntigravityGodMode().catch(() => ({ enabled: false, settingsPath: "", details: { workspaceTrustDisabled: false, chatAlwaysConfirmDisabled: false, terminalConfirmNever: false, telemetryOff: false } }))
       ]);
       if (requestId !== reloadSequenceRef.current) return;
       setAccounts(nextAccounts);
       setDiagnostics(nextDiagnostics);
       setSettingsData(nextSettings);
       setAntigravityProfileStatus(nextAntigravityProfileStatus);
+      setAntigravityGodModeState(nextGodMode.enabled);
       setWorkspaceBinding(nextBinding);
       setSwitchTransactions(nextSwitchTransactions);
       setSwitchHistory(nextSwitchHistory);
@@ -2480,6 +2564,77 @@ function App() {
       setMessage(buildQuotaRefreshErrorMessage("Не удалось обновить лимиты", error));
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function regenerateFingerprint(id: string) {
+    setBusy(`fp:${id}`);
+    try {
+      const updated = await cam.regenerateAntigravityFingerprint(id);
+      await reload();
+      setMessage(isEnglish ? `Hardware persona regenerated: ${updated.antigravity?.fingerprintId ?? ""}` : `Отпечаток оборудования обновлён: ${updated.antigravity?.fingerprintId ?? ""}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function warmupAccount(id: string) {
+    setBusy(`warmup:${id}`);
+    try {
+      const result = await cam.warmupAccountQuotaTimer(id);
+      await reload();
+      setMessage(result.message);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function warmupAllAccounts() {
+    setBusy("warmupAll");
+    try {
+      const result = await cam.warmupAllQuotaTimers();
+      await reload();
+      const msg = isEnglish
+        ? `Timers triggered: ${result.triggered}, already active: ${result.alreadyActive}, failed: ${result.failed}`
+        : `Таймеров запущено: ${result.triggered}, уже активных: ${result.alreadyActive}, ошибок: ${result.failed}`;
+      setMessage(msg);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function toggleGodMode(enabled: boolean) {
+    setBusy("godMode");
+    try {
+      const result = await cam.setAntigravityGodMode(enabled);
+      setAntigravityGodModeState(result.enabled);
+      setMessage(result.enabled ? "Режим Бога (Zero Confirmations) включён" : "Режим Бога отключён");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function cleanHygiene() {
+    setHygieneBusy(true);
+    try {
+      const result = await cam.cleanAntigravityHygiene();
+      const freedMb = (result.freedBytes / (1024 * 1024)).toFixed(1);
+      const msg = isEnglish
+        ? `Cleaned ${result.cleanedLocks.length} locks, ${result.cleanedCaches.length} caches (${freedMb} MB freed)`
+        : `Очищено блокировок: ${result.cleanedLocks.length}, кэшей: ${result.cleanedCaches.length} (освобождено ${freedMb} МБ)`;
+      setMessage(msg);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setHygieneBusy(false);
     }
   }
 
@@ -3184,6 +3339,15 @@ function App() {
                     {busy === "refresh:all" ? <Loader2 className="spin" /> : <RefreshCcw />}
                     {uiText.actions.refresh}
                   </button>
+                  <button
+                    className="button secondary"
+                    disabled={busy !== null || accounts.length === 0}
+                    onClick={warmupAllAccounts}
+                    title={isEnglish ? "Send test pings to all accounts to start rolling quota countdown timers" : "Отправить тестовые запросы во все аккаунты для предварительного запуска таймеров сброса"}
+                  >
+                    {busy === "warmupAll" ? <Loader2 className="spin" /> : <Clock />}
+                    <span>{isEnglish ? "Warm Up Timers" : "Запустить таймеры"}</span>
+                  </button>
                   <details className="account-tools-menu">
                     <summary className="icon-btn" title={isEnglish ? "Import and export" : "Импорт и экспорт"} aria-label={isEnglish ? "Import and export" : "Импорт и экспорт"}><MoreHorizontal /></summary>
                     <div>
@@ -3274,6 +3438,10 @@ function App() {
             antigravityStatus={antigravityProfileStatus}
             accounts={accounts}
             busy={busy === "settings"}
+            godModeEnabled={antigravityGodMode}
+            hygieneBusy={hygieneBusy}
+            onToggleGodMode={(enabled) => void toggleGodMode(enabled)}
+            onCleanHygiene={() => void cleanHygiene()}
             onUpdate={(input) => void updateSettings(input)}
             onSelectWorkspace={selectWorkspace}
             onOpenLogViewer={openLogViewer}
@@ -3525,6 +3693,8 @@ function App() {
                 setInspectorOpen(false);
                 void deleteAccount(id);
               }}
+              onRegenerateFingerprint={regenerateFingerprint}
+              onWarmup={warmupAccount}
             />
           </div>
         </div>

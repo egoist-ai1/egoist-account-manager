@@ -24,7 +24,9 @@ import type {
   ProfileIntegrityReport,
   SwitchTransaction,
   SwitchHistoryItem,
-  WorkspaceBinding
+  WorkspaceBinding,
+  QuotaWarmupAccountResult,
+  QuotaWarmupFleetResult
 } from "../shared/types.js";
 import type { AccountExportRecord } from "./db.js";
 import { AccountStore } from "./db.js";
@@ -63,6 +65,8 @@ import {
   type AntigravityAccountApplyResult,
   type AntigravityCredentialPackage
 } from "./services/antigravityAccountAdapter.js";
+import { generateAntigravityHardwarePersona } from "./services/antigravityHardwarePersonaService.js";
+import { QuotaWarmupService } from "./services/quotaWarmupService.js";
 import {
   restoreAntigravityProfileBackup,
   type AntigravityProfileBackupManifest
@@ -3759,6 +3763,43 @@ export class AccountManager extends EventEmitter {
     return { token: googleOAuth, record };
   }
 
+  regenerateAntigravityFingerprint(accountId: string): ManagedAccount {
+    const account = this.store.get(accountId);
+    if (!account || account.platform !== "antigravity") {
+      throw new Error("Antigravity account not found");
+    }
+    const newPersona = generateAntigravityHardwarePersona();
+    const updated = this.store.updateAntigravityDetails(accountId, {
+      fingerprintId: newPersona.fingerprintPrefix
+    });
+    if (account.isActive) {
+      const record = this.readAntigravityVaultRecord(account);
+      if (record.googleOAuth) {
+        this.writeAntigravityGoogleIdeProfile(record.googleOAuth, updated);
+      }
+    }
+    this.emitLog(`Regenerated Antigravity hardware persona for ${account.email}: ${newPersona.fingerprintPrefix}`);
+    return updated;
+  }
+
+  getStore(): AccountStore {
+    return this.store;
+  }
+
+  getCodexPath(): string | null {
+    return this.codexPath ?? resolveCodexPath();
+  }
+
+  async warmupAccountQuotaTimer(accountId: string): Promise<QuotaWarmupAccountResult> {
+    const service = new QuotaWarmupService(this);
+    return service.warmupAccount(accountId);
+  }
+
+  async warmupAllQuotaTimers(): Promise<QuotaWarmupFleetResult> {
+    const service = new QuotaWarmupService(this);
+    return service.warmupAll();
+  }
+
   private writeAntigravityGoogleIdeProfile(
     token: NonNullable<AntigravityVaultRecord["googleOAuth"]>,
     account: ManagedAccount
@@ -3766,6 +3807,12 @@ export class AccountManager extends EventEmitter {
     if (!token.refreshToken) return null;
     const pathInput = this.getAntigravityPathInputForAccount(account);
     if (!getAntigravityProfileStatus(pathInput).readyForWriteActions) return null;
+    const persona = generateAntigravityHardwarePersona(account.antigravity?.fingerprintId ?? account.id);
+    if (!account.antigravity?.fingerprintId) {
+      this.store.updateAntigravityDetails(account.id, {
+        fingerprintId: persona.fingerprintPrefix
+      });
+    }
     return applyAntigravityAccountWritePlan({
       ...pathInput,
       backupRoot: path.join(this.appDataDir, "antigravity-backups"),
@@ -3775,7 +3822,8 @@ export class AccountManager extends EventEmitter {
         refreshToken: token.refreshToken,
         accessToken: token.accessToken,
         expiresAt: token.expiresAt,
-        googleProjectId: token.googleProjectId ?? account.antigravity?.googleProjectId ?? null
+        googleProjectId: token.googleProjectId ?? account.antigravity?.googleProjectId ?? null,
+        persona
       }
     });
   }

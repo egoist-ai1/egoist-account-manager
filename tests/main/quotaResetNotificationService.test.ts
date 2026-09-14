@@ -156,4 +156,28 @@ describe("QuotaResetNotificationService", () => {
     expect(notifications).toHaveLength(1);
     expect(notifications[0].accountId).toBe("acc-jump");
   });
+
+  it("does NOT fire notifications when an unconstrained account reaches resetAt", () => {
+    const notifications: QuotaResetNotification[] = [];
+    let currentTime = 1500;
+
+    const service = new QuotaResetNotificationService({
+      onNotify: (n) => notifications.push(n),
+      now: () => currentTime
+    });
+
+    // Account was never constrained (0% used, 100% remaining)
+    const account = mockAccount({
+      id: "acc-unconstrained",
+      label: "Idle Account",
+      primaryUsedPercent: 0,
+      primaryResetsAt: 2000
+    });
+
+    service.onAccountsUpdated([account]);
+    currentTime = 2005;
+    service.checkTimeBasedResets();
+
+    expect(notifications).toHaveLength(0);
+  });
 });

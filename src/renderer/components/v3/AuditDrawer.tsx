@@ -166,10 +166,12 @@ export function AuditDrawer({
           <div className="audit-stages-mini-grid">
             {compactStages.map((stage) => {
               const Icon = stage.icon;
+              const label = stage.labels[isEnglish ? 0 : 1];
+              const desc = stage.descriptions[isEnglish ? 0 : 1];
               return (
-                <div key={stage.id} className="audit-mini-stage">
+                <div key={stage.id} className="audit-mini-stage" title={`${label}: ${desc}`}>
                   <Icon size={12} />
-                  <span>{stage.labels[isEnglish ? 0 : 1]}</span>
+                  <span>{label}</span>
                 </div>
               );
             })}

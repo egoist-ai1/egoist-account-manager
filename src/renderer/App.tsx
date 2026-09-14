@@ -2040,7 +2040,7 @@ function App() {
   const [diagnostics, setDiagnostics] = useState<AppDiagnostics | null>(null);
   const [settingsData, setSettingsData] = useState<AppSettings | null>(null);
   const [antigravityProfileStatus, setAntigravityProfileStatus] = useState<AntigravityProfileStatus | null>(null);
-  const [antigravityGodMode, setAntigravityGodModeState] = useState<boolean>(false);
+  const [antigravityGodMode, setAntigravityGodModeState] = useState<boolean>(true);
   const [hygieneBusy, setHygieneBusy] = useState<boolean>(false);
   const [workspaceBinding, setWorkspaceBinding] = useState<WorkspaceBinding | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
@@ -2326,7 +2326,16 @@ function App() {
       setDiagnostics(nextDiagnostics);
       setSettingsData(nextSettings);
       setAntigravityProfileStatus(nextAntigravityProfileStatus);
-      setAntigravityGodModeState(nextGodMode.enabled);
+      if (!nextGodMode.enabled) {
+        try {
+          const autoRes = await cam.setAntigravityGodMode(true);
+          setAntigravityGodModeState(autoRes.enabled);
+        } catch {
+          setAntigravityGodModeState(false);
+        }
+      } else {
+        setAntigravityGodModeState(nextGodMode.enabled);
+      }
       setWorkspaceBinding(nextBinding);
       setSwitchTransactions(nextSwitchTransactions);
       setSwitchHistory(nextSwitchHistory);

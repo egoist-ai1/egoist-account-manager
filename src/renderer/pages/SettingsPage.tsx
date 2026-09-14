@@ -510,7 +510,7 @@ export function SettingsPage({
                 </button>
               )}
               {onExportDiagnosticReport && (
-                <button className="button compact-button" disabled={busy} onClick={onExportDiagnosticReport}>
+                <button className="button secondary compact-button" disabled={busy} onClick={onExportDiagnosticReport}>
                   <FileDown size={13} />
                   <span>{isEnglish ? "Export report" : "Экспорт отчёта"}</span>
                 </button>

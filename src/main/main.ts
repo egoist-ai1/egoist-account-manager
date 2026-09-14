@@ -281,7 +281,7 @@ interface WindowBoundsState {
 }
 
 function loadWindowState(): WindowBoundsState {
-  const fallback = { width: 1040, height: 640 };
+  const fallback = { width: 1578, height: 895 };
   try {
     const dir = getAppDataDir();
     const file = path.join(dir, "window-state.json");

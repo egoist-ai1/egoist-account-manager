@@ -117,3 +117,59 @@ export function sortAccountList(accounts: ManagedAccount[], sort: AccountListSor
     return byName(left, right);
   });
 }
+
+export function formatResetTimeShort(
+  timestamp: number | null | undefined,
+  language: "ru" | "en" = "ru",
+  now: number = Math.floor(Date.now() / 1000)
+): string {
+  if (!timestamp || !Number.isFinite(timestamp)) {
+    return language === "en" ? "no data" : "нет данных";
+  }
+  const date = new Date(timestamp * 1000);
+  const nowDate = new Date(now * 1000);
+  const isToday =
+    date.getDate() === nowDate.getDate() &&
+    date.getMonth() === nowDate.getMonth() &&
+    date.getFullYear() === nowDate.getFullYear();
+
+  if (isToday) {
+    return new Intl.DateTimeFormat(language === "en" ? "en-US" : "ru-RU", {
+      hour: "2-digit",
+      minute: "2-digit"
+    }).format(date);
+  }
+
+  return new Intl.DateTimeFormat(language === "en" ? "en-US" : "ru-RU", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+export function formatRemainingCountdown(
+  resetAt: number | null | undefined,
+  now: number,
+  isEnglish = false
+): string | null {
+  if (!resetAt || !Number.isFinite(resetAt)) return null;
+  const diff = resetAt - now;
+  if (diff <= 0) return isEnglish ? "now" : "сейчас";
+  if (diff < 60) return isEnglish ? "< 1m" : "< 1м";
+  if (diff < 3600) {
+    const m = Math.floor(diff / 60);
+    return `${m}${isEnglish ? "m" : "м"}`;
+  }
+  if (diff < 86400) {
+    const h = Math.floor(diff / 3600);
+    const m = Math.floor((diff % 3600) / 60);
+    if (m === 0) return `${h}${isEnglish ? "h" : "ч"}`;
+    return `${h}${isEnglish ? "h" : "ч"} ${m}${isEnglish ? "m" : "м"}`;
+  }
+  const d = Math.floor(diff / 86400);
+  const h = Math.floor((diff % 86400) / 3600);
+  if (h === 0) return `${d}${isEnglish ? "d" : "д"}`;
+  return `${d}${isEnglish ? "d" : "д"} ${h}${isEnglish ? "h" : "ч"}`;
+}
+

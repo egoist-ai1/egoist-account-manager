@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import https from "node:https";
+import os from "node:os";
+import path from "node:path";
 import Database from "better-sqlite3";
 import type { AntigravityLocalIdentity, AntigravityProfileInspection } from "../../shared/types.js";
 import type { AntigravityPathInput } from "./antigravityPaths.js";
@@ -126,7 +129,7 @@ function readStateDbValue(filePath: string, key: string): string | null {
   if (!fs.existsSync(filePath)) return null;
   let db: Database.Database | null = null;
   try {
-    db = new Database(filePath, { readonly: true, fileMustExist: true });
+    db = new Database(filePath, { readonly: true, fileMustExist: true, timeout: 2000 });
     const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ItemTable'").get() as { name: string } | undefined;
     if (!table) return null;
     const row = db.prepare("SELECT value FROM ItemTable WHERE key = ?").get(key) as { value: string | Buffer | null } | undefined;
@@ -137,6 +140,15 @@ function readStateDbValue(filePath: string, key: string): string | null {
   } finally {
     db?.close();
   }
+}
+
+function readStateDbValueWithFallback(paths: ReturnType<typeof resolveAntigravityPaths>, key: string): string | null {
+  const primary = readStateDbValue(paths.stateDbPath, key);
+  if (primary !== null) return primary;
+  if (paths.secondaryStateDbPath) {
+    return readStateDbValue(paths.secondaryStateDbPath, key);
+  }
+  return null;
 }
 
 function collectStorageJsonText(filePath: string): string[] {
@@ -205,7 +217,7 @@ export function extractAntigravityLocalIdentity(input: AntigravityPathInput = {}
   const googleProjectId = officialState.googleProjectId ?? firstGoogleProjectId(values);
   const accountId = email ? `ag_${crypto.createHash("sha256").update(email).digest("hex").slice(0, 24)}` : `ag_local_${fingerprintId}`;
   const source: AntigravityLocalIdentity["source"] = email
-    ? (stateValues.some((value) => value.toLowerCase().includes(email)) ? "state_db" : "storage_json")
+    ? (officialState.email || stateValues.some((value) => value.toLowerCase().includes(email)) ? "state_db" : "storage_json")
     : fs.existsSync(paths.machineIdPath)
       ? "machine_id"
       : "profile_path";
@@ -217,7 +229,7 @@ export function extractAntigravityLocalIdentity(input: AntigravityPathInput = {}
     fingerprintId,
     googleProjectId,
     source,
-    confidence: officialState.oauth ? "confirmed" : email ? "inferred" : "unknown"
+    confidence: (officialState.oauth || officialState.apiKey) ? "confirmed" : email ? "inferred" : "unknown"
   };
 }
 
@@ -225,28 +237,174 @@ export interface AntigravityOfficialAuthState {
   oauth: AntigravityUnifiedOAuthToken | null;
   email: string | null;
   googleProjectId: string | null;
+  apiKey?: string | null;
+  source?: "auth_status" | "user_status" | "oauth_token" | "enterprise";
 }
 
 export function readAntigravityOfficialAuthState(input: AntigravityPathInput = {}): AntigravityOfficialAuthState {
   const paths = resolveAntigravityPaths(input);
-  const oauthValue = readStateDbValue(paths.stateDbPath, oauthStateKey);
-  const userStatusValue = readStateDbValue(paths.stateDbPath, userStatusStateKey);
-  const enterprisePreferencesValue = readStateDbValue(paths.stateDbPath, enterprisePreferencesStateKey);
+
+  const authStatusRaw = readStateDbValueWithFallback(paths, "antigravityAuthStatus");
+  let directEmail: string | null = null;
+  let apiKey: string | null = null;
+  if (authStatusRaw) {
+    try {
+      const parsed = JSON.parse(authStatusRaw) as { email?: string; name?: string; apiKey?: string };
+      if (typeof parsed?.email === "string" && parsed.email.trim() && parsed.email.includes("@")) {
+        directEmail = parsed.email.trim().toLowerCase();
+      } else if (typeof parsed?.name === "string" && parsed.name.trim() && parsed.name.includes("@")) {
+        directEmail = parsed.name.trim().toLowerCase();
+      }
+      if (typeof parsed?.apiKey === "string" && parsed.apiKey.trim()) {
+        apiKey = parsed.apiKey.trim();
+      }
+    } catch {
+      // ignore invalid auth status json
+    }
+  }
+
+  const userStatusValue = readStateDbValueWithFallback(paths, userStatusStateKey);
+  const userStatusEmail = userStatusValue ? safeParse(() => parseAntigravityUnifiedUserStatus(userStatusValue).email) : null;
+
+  const oauthValue = readStateDbValueWithFallback(paths, oauthStateKey);
   const oauth = oauthValue ? safeParse(() => parseAntigravityUnifiedOAuthToken(oauthValue)) : null;
-  const email = userStatusValue ? safeParse(() => parseAntigravityUnifiedUserStatus(userStatusValue).email) : null;
+
+  const enterprisePreferencesValue = readStateDbValueWithFallback(paths, enterprisePreferencesStateKey);
   const googleProjectId = enterprisePreferencesValue
     ? safeParse(() => parseAntigravityUnifiedEnterprisePreferences(enterprisePreferencesValue).googleProjectId)
     : null;
+
+  let email = directEmail ?? (userStatusEmail ? userStatusEmail.trim().toLowerCase() : null);
+  if (!email && oauth?.idToken && oauth.idToken.includes(".")) {
+    try {
+      const parts = oauth.idToken.split(".");
+      if (parts[1]) {
+        const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf8")) as { email?: string };
+        if (typeof payload?.email === "string" && payload.email.trim() && payload.email.includes("@")) {
+          email = payload.email.trim().toLowerCase();
+        }
+      }
+    } catch {
+      // ignore malformed id_token payload
+    }
+  }
+
+  let source: AntigravityOfficialAuthState["source"] = undefined;
+  if (directEmail) source = "auth_status";
+  else if (userStatusEmail) source = "user_status";
+  else if (oauth) source = "oauth_token";
+
   return {
     oauth,
     email,
-    googleProjectId
+    googleProjectId,
+    apiKey,
+    source
   };
 }
 
 function safeParse<T>(read: () => T): T | null {
   try {
     return read();
+  } catch {
+    return null;
+  }
+}
+
+export interface AntigravityLiveSession {
+  email: string;
+  name: string | null;
+  tier: string | null;
+}
+
+/**
+ * Connect directly to Antigravity's live local language server RPC to detect
+ * the account currently active and running in the editor window.
+ */
+export async function detectAntigravityLiveSession(input: AntigravityPathInput = {}): Promise<AntigravityLiveSession | null> {
+  const platform = input.platform ?? process.platform;
+  const home = input.home ?? os.homedir();
+  const appData = input.appData ?? (platform === "win32"
+    ? (process.env.APPDATA || path.join(home, "AppData", "Roaming"))
+    : path.join(home, ".config"));
+  const logPath = path.join(appData, "Antigravity", "logs", "main.log");
+
+  if (!fs.existsSync(logPath)) return null;
+
+  try {
+    const text = fs.readFileSync(logPath, "utf8");
+    const lines = text.trim().split(/\r?\n/);
+    let lastCsrf: string | null = null;
+    let lastPort: number | null = null;
+
+    // Scan backwards for the most recently spawned language server port and CSRF token
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (!lastPort) {
+        const mPort = line.match(/Local:\s+https:\/\/127\.0\.0\.1:(\d+)\//);
+        if (mPort) lastPort = parseInt(mPort[1], 10);
+      }
+      if (!lastCsrf) {
+        const mCsrf = line.match(/--csrf_token\s+([a-f0-9-]+)/);
+        if (mCsrf) lastCsrf = mCsrf[1];
+      }
+      if (lastPort && lastCsrf) break;
+    }
+
+    if (!lastPort || !lastCsrf) return null;
+
+    const agent = new https.Agent({ rejectUnauthorized: false });
+
+    return await new Promise<AntigravityLiveSession | null>((resolve) => {
+      const req = https.request(
+        {
+          hostname: "127.0.0.1",
+          port: lastPort,
+          path: "/exa.language_server_pb.LanguageServerService/GetUserStatus",
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Codeium-Csrf-Token": lastCsrf,
+            "Content-Length": "2"
+          },
+          agent,
+          timeout: 2000
+        },
+        (res) => {
+          let body = "";
+          res.on("data", (chunk: Buffer | string) => (body += chunk.toString()));
+          res.on("end", () => {
+            try {
+              if (res.statusCode !== 200) return resolve(null);
+              const data = JSON.parse(body) as {
+                userStatus?: { email?: string; name?: string };
+                userTier?: { name?: string };
+              };
+              const userStatus = data?.userStatus;
+              if (userStatus && typeof userStatus.email === "string" && userStatus.email.includes("@")) {
+                resolve({
+                  email: userStatus.email.trim().toLowerCase(),
+                  name: typeof userStatus.name === "string" ? userStatus.name : null,
+                  tier: data?.userTier?.name ?? null
+                });
+              } else {
+                resolve(null);
+              }
+            } catch {
+              resolve(null);
+            }
+          });
+        }
+      );
+
+      req.on("error", () => resolve(null));
+      req.on("timeout", () => {
+        req.destroy();
+        resolve(null);
+      });
+      req.write("{}");
+      req.end();
+    });
   } catch {
     return null;
   }

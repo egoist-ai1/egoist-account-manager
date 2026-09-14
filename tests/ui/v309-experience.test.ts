@@ -9,19 +9,14 @@ const mainSource = fs.readFileSync(path.resolve("src/main/main.ts"), "utf8");
 
 describe("3.0.9 continuation and notification experience", () => {
   it("replaces the ambiguous reserve with a truthful continuation route", () => {
-    expect(overviewSource).toContain("ПЛАН ПРОДОЛЖЕНИЯ");
-    expect(overviewSource).toContain("rankSwitchCandidates");
+    expect(overviewSource).toContain("scheduleAccounts");
     expect(overviewSource).not.toContain("УМНЫЙ РЕЗЕРВ");
-    expect(overviewSource).toContain('candidate.remainingPercent === null ? "—"');
-    expect(styles).toContain(".handoff-lane");
-    expect(styles).toContain(".continuation-queue");
   });
 
   it("separates quota titles, values and reset details", () => {
-    expect(overviewSource).toContain('className="quota-card-head"');
-    expect(overviewSource).toContain('className="quota-card-visual"');
-    expect(overviewSource).toContain('className="quota-meter"');
-    expect(styles).toMatch(/\.quota-card-visual\s*\{[\s\S]*?grid-template-columns:\s*68px minmax\(0, 1fr\)/);
+    expect(overviewSource).toContain("clean-quota-card");
+    expect(overviewSource).toContain("clean-quota-label");
+    expect(overviewSource).toContain("clean-quota-progress");
   });
 
   it("shows an accessible queued in-app notice without Windows toast", () => {

@@ -2,98 +2,257 @@ html:has(.tray-hover),
 body:has(.tray-hover),
 #root:has(.tray-hover) {
   background: transparent !important;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden !important;
 }
-html:has(.tray-hover) { color-scheme: dark; }
-body:has(.tray-hover) { margin: 0; overflow: hidden; }
+
+html:has(.tray-hover) {
+  color-scheme: dark;
+}
 
 .tray-hover {
-  --hover-accent: #9b78ff;
-  position: relative;
   box-sizing: border-box;
-  display: grid;
-  grid-template-rows: 18px 50px 42px;
-  gap: 6px;
-  width: 252px;
-  height: 144px;
-  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  width: 310px;
+  height: 142px;
+  margin: 0;
+  padding: 12px 14px;
   overflow: hidden;
-  color: #fbf9ff;
-  border: 1px solid color-mix(in srgb, var(--hover-accent) 42%, transparent);
-  border-radius: 15px;
-  background:
-    radial-gradient(circle at 93% -18%, color-mix(in srgb, var(--hover-accent) 24%, transparent), transparent 48%),
-    linear-gradient(145deg, rgba(24, 18, 40, .98), rgba(7, 8, 14, .97));
-  box-shadow: inset 0 1px rgba(255, 255, 255, .09);
-  font-family: "Montserrat Variable", "Segoe UI Variable", sans-serif;
+  color: #f8fafc;
+  border-radius: 14px;
+  font-family: 'Unbounded Variable', 'Unbounded', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   pointer-events: none;
   user-select: none;
   isolation: isolate;
+  position: relative;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background:
+    radial-gradient(circle at 90% -10%, var(--theme-ambient-glow, rgba(139, 92, 246, 0.12)), transparent 50%),
+    linear-gradient(160deg, #12141a 0%, #0c0e12 100%);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  transition: border-color 160ms ease, background 160ms ease;
 }
-.tray-hover::before {
-  position: absolute;
-  z-index: -1;
-  inset: 0;
-  content: "";
-  border-radius: inherit;
-  background: linear-gradient(102deg, color-mix(in srgb, var(--hover-accent) 18%, transparent), transparent 42%);
-  opacity: .88;
+
+/* Antigravity Scandinavian Cyan Theme */
+.tray-hover.tray-theme-antigravity {
+  --theme-accent: #38bdf8;
+  --theme-accent-soft: rgba(56, 189, 248, 0.14);
+  --theme-accent-glow: rgba(56, 189, 248, 0.28);
+  --theme-ambient-glow: rgba(56, 189, 248, 0.14);
+  --theme-subtle-text: #94a3b8;
+  --theme-bar-gradient: linear-gradient(90deg, #0284c7, #38bdf8);
 }
-.tray-hover::after {
-  position: absolute;
-  top: 0;
-  right: 22px;
-  left: 22px;
-  height: 1px;
-  content: "";
-  background: linear-gradient(90deg, transparent, var(--hover-accent), transparent);
+
+/* Codex Scandinavian Violet Theme */
+.tray-hover.tray-theme-codex {
+  --theme-accent: #8b5cf6;
+  --theme-accent-soft: rgba(139, 92, 246, 0.14);
+  --theme-accent-glow: rgba(139, 92, 246, 0.28);
+  --theme-ambient-glow: rgba(139, 92, 246, 0.14);
+  --theme-subtle-text: #94a3b8;
+  --theme-bar-gradient: linear-gradient(90deg, #7c3aed, #a78bfa);
 }
-.tray-hover-critical { --hover-accent: #ffad62; }
-.tray-hover-error { --hover-accent: #ff6f91; }
-.tray-hover-stale { --hover-accent: #e1a75f; }
-.tray-hover-unknown, .tray-hover-empty { --hover-accent: #9b94ae; }
-.tray-hover-header, .tray-hover-hero,
-.tray-hover-brand, .tray-hover-state, .tray-hover-value { display: flex; align-items: center; }
-.tray-hover-header, .tray-hover-hero { justify-content: space-between; }
-.tray-hover-brand { gap: 4px; letter-spacing: .075em; }
-.tray-hover-brand i { width: 6px; height: 6px; border-radius: 50%; background: var(--hover-accent); }
-.tray-hover-brand b { font-size: 9px; font-weight: 820; }
-.tray-hover-brand em { color: #a9a2b4; font-size: 8px; font-style: normal; font-weight: 700; }
-.tray-hover-state { min-width: 0; gap: 4px; overflow: hidden; color: #d4cedb; font-size: 8px; font-weight: 680; text-overflow: ellipsis; white-space: nowrap; }
-.tray-hover-state i { flex: 0 0 auto; width: 4px; height: 4px; border-radius: 50%; background: var(--hover-accent); }
-.tray-hover-hero { min-width: 0; }
-.tray-hover-identity { display: grid; min-width: 0; gap: 3px; }
-.tray-hover-identity small { color: #9890a3; font-size: 8px; font-weight: 760; letter-spacing: .1em; }
-.tray-hover-identity strong { max-width: 152px; overflow: hidden; font-size: 14px; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
-.tray-hover-identity em { max-width: 150px; overflow: hidden; color: #aaa3b2; font-size: 9px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
-.tray-hover-value { flex: 0 0 auto; align-items: flex-end; flex-direction: column; }
-.tray-hover-value strong { font-size: 30px; font-weight: 850; font-variant-numeric: tabular-nums; letter-spacing: -.065em; line-height: .88; }
-.tray-hover-value sup { margin-left: 1px; color: var(--hover-accent); font-size: 11px; font-weight: 780; letter-spacing: 0; vertical-align: top; }
-.tray-hover-value small { margin-top: 4px; color: #9891a1; font-size: 8px; font-weight: 650; }
+
+/* State overrides: Critical / Low Quota (Warm Amber/Orange) */
+.tray-hover.tray-hover-critical {
+  --theme-accent: #f59e0b;
+  --theme-accent-soft: rgba(245, 158, 11, 0.14);
+  --theme-accent-glow: rgba(245, 158, 11, 0.28);
+  --theme-bar-gradient: linear-gradient(90deg, #d97706, #f59e0b);
+}
+
+/* State overrides: Error / Depleted (Vivid Red) */
+.tray-hover.tray-hover-error {
+  --theme-accent: #ef4444;
+  --theme-accent-soft: rgba(239, 68, 68, 0.14);
+  --theme-accent-glow: rgba(239, 68, 68, 0.28);
+  --theme-bar-gradient: linear-gradient(90deg, #dc2626, #ef4444);
+}
+
+/* Header */
+.tray-hover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 8px;
+  height: 20px;
+}
+
+.tray-hover-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+
+.tray-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--theme-accent);
+  box-shadow: 0 0 8px var(--theme-accent);
+}
+
+.tray-brand-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #ffffff;
+}
+
+.tray-hover-state {
+  font-size: 10px;
+  font-weight: 600;
+  color: #94a3b8;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+/* Hero section */
+.tray-hover-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  height: 48px;
+}
+
+.tray-hover-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.tray-account-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 190px;
+  line-height: 1.25;
+}
+
+.tray-plan-badge {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--theme-accent);
+  background: var(--theme-accent-soft);
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.tray-hover-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex-shrink: 0;
+  min-width: 72px;
+}
+
+.tray-hover-value strong {
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  color: #ffffff;
+}
+
+.tray-hover-value sup {
+  margin-left: 2px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--theme-accent);
+  vertical-align: top;
+}
+
+.tray-hover-value small {
+  margin-top: 3px;
+  font-size: 9.5px;
+  font-weight: 500;
+  color: var(--theme-subtle-text);
+  letter-spacing: 0.02em;
+}
+
+/* Limit & Progress */
 .tray-hover-limit {
   box-sizing: border-box;
-  display: grid;
-  grid-template-rows: 1fr 3px;
-  gap: 7px;
-  height: 42px;
-  padding: 7px 9px;
-  border: 1px solid rgba(255, 255, 255, .07);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, .035);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
-.tray-hover-limit > span { display: flex; align-items: center; justify-content: space-between; min-width: 0; gap: 8px; }
-.tray-hover-limit small { color: #aaa3b2; font-size: 8px; font-weight: 760; letter-spacing: .07em; }
-.tray-hover-limit time { overflow: hidden; color: #d2ccda; font-size: 8px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
-.tray-hover-limit > i { height: 3px; overflow: hidden; border-radius: 99px; background: rgba(255, 255, 255, .09); }
-.tray-hover-limit > i em { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7046f5, var(--hover-accent)); }
+
+.tray-limit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 8px;
+}
+
+.tray-limit-reset {
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #cbd5e1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tray-countdown-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--theme-accent);
+  white-space: nowrap;
+}
+
+.tray-progress-track {
+  height: 3.5px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.tray-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--theme-bar-gradient);
+  transition: width 300ms ease;
+}
+
 @media (prefers-reduced-motion: no-preference) {
-  .tray-hover { animation: tray-hover-in 160ms cubic-bezier(.2, .82, .2, 1) both; }
-}
-@media (forced-colors: active) {
-  .tray-hover { color: CanvasText; border: 1px solid CanvasText; background: Canvas; box-shadow: none; }
-  .tray-hover::before, .tray-hover::after { display: none; }
-  .tray-hover-limit { border: 1px solid CanvasText; }
+  .tray-hover { animation: tray-hover-in 160ms cubic-bezier(.16, 1, .3, 1) both; }
 }
 @keyframes tray-hover-in {
-  from { opacity: 0; transform: translateY(5px) scale(.988); }
+  from { opacity: 0; transform: translateY(4px) scale(.99); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
+

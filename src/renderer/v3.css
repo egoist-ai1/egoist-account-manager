@@ -3659,11 +3659,24 @@ textarea:focus-visible {
 }
 
 .profile-card .limit-line {
-  gap: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 4px;
   font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.profile-card .limit-line span {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .profile-card .limit-line strong {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
   color: #f0f1f6;
   font-size: 12px;
   font-variant-numeric: tabular-nums;

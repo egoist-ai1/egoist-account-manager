@@ -2,7 +2,7 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { BrowserWindow, Menu, Tray, app, clipboard, dialog, ipcMain, nativeImage, powerMonitor, screen, shell, type IpcMainInvokeEvent } from "electron";
+import { BrowserWindow, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, nativeImage, powerMonitor, screen, shell, type IpcMainInvokeEvent } from "electron";
 import { AccountStore } from "./db.js";
 import { Vault } from "./security.js";
 import { getAppDataDir, getDefaultCodexHome } from "./paths.js";
@@ -58,6 +58,7 @@ import { restartAntigravityIntegration } from "./services/antigravityProcessServ
 import { createProviderRuntimeAdapters } from "./services/providerRuntimeAdapter.js";
 import { WindowsDesktopLifecycleService } from "./services/windowsDesktopLifecycleService.js";
 import { QuotaAlertService } from "./services/quotaAlertService.js";
+import { QuotaResetNotificationService } from "./services/quotaResetNotificationService.js";
 import { DeviceCodeHandoffService } from "./services/deviceCodeHandoffService.js";
 import {
   InAppNotificationService,
@@ -71,8 +72,12 @@ let mainWindow: BrowserWindow | null = null;
 let manager: AccountManager | null = null;
 let vault: Vault | null = null;
 let tray: Tray | null = null;
+let antigravityTray: Tray | null = null;
+let lastInteractedTray: Tray | null = null;
 let trayPopoverWindow: BrowserWindow | null = null;
 let trayHoverWindow: BrowserWindow | null = null;
+let currentPopoverPlatform: "codex" | "antigravity" = "codex";
+let currentHoverPlatform: "codex" | "antigravity" = "codex";
 let isQuitting = false;
 let startupError: string | null = null;
 let settingsService: SettingsService | null = null;
@@ -89,6 +94,8 @@ let updaterService: UpdaterService | null = null;
 let codexCapabilityService: CodexCapabilityService | null = null;
 let desktopLifecycleService: WindowsDesktopLifecycleService | null = null;
 let quotaAlertService: QuotaAlertService | null = null;
+let quotaResetNotificationService: QuotaResetNotificationService | null = null;
+let quotaResetTimer: NodeJS.Timeout | null = null;
 let antigravityGoogleLoginInFlight: Promise<unknown> | null = null;
 const deviceCodeHandoff = new DeviceCodeHandoffService(clipboard);
 const inAppNotificationService = new InAppNotificationService();
@@ -99,10 +106,10 @@ const antigravityGoogleOAuthSessions = new Map<string, {
 }>();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const productName = "Egoist Account Manager";
+const productName = "Account Manager EGO";
 const publisherName = "Egoist AI";
-const previousProductName = "Codex Account Manager";
-const legacyProductName = "Egoist AI Manager";
+const previousProductName = "Egoist Account Manager";
+const legacyProductName = "Codex Account Manager";
 const appUserModelId = "one.egoist.codex-account-manager";
 // Packaged code must never trust an environment flag to enable a localhost
 // renderer with privileged preload IPC.
@@ -261,19 +268,56 @@ async function getCurrentDiagnostics(appDataDir: string): Promise<AppDiagnostics
   };
 }
 
+interface WindowBoundsState {
+  width: number;
+  height: number;
+  x?: number;
+  y?: number;
+}
+
+function loadWindowState(): WindowBoundsState {
+  const fallback = { width: 1040, height: 640 };
+  try {
+    const dir = getAppDataDir();
+    const file = path.join(dir, "window-state.json");
+    if (fs.existsSync(file)) {
+      const data = JSON.parse(fs.readFileSync(file, "utf8")) as WindowBoundsState;
+      if (typeof data.width === "number" && typeof data.height === "number" && data.width >= 860 && data.height >= 560) {
+        return data;
+      }
+    }
+  } catch {
+    // Ignore corrupt or unreadable window state
+  }
+  return fallback;
+}
+
+function saveWindowState(win: BrowserWindow): void {
+  if (win.isDestroyed() || win.isMinimized() || win.isMaximized()) return;
+  try {
+    const dir = getAppDataDir();
+    fs.mkdirSync(dir, { recursive: true });
+    const bounds = win.getBounds();
+    const file = path.join(dir, "window-state.json");
+    fs.writeFileSync(file, JSON.stringify(bounds), "utf8");
+  } catch {
+    // Ignore file write errors on shutdown or unmounted volumes
+  }
+}
+
 function createWindow(): BrowserWindow {
-  const workArea = screen.getPrimaryDisplay().workAreaSize;
-  const width = Math.min(1460, Math.max(920, workArea.width - 24));
-  const height = Math.min(900, Math.max(620, workArea.height - 24));
+  const state = loadWindowState();
   const window = new BrowserWindow({
-    width,
-    height,
-    minWidth: 920,
-    minHeight: 620,
-    center: true,
+    width: state.width,
+    height: state.height,
+    x: state.x,
+    y: state.y,
+    minWidth: 860,
+    minHeight: 560,
+    center: state.x == null || state.y == null,
     show: false,
     frame: false,
-    backgroundColor: "#0a0b10",
+    backgroundColor: "#000000",
     title: productName,
     icon: getWindowIconPath(),
     webPreferences: {
@@ -285,11 +329,29 @@ function createWindow(): BrowserWindow {
     }
   });
 
+  let saveTimer: NodeJS.Timeout | null = null;
+  const debouncedSave = () => {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => saveWindowState(window), 400);
+  };
+  window.on("resize", debouncedSave);
+  window.on("moved", debouncedSave);
+
+  const showFallbackTimer = setTimeout(() => {
+    if (!window.isDestroyed() && !window.isVisible()) {
+      window.show();
+      window.focus();
+    }
+  }, 1500);
+
   window.once("ready-to-show", () => {
+    clearTimeout(showFallbackTimer);
     window.show();
     window.focus();
+    saveWindowState(window);
   });
   window.on("close", (event) => {
+    saveWindowState(window);
     if (isQuitting || settingsService?.get().trayEnabled !== true) return;
     event.preventDefault();
     window.hide();
@@ -298,7 +360,8 @@ function createWindow(): BrowserWindow {
   window.on("closed", () => {
     if (mainWindow === window) mainWindow = null;
   });
-  window.on("blur", () => syncActiveCodexSession("window-blur"));
+  window.on("blur", () => syncActiveSessions("window-blur"));
+  window.on("focus", () => syncActiveSessions("window-focus"));
 
   window.webContents.on("render-process-gone", (_event, details) => {
     log(`Renderer process gone: ${details.reason}`);
@@ -427,7 +490,7 @@ async function startAntigravityGoogleLogin(): Promise<AntigravityImportResult> {
         env: process.env,
         openExternal: (url) => openExternalUrl(url, "antigravity-google-oauth"),
         requestTimeoutMs: 20_000,
-        resolveAccountContext: false,
+        resolveAccountContext: true,
         onStep: (step) => {
           log(`Antigravity Google OAuth step: ${step}`);
           mainWindow?.webContents.send("antigravity:oauth-step", step);
@@ -511,7 +574,7 @@ function completeAntigravityGoogleOAuthSession(
         authorization: session.authorization,
         callback,
         requestTimeoutMs: 20_000,
-        resolveAccountContext: false,
+        resolveAccountContext: true,
         onStep: (step) => {
           log(`Antigravity Google OAuth step: ${step}`);
           mainWindow?.webContents.send("antigravity:oauth-step", step);
@@ -612,7 +675,11 @@ function registerIpc(appDataDir: string): void {
     }),
     assertTrustedSender
   );
-  handle("accounts:list", () => requireManager().list());
+  handle("accounts:list", async () => {
+    syncActiveCodexSession("accounts:list");
+    await syncActiveAntigravitySession("accounts:list");
+    return requireManager().list();
+  });
   handle("app:getInfo", () => ({
     name: productName,
     publisher: publisherName,
@@ -665,10 +732,15 @@ function registerIpc(appDataDir: string): void {
   handle("accounts:detectLocalSessions", () => {
     return requireManager().detectLocalSessions();
   });
-  handle("accounts:refresh", (_event, input) => {
+  handle("accounts:refresh", async (_event, input) => {
     const parsed = accountActionInputSchema.parse(input);
     log(`Refreshing account: ${parsed.accountId}`);
-    return requireManager().refreshAccount(parsed.accountId);
+    syncActiveCodexSession("accounts:refresh");
+    await syncActiveAntigravitySession("accounts:refresh");
+    const account = await requireManager().refreshAccount(parsed.accountId);
+    broadcastAccountsUpdated();
+    updateTrayMenu();
+    return account;
   });
   handle("accounts:auth:validate", (_event, input) => {
     const parsed = validateAuthInputSchema.parse(input);
@@ -688,7 +760,7 @@ function registerIpc(appDataDir: string): void {
     const options: Electron.SaveDialogOptions = {
       title: "Export ChatGPT accounts",
       defaultPath: `egoist-account-manager-accounts-${stamp}.cam-export`,
-      filters: [{ name: "Egoist Account Manager export", extensions: ["cam-export"] }]
+      filters: [{ name: "Account Manager EGO export", extensions: ["cam-export"] }]
     };
     const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
     if (result.canceled || !result.filePath) return { exportedCount: 0, filePath: "" };
@@ -700,7 +772,7 @@ function registerIpc(appDataDir: string): void {
     const options: Electron.OpenDialogOptions = {
       title: "Import ChatGPT accounts",
       properties: ["openFile"],
-      filters: [{ name: "Egoist Account Manager export", extensions: ["cam-export", "json"] }]
+      filters: [{ name: "Account Manager EGO export", extensions: ["cam-export", "json"] }]
     };
     const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
     if (result.canceled || !result.filePaths[0]) return { importedCount: 0, accounts: requireManager().list() };
@@ -734,6 +806,7 @@ function registerIpc(appDataDir: string): void {
       const account = await requireManager().switchAccount(parsed.accountId, parsed.transactionId);
       return account;
     } finally {
+      broadcastAccountsUpdated();
       updateTrayMenu();
     }
   });
@@ -938,6 +1011,12 @@ function registerIpc(appDataDir: string): void {
     const source = BrowserWindow.fromWebContents(event.sender);
     if (source && source === trayPopoverWindow) source.hide();
   });
+  handle("tray:getPlatform", (event) => {
+    if (trayHoverWindow && !trayHoverWindow.isDestroyed() && event.sender === trayHoverWindow.webContents) {
+      return currentHoverPlatform;
+    }
+    return currentPopoverPlatform;
+  });
 }
 
 function showMainWindow(): void {
@@ -967,7 +1046,26 @@ function publishInAppNotification(payload: AppNotificationPayload): void {
   mainWindow.webContents.send("app:notification", safePayload);
 }
 
+function showQuotaResetNativeNotification(title: string, body: string): void {
+  try {
+    if (Notification && typeof Notification.isSupported === "function" && Notification.isSupported()) {
+      const toast = Reflect.construct(Notification, [{
+        title: redactSensitiveText(title),
+        body: redactSensitiveText(body),
+        silent: false
+      }]) as Notification;
+      toast.on("click", () => {
+        showMainWindow();
+      });
+      toast.show();
+    }
+  } catch (err) {
+    log("Failed to show native quota reset notification", err);
+  }
+}
+
 function publishQuotaAlerts(accounts: ManagedAccount[]): void {
+  quotaResetNotificationService?.onAccountsUpdated(accounts);
   const settings = settingsService?.get();
   const alerts = quotaAlertService?.evaluate(accounts, settings?.smartSwitchThresholdPercent ?? 10) ?? [];
   for (const alert of alerts) {
@@ -976,19 +1074,19 @@ function publishQuotaAlerts(accounts: ManagedAccount[]): void {
   }
 }
 
-function createLiveTrayImage(): Electron.NativeImage {
+function createLiveTrayImage(platform?: "codex" | "antigravity"): Electron.NativeImage {
   const settings = settingsService?.get();
   const snapshot = buildLiveTraySnapshot(manager?.list() ?? [], {
     privacyMode: settings?.privacyMode,
     language: settings?.language
-  });
+  }, platform);
   const image = nativeImage.createEmpty();
   for (const representation of LIVE_TRAY_REPRESENTATIONS) {
     image.addRepresentation({
       width: representation.pixelSize,
       height: representation.pixelSize,
       scaleFactor: representation.scaleFactor,
-      buffer: Buffer.from(renderLiveTrayBitmap(snapshot, representation.pixelSize))
+      buffer: Buffer.from(renderLiveTrayBitmap(snapshot, representation.pixelSize, platform))
     });
   }
   return image.isEmpty() ? nativeImage.createFromPath(getWindowIconPath()) : image;
@@ -1009,15 +1107,16 @@ function loadTraySurface(window: BrowserWindow, surface: "tray" | "tray-hover"):
 function createTrayPopoverWindow(): BrowserWindow {
   if (trayPopoverWindow && !trayPopoverWindow.isDestroyed()) return trayPopoverWindow;
   const window = new BrowserWindow({
-    width: 372,
-    height: 302,
-    minWidth: 372,
-    minHeight: 302,
-    maxWidth: 372,
-    maxHeight: 302,
+    width: 310,
+    height: 192,
+    minWidth: 310,
+    minHeight: 192,
+    maxWidth: 310,
+    maxHeight: 192,
     show: false,
     frame: false,
     transparent: true,
+    hasShadow: false,
     resizable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
@@ -1048,12 +1147,12 @@ function createTrayPopoverWindow(): BrowserWindow {
 function createTrayHoverWindow(): BrowserWindow {
   if (trayHoverWindow && !trayHoverWindow.isDestroyed()) return trayHoverWindow;
   const window = new BrowserWindow({
-    width: 252,
-    height: 144,
-    minWidth: 252,
-    minHeight: 144,
-    maxWidth: 252,
-    maxHeight: 144,
+    width: 310,
+    height: 142,
+    minWidth: 310,
+    minHeight: 142,
+    maxWidth: 310,
+    maxHeight: 142,
     show: false,
     frame: false,
     transparent: true,
@@ -1086,26 +1185,51 @@ function createTrayHoverWindow(): BrowserWindow {
   return window;
 }
 
-function positionTraySurface(window: BrowserWindow, gap = 10): void {
-  if (!tray) return;
-  const trayBounds = tray.getBounds();
+function updateTraySurfaceSize(window: BrowserWindow, isHover: boolean): void {
+  if (isHover) {
+    window.setContentSize(310, 142);
+  } else {
+    window.setContentSize(310, 192);
+  }
+}
+
+function positionTraySurface(window: BrowserWindow, gap = 10, explicitTray?: Tray | null): void {
+  const anchorTray = explicitTray ?? lastInteractedTray ?? antigravityTray ?? tray;
+  if (!anchorTray) return;
+  const trayBounds = anchorTray.getBounds();
   const display = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
   const popupBounds = window.getBounds();
   const position = calculateTraySurfacePosition(trayBounds, popupBounds, display.workArea, gap);
   window.setPosition(position.x, position.y, false);
 }
 
-function toggleTrayPopover(): void {
+function toggleTrayPopover(explicitTray?: Tray | null): void {
+  const targetTray = explicitTray ?? lastInteractedTray ?? antigravityTray ?? tray;
+  if (!targetTray) return;
+  const platform: "codex" | "antigravity" = targetTray === antigravityTray ? "antigravity" : "codex";
   const window = createTrayPopoverWindow();
+
   if (window.isVisible()) {
-    window.hide();
+    if (currentPopoverPlatform === platform) {
+      window.hide();
+      return;
+    }
+    currentPopoverPlatform = platform;
+    positionTraySurface(window, 10, targetTray);
+    window.webContents.send("tray:platform", platform);
+    window.webContents.send("accounts:updated");
+    window.focus();
     return;
   }
+
+  currentPopoverPlatform = platform;
+  updateTraySurfaceSize(window, false);
   const show = () => {
-    positionTraySurface(window);
+    positionTraySurface(window, 10, targetTray);
+    window.webContents.send("tray:platform", platform);
+    window.webContents.send("accounts:updated");
     window.show();
     window.focus();
-    window.webContents.send("accounts:updated");
   };
   if (window.webContents.isLoadingMainFrame()) window.webContents.once("did-finish-load", show);
   else show();
@@ -1124,12 +1248,21 @@ function hideTrayHoverPopover(): void {
   if (trayHoverWindow && !trayHoverWindow.isDestroyed()) trayHoverWindow.hide();
 }
 
-function showTrayHoverPopover(): void {
-  if (!trayHoverRequested || !tray) return;
+function showTrayHoverPopover(explicitTray?: Tray | null): void {
+  if (!trayHoverRequested || (!tray && !antigravityTray)) return;
+  if (trayPopoverWindow && !trayPopoverWindow.isDestroyed() && trayPopoverWindow.isVisible()) return;
+
+  const targetTray = explicitTray ?? lastInteractedTray ?? antigravityTray ?? tray;
+  if (!targetTray) return;
+  const platform: "codex" | "antigravity" = targetTray === antigravityTray ? "antigravity" : "codex";
+  currentHoverPlatform = platform;
+
   const window = createTrayHoverWindow();
+  updateTraySurfaceSize(window, true);
   const show = () => {
     if (!trayHoverRequested || window.isDestroyed()) return;
-    positionTraySurface(window, 8);
+    positionTraySurface(window, 8, targetTray);
+    window.webContents.send("tray:platform", platform);
     window.webContents.send("accounts:updated");
     window.showInactive();
   };
@@ -1137,14 +1270,29 @@ function showTrayHoverPopover(): void {
   else show();
 }
 
-function scheduleTrayHoverShow(): void {
+function scheduleTrayHoverShow(targetTray?: Tray | null): void {
   trayHoverRequested = true;
   if (trayHoverHideTimer) clearTimeout(trayHoverHideTimer);
   trayHoverHideTimer = null;
-  if (trayHoverWindow?.isVisible() || trayHoverShowTimer) return;
+
+  const actualTray = targetTray ?? lastInteractedTray ?? antigravityTray ?? tray;
+  if (!actualTray) return;
+  const platform: "codex" | "antigravity" = actualTray === antigravityTray ? "antigravity" : "codex";
+
+  if (trayHoverWindow && !trayHoverWindow.isDestroyed() && trayHoverWindow.isVisible()) {
+    if (currentHoverPlatform !== platform) {
+      currentHoverPlatform = platform;
+      positionTraySurface(trayHoverWindow, 8, actualTray);
+      trayHoverWindow.webContents.send("tray:platform", platform);
+      trayHoverWindow.webContents.send("accounts:updated");
+    }
+    return;
+  }
+
+  if (trayHoverShowTimer) clearTimeout(trayHoverShowTimer);
   trayHoverShowTimer = setTimeout(() => {
     trayHoverShowTimer = null;
-    showTrayHoverPopover();
+    showTrayHoverPopover(actualTray);
   }, trayHoverDwellMs);
 }
 
@@ -1160,71 +1308,158 @@ function scheduleTrayHoverHide(): void {
 }
 
 function updateTrayMenu(): void {
-  if (!tray || !manager) return;
+  if ((!tray && !antigravityTray) || !manager) return;
   const accounts = manager.list();
-  const active = accounts.find((account) => account.isActive);
-  const recommendation = selectSmartAccount(accounts, manager.getWorkspaceBinding());
-  const best = recommendation ? accounts.find((account) => account.id === recommendation.accountId) : null;
   const privacyMode = settingsService?.get().privacyMode === true;
+  const isEnglish = settingsService?.get().language === "en";
 
-  tray.setImage(createLiveTrayImage());
-  // The branded passive hover surface replaces the small native gray tooltip.
-  tray.setToolTip("");
+  const codexAccounts = accounts.filter((a) => (a.platform ?? "codex") === "codex");
+  const antigravityAccounts = accounts.filter((a) => a.platform === "antigravity");
+  const hasAntigravity = antigravityAccounts.length > 0;
+
+  // 1. Update Codex Tray
+  if (tray) {
+    tray.setImage(createLiveTrayImage("codex"));
+    tray.setToolTip("");
+    const activeCodex = codexAccounts.find((a) => a.isActive);
+    const recCodex = selectSmartAccount(codexAccounts, manager.getWorkspaceBinding());
+    const bestCodex = recCodex ? codexAccounts.find((a) => a.id === recCodex.accountId) : null;
+
+    tray.setContextMenu(
+      Menu.buildFromTemplate([
+        {
+          label: activeCodex
+            ? (privacyMode ? (isEnglish ? "Active Codex profile selected" : "Активный профиль Codex") : `Codex: ${activeCodex.label}`)
+            : (isEnglish ? "No active Codex account" : "Активный аккаунт Codex не выбран"),
+          enabled: false
+        },
+        { type: "separator" },
+        {
+          label: bestCodex ? (isEnglish ? `Smart Switch: ${bestCodex.label}` : `Умный выбор: ${bestCodex.label}`) : (isEnglish ? "Smart switch unavailable" : "Умный выбор недоступен"),
+          enabled: Boolean(bestCodex && !bestCodex.isActive),
+          click: () => {
+            if (bestCodex) void manager?.switchAccount(bestCodex.id).finally(() => updateTrayMenu());
+          }
+        },
+        {
+          label: isEnglish ? "Codex Accounts" : "Аккаунты Codex",
+          enabled: codexAccounts.length > 0,
+          submenu: codexAccounts.slice(0, 12).map((account) => ({
+            label: buildTrayAccountLabel(account, privacyMode),
+            enabled: !account.isActive,
+            click: () => void manager?.switchAccount(account.id).finally(() => updateTrayMenu())
+          }))
+        },
+        { type: "separator" },
+        {
+          label: isEnglish ? "Refresh Quotas" : "Обновить лимиты",
+          enabled: accounts.length > 0,
+          click: () => void refreshAllRateLimits("manual").finally(() => updateTrayMenu())
+        },
+        { label: isEnglish ? "Open Manager" : "Открыть окно", click: showMainWindow },
+        {
+          label: isEnglish ? "Quit" : "Выход",
+          click: () => {
+            isQuitting = true;
+            app.quit();
+          }
+        }
+      ])
+    );
+  }
+
+  // 2. Manage Antigravity Tray
+  if (hasAntigravity) {
+    if (!antigravityTray) {
+      antigravityTray = new Tray(createLiveTrayImage("antigravity"));
+      antigravityTray.on("mouse-enter", () => {
+        lastInteractedTray = antigravityTray;
+        scheduleTrayHoverShow(antigravityTray);
+      });
+      antigravityTray.on("mouse-move", () => {
+        lastInteractedTray = antigravityTray;
+        scheduleTrayHoverShow(antigravityTray);
+      });
+      antigravityTray.on("mouse-leave", scheduleTrayHoverHide);
+      antigravityTray.on("click", () => {
+        lastInteractedTray = antigravityTray;
+        hideTrayHoverPopover();
+        toggleTrayPopover(antigravityTray);
+      });
+    }
+    antigravityTray.setImage(createLiveTrayImage("antigravity"));
+    antigravityTray.setToolTip("");
+    const activeAg = antigravityAccounts.find((a) => a.isActive);
+    const recAg = selectSmartAccount(antigravityAccounts, manager.getWorkspaceBinding());
+    const bestAg = recAg ? antigravityAccounts.find((a) => a.id === recAg.accountId) : null;
+
+    antigravityTray.setContextMenu(
+      Menu.buildFromTemplate([
+        {
+          label: activeAg
+            ? (privacyMode ? (isEnglish ? "Active Antigravity profile" : "Активный профиль Antigravity") : `Antigravity: ${activeAg.label}`)
+            : (isEnglish ? "No active Antigravity account" : "Активный аккаунт Antigravity не выбран"),
+          enabled: false
+        },
+        { type: "separator" },
+        {
+          label: bestAg ? (isEnglish ? `Smart Switch: ${bestAg.label}` : `Умный выбор: ${bestAg.label}`) : (isEnglish ? "Smart switch unavailable" : "Умный выбор недоступен"),
+          enabled: Boolean(bestAg && !bestAg.isActive),
+          click: () => {
+            if (bestAg) void manager?.switchAccount(bestAg.id).finally(() => updateTrayMenu());
+          }
+        },
+        {
+          label: isEnglish ? "Antigravity Accounts" : "Аккаунты Antigravity",
+          enabled: antigravityAccounts.length > 0,
+          submenu: antigravityAccounts.slice(0, 12).map((account) => ({
+            label: buildTrayAccountLabel(account, privacyMode),
+            enabled: !account.isActive,
+            click: () => void manager?.switchAccount(account.id).finally(() => updateTrayMenu())
+          }))
+        },
+        { type: "separator" },
+        {
+          label: isEnglish ? "Refresh Quotas" : "Обновить лимиты",
+          enabled: accounts.length > 0,
+          click: () => void refreshAllRateLimits("manual").finally(() => updateTrayMenu())
+        },
+        { label: isEnglish ? "Open Manager" : "Открыть окно", click: showMainWindow },
+        {
+          label: isEnglish ? "Quit" : "Выход",
+          click: () => {
+            isQuitting = true;
+            app.quit();
+          }
+        }
+      ])
+    );
+  } else if (antigravityTray) {
+    antigravityTray.destroy();
+    antigravityTray = null;
+  }
+
   if (trayHoverWindow && !trayHoverWindow.isDestroyed() && !trayHoverWindow.webContents.isLoadingMainFrame()) {
     trayHoverWindow.webContents.send("accounts:updated");
   }
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      {
-        label: active
-          ? (privacyMode ? "Активный профиль выбран" : `Активный: ${active.label}`)
-          : "Активный аккаунт не выбран",
-        enabled: false
-      },
-      { type: "separator" },
-      {
-        label: best ? `Умный выбор: ${best.label}` : "Умный выбор недоступен",
-        enabled: Boolean(best && !best.isActive),
-        click: () => {
-          if (best) void manager?.switchAccount(best.id).finally(() => updateTrayMenu());
-        }
-      },
-      {
-        label: "Аккаунты",
-        enabled: accounts.length > 0,
-        submenu: accounts.slice(0, 12).map((account) => ({
-          label: buildTrayAccountLabel(account, privacyMode),
-          enabled: !account.isActive,
-          click: () => void manager?.switchAccount(account.id).finally(() => updateTrayMenu())
-        }))
-      },
-      { type: "separator" },
-      {
-        label: "Обновить лимиты",
-        enabled: accounts.length > 0,
-        click: () => void refreshAllRateLimits("manual").finally(() => updateTrayMenu())
-      },
-      { label: "Открыть окно", click: showMainWindow },
-      {
-        label: "Выход",
-        click: () => {
-          isQuitting = true;
-          app.quit();
-        }
-      }
-    ])
-  );
 }
 
 function createTray(): void {
   if (tray) return;
-  tray = new Tray(createLiveTrayImage());
-  tray.on("mouse-enter", scheduleTrayHoverShow);
-  tray.on("mouse-move", scheduleTrayHoverShow);
+  tray = new Tray(createLiveTrayImage("codex"));
+  tray.on("mouse-enter", () => {
+    lastInteractedTray = tray;
+    scheduleTrayHoverShow(tray);
+  });
+  tray.on("mouse-move", () => {
+    lastInteractedTray = tray;
+    scheduleTrayHoverShow(tray);
+  });
   tray.on("mouse-leave", scheduleTrayHoverHide);
   tray.on("click", () => {
+    lastInteractedTray = tray;
     hideTrayHoverPopover();
-    toggleTrayPopover();
+    toggleTrayPopover(tray);
   });
   updateTrayMenu();
 }
@@ -1233,14 +1468,20 @@ function applyDesktopIntegrationSettings(settings: AppSettings): void {
   if (settings.trayEnabled) {
     createTray();
     updateTrayMenu();
-  } else if (tray) {
+  } else {
     hideTrayHoverPopover();
     trayHoverWindow?.destroy();
     trayHoverWindow = null;
     trayPopoverWindow?.destroy();
     trayPopoverWindow = null;
-    tray.destroy();
-    tray = null;
+    if (tray) {
+      tray.destroy();
+      tray = null;
+    }
+    if (antigravityTray) {
+      antigravityTray.destroy();
+      antigravityTray = null;
+    }
   }
 
   if (process.platform === "win32" && app.isPackaged) {
@@ -1312,8 +1553,8 @@ function syncActiveCodexSession(reason: string): void {
   if (!manager) return;
   try {
     const result = manager.syncActiveCodexSession();
-    if (result.status === "updated") {
-      log(`Active Codex session snapshot updated: ${reason}`);
+    if (result.status === "updated" || result.status === "signed_out" || result.status === "unmanaged") {
+      log(`Active Codex session snapshot updated: ${reason} (${result.status})`);
       broadcastAccountsUpdated();
       updateTrayMenu();
     }
@@ -1322,10 +1563,69 @@ function syncActiveCodexSession(reason: string): void {
   }
 }
 
+async function syncActiveAntigravitySession(reason: string): Promise<void> {
+  if (!manager) return;
+  try {
+    const result = await manager.syncActiveAntigravitySession();
+    if (result.status === "updated" || result.status === "signed_out" || result.status === "unmanaged") {
+      log(`Active Antigravity session snapshot updated: ${reason} (${result.status})`);
+      broadcastAccountsUpdated();
+      updateTrayMenu();
+    }
+  } catch (error) {
+    log(`Active Antigravity session snapshot skipped: ${reason}`, error);
+  }
+}
+
+async function syncActiveSessions(reason: string): Promise<void> {
+  syncActiveCodexSession(reason);
+  await syncActiveAntigravitySession(reason);
+}
+
+let stateDbWatcher: fs.FSWatcher | null = null;
+let agLogsWatcher: fs.FSWatcher | null = null;
+
 function startSessionSnapshotSync(): void {
   if (sessionSnapshotTimer) clearInterval(sessionSnapshotTimer);
-  syncActiveCodexSession("startup");
-  sessionSnapshotTimer = setInterval(() => syncActiveCodexSession("periodic"), 30_000);
+  void syncActiveSessions("startup");
+  sessionSnapshotTimer = setInterval(() => {
+    void syncActiveSessions("periodic");
+  }, 3_500);
+
+  try {
+    const appData = process.env.APPDATA || (process.platform === "win32" ? path.join(process.env.USERPROFILE || "C:\\Users\\Default", "AppData", "Roaming") : "");
+    if (appData) {
+      // 1. Watch Antigravity log directory (main.log contains port and csrf token for running language server)
+      const agLogsDir = path.join(appData, "Antigravity", "logs");
+      if (fs.existsSync(agLogsDir)) {
+        let agDebounceTimer: NodeJS.Timeout | null = null;
+        agLogsWatcher = fs.watch(agLogsDir, (_eventType, filename) => {
+          if (!filename || filename.includes("main.log")) {
+            if (agDebounceTimer) clearTimeout(agDebounceTimer);
+            agDebounceTimer = setTimeout(() => {
+              void syncActiveAntigravitySession("main-log-watch");
+            }, 300);
+          }
+        });
+      }
+
+      // 2. Also watch legacy state.vscdb
+      const storageDir = path.join(appData, "Antigravity IDE", "User", "globalStorage");
+      if (fs.existsSync(storageDir)) {
+        let debounceTimer: NodeJS.Timeout | null = null;
+        stateDbWatcher = fs.watch(storageDir, (_eventType, filename) => {
+          if (!filename || filename.includes("state.vscdb")) {
+            if (debounceTimer) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+              void syncActiveAntigravitySession("vscdb-file-watch");
+            }, 300);
+          }
+        });
+      }
+    }
+  } catch (error) {
+    log("State DB / Antigravity log file watcher setup skipped", error);
+  }
 }
 
 async function runAutoRefresh(): Promise<void> {
@@ -1338,6 +1638,8 @@ async function refreshAllRateLimits(reason: "auto" | "manual") {
     log(`Rate-limit refresh skipped because another refresh is already running: ${reason}`);
     return manager.list();
   }
+
+  await syncActiveSessions(`pre-refresh-${reason}`);
 
   const accounts = manager.list();
   const trayActiveAccountId = trayRefreshInFlight
@@ -1396,9 +1698,17 @@ if (!gotLock) {
     const previousDbPath = path.join(previousUserDataDir, "accounts.sqlite");
     const legacyDbPath = path.join(legacyUserDataDir, "accounts.sqlite");
     const currentDbPath = path.join(currentUserDataDir, "accounts.sqlite");
-    if (fs.existsSync(previousDbPath)) {
+    const currentDbSize = fs.existsSync(currentDbPath) ? fs.statSync(currentDbPath).size : 0;
+    const previousDbSize = fs.existsSync(previousDbPath) ? fs.statSync(previousDbPath).size : 0;
+    if (currentDbSize > 4096 || (currentDbSize > 0 && previousDbSize <= 4096)) {
+      app.setPath("userData", currentUserDataDir);
+    } else if (previousDbSize > 4096) {
       app.setPath("userData", previousUserDataDir);
-    } else if (fs.existsSync(legacyDbPath) && !fs.existsSync(currentDbPath)) {
+    } else if (fs.existsSync(currentDbPath)) {
+      app.setPath("userData", currentUserDataDir);
+    } else if (fs.existsSync(previousDbPath)) {
+      app.setPath("userData", previousUserDataDir);
+    } else if (fs.existsSync(legacyDbPath)) {
       app.setPath("userData", legacyUserDataDir);
     }
   }
@@ -1454,13 +1764,39 @@ if (!gotLock) {
         readState: () => store.getSetting("quotaAlertState.v1"),
         writeState: (value) => store.setSetting("quotaAlertState.v1", value)
       });
+      quotaResetNotificationService = new QuotaResetNotificationService({
+        onNotify: (item) => {
+          showQuotaResetNativeNotification(item.title, item.body);
+          publishInAppNotification({
+            key: `quota-reset-${item.accountId}-${Date.now()}`,
+            title: item.title,
+            body: item.body,
+            tone: "success",
+            silent: false,
+            timeoutType: "default",
+            createdAt: Math.floor(Date.now() / 1000)
+          });
+        },
+        onTriggerRefresh: (accountId) => {
+          if (manager) {
+            void manager.refreshAccount(accountId).then(() => {
+              broadcastAccountsUpdated();
+              updateTrayMenu();
+            }).catch((err) => {
+              log(`Auto refresh after quota reset failed for account ${accountId}`, err);
+            });
+          }
+        },
+        now: () => Math.floor(Date.now() / 1000),
+        isEnglish: () => settingsService?.get().language === "en"
+      });
       desktopLifecycleService = new WindowsDesktopLifecycleService();
       manager = new AccountManager(store, vault, appDataDir, codexPath, {
         readAntigravityCredentialStorePayload,
         writeAntigravityCredentialStoreToken,
         restartAntigravityIntegration,
         desktopLifecycle: desktopLifecycleService,
-        getDesktopClosePolicy: () => settingsService?.get().desktopClosePolicy ?? "graceful-only"
+        getDesktopClosePolicy: () => settingsService?.get().desktopClosePolicy ?? "exact-tree-fallback"
       });
       currentRateLimitRefreshIntervalMs = settingsService.get().autoRefreshIntervalMs;
       currentTrayRefreshIntervalMs = settingsService.get().trayRefreshIntervalMs;
@@ -1476,6 +1812,7 @@ if (!gotLock) {
         if (payload) publishInAppNotification(payload);
       });
       manager.on("accounts-updated", () => {
+        quotaResetNotificationService?.onAccountsUpdated(manager?.list() ?? []);
         broadcastAccountsUpdated();
         updateTrayMenu();
       });
@@ -1506,6 +1843,11 @@ if (!gotLock) {
       startAutoRefresh(currentRateLimitRefreshIntervalMs);
       applyDesktopIntegrationSettings(settingsService.get());
       startTrayRefresh(currentTrayRefreshIntervalMs);
+      quotaResetNotificationService.onAccountsUpdated(manager.list());
+      if (quotaResetTimer) clearInterval(quotaResetTimer);
+      quotaResetTimer = setInterval(() => {
+        quotaResetNotificationService?.checkTimeBasedResets();
+      }, 15_000);
       log("Application services initialized");
     } catch (error) {
       startupError = error instanceof Error ? error.message : String(error);
@@ -1524,14 +1866,14 @@ if (!gotLock) {
     });
     powerMonitor.on("suspend", () => {
       hideTrayHoverPopover();
-      syncActiveCodexSession("system-suspend");
+      syncActiveSessions("system-suspend");
     });
     powerMonitor.on("lock-screen", () => {
       hideTrayHoverPopover();
-      syncActiveCodexSession("screen-lock");
+      syncActiveSessions("screen-lock");
     });
     powerMonitor.on("resume", () => {
-      syncActiveCodexSession("system-resume");
+      syncActiveSessions("system-resume");
       void refreshActiveTrayAccount("resume");
     });
   });
@@ -1548,8 +1890,16 @@ if (!gotLock) {
     if (autoRefreshTimer) clearInterval(autoRefreshTimer);
     if (trayRefreshTimer) clearInterval(trayRefreshTimer);
     if (sessionSnapshotTimer) clearInterval(sessionSnapshotTimer);
+    if (stateDbWatcher) {
+      stateDbWatcher.close();
+      stateDbWatcher = null;
+    }
+    if (agLogsWatcher) {
+      agLogsWatcher.close();
+      agLogsWatcher = null;
+    }
     deviceCodeHandoff.dispose();
-    syncActiveCodexSession("before-quit");
+    syncActiveSessions("before-quit");
     tray?.destroy();
     tray = null;
     hideTrayHoverPopover();

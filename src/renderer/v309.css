@@ -381,7 +381,7 @@
 
 .process-notice {
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) 28px;
+  grid-template-columns: minmax(0, 1fr) 28px;
   width: min(390px, calc(100vw - 32px));
   min-width: 0;
   gap: 11px;
@@ -398,11 +398,6 @@
 .process-notice.is-success { border-color: rgba(73, 211, 150, 0.25); }
 .process-notice.is-warning { border-color: rgba(255, 180, 94, 0.3); }
 .process-notice.is-error { border-color: rgba(255, 106, 133, 0.32); }
-.process-notice-icon { display: grid; grid-row: 1 / span 2; width: 38px; height: 38px; place-items: center; color: #b29eff; border: 1px solid rgba(157, 128, 255, 0.2); border-radius: 10px; background: rgba(119, 78, 226, 0.1); }
-.process-notice.is-success .process-notice-icon { color: #61dca4; border-color: rgba(73, 211, 150, 0.2); background: rgba(48, 157, 111, 0.09); }
-.process-notice.is-warning .process-notice-icon { color: #ffbd6a; border-color: rgba(255, 180, 94, 0.22); background: rgba(160, 102, 38, 0.1); }
-.process-notice.is-error .process-notice-icon { color: #ff778f; border-color: rgba(255, 106, 133, 0.22); background: rgba(160, 53, 73, 0.09); }
-.process-notice-icon svg { width: 17px; }
 .process-notice-copy { display: grid; min-width: 0; gap: 3px; }
 .process-notice-copy > span { color: #9e94aa; font-size: 8.5px; font-weight: 720; letter-spacing: 0.07em; text-transform: uppercase; }
 .process-notice-copy > strong { overflow: hidden; font-size: 12.5px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
@@ -410,7 +405,7 @@
 .process-notice-close { display: grid; width: 28px; height: 28px; place-items: center; color: #8f8997; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 8px; background: rgba(255, 255, 255, 0.025); cursor: pointer; }
 .process-notice-close:hover { color: #f1edf5; background: rgba(255, 255, 255, 0.06); }
 .process-notice-close svg { width: 14px; }
-.process-notice-progress { display: grid; grid-column: 2 / -1; gap: 6px; }
+.process-notice-progress { display: grid; grid-column: 1 / -1; gap: 6px; }
 .process-notice-progress > span { display: flex; justify-content: space-between; gap: 10px; }
 .process-notice-progress small { color: #a69eaf; font-size: 8.5px; }
 .process-notice-progress b { color: #d8d1e5; font-size: 8.5px; font-variant-numeric: tabular-nums; }

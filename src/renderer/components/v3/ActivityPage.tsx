@@ -76,7 +76,7 @@ const compactStages = [
 ];
 
 function formatTime(value: number | null, isEnglish: boolean): string {
-  if (!value) return "—";
+  if (!value) return "-";
   return new Intl.DateTimeFormat(isEnglish ? "en-US" : "ru-RU", {
     day: "2-digit",
     month: "short",
@@ -207,8 +207,8 @@ export function ActivityPage({
         </div>
 
         <div className="activity-kpis">
-          <div><strong>{successRate === null ? "—" : `${successRate}%`}</strong><span>{isEnglish ? "successful operations" : "успешных операций"}</span></div>
-          <div><strong>{averageDuration === null ? "—" : `${averageDuration}${isEnglish ? "s" : " с"}`}</strong><span>{isEnglish ? "average duration" : "среднее время"}</span></div>
+          <div><strong>{successRate === null ? "-" : `${successRate}%`}</strong><span>{isEnglish ? "successful operations" : "успешных операций"}</span></div>
+          <div><strong>{averageDuration === null ? "-" : `${averageDuration}${isEnglish ? "s" : " с"}`}</strong><span>{isEnglish ? "average duration" : "среднее время"}</span></div>
           <div className={recovered ? "is-warning" : ""}><strong>{recovered}</strong><span>{isEnglish ? "safe rollbacks" : pluralRu(recovered, "безопасный откат", "безопасных отката", "безопасных откатов")}</span></div>
           <div className={problems ? "is-danger" : ""}><strong>{problems}</strong><span>{isEnglish ? "need attention" : problems === 1 ? "требует внимания" : "требуют внимания"}</span></div>
         </div>

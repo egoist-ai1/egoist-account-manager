@@ -42,6 +42,7 @@ export interface WindowsDesktopLifecycleAdapter {
   snapshot(): Promise<WindowsDesktopSnapshot>;
   requestGracefulClose(process: WindowsProcessSnapshot): Promise<"accepted" | "refused" | "vanished" | "mismatch">;
   terminateExact(process: WindowsProcessSnapshot): Promise<"terminated" | "vanished" | "mismatch" | "refused">;
+  terminateExactBatch?(processes: WindowsProcessSnapshot[]): Promise<void>;
   launch(identity: OpenAiDesktopIdentity): Promise<void>;
   sleep(ms: number): Promise<void>;
 }
@@ -258,8 +259,24 @@ function parseSnapshot(value: unknown): WindowsDesktopSnapshot {
   };
 }
 
+function extractPowerShellError(stderr: string): string {
+  if (!stderr.includes("#< CLIXML")) return stderr.trim();
+  const errorMatches = [...stderr.matchAll(/<S S="Error">(.*?)<\/S>/gs)];
+  if (errorMatches.length > 0) {
+    return errorMatches
+      .map((m) => m[1]
+        .replace(/_x000D__x000A_/g, "\n")
+        .replace(/_x([0-9a-fA-F]{4})_/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+      )
+      .join("")
+      .trim();
+  }
+  return stderr.replace(/#< CLIXML[\s\S]*$/, "").trim();
+}
+
 function encodePowerShell(script: string): string {
-  return Buffer.from(script, "utf16le").toString("base64");
+  const sanitizedScript = `$ProgressPreference = 'SilentlyContinue'; $WarningPreference = 'SilentlyContinue'; $InformationPreference = 'SilentlyContinue';\n${script}`;
+  return Buffer.from(sanitizedScript, "utf16le").toString("base64");
 }
 
 async function runPowerShell(script: string, timeoutMs = 15_000): Promise<string> {
@@ -305,7 +322,10 @@ async function runPowerShell(script: string, timeoutMs = 15_000): Promise<string
     child.once("error", (error) => finish(error));
     child.once("exit", (code) => {
       if (code === 0) finish();
-      else finish(new Error(stderr.trim() || `PowerShell lifecycle command exited with code ${code}`));
+      else {
+        const cleaned = extractPowerShellError(stderr);
+        finish(new Error(cleaned || `PowerShell lifecycle command exited with code ${code}`));
+      }
     });
   });
 }
@@ -327,10 +347,15 @@ if (-not $target) {
   [PSCustomObject]@{ status = 'vanished' } | ConvertTo-Json -Compress
   exit 0
 }
-$actualCreationDate = $target.CreationDate.ToUniversalTime().ToString('o')
+$actualCreationDate = if ($target.CreationDate) {
+  try { $target.CreationDate.ToUniversalTime().ToString('o') } catch { '' }
+} else { '' }
 $actualPath = [string]$target.ExecutablePath
 $actualName = [string]$target.Name
-if ($actualCreationDate -ine $expectedCreationDate -or $actualPath -ine $expectedExecutablePath -or $actualName -ine $expectedProcessName) {
+$nameMatches = $actualName -ieq $expectedProcessName
+$pathMatches = [string]::IsNullOrEmpty($expectedExecutablePath) -or ($actualPath -ieq $expectedExecutablePath) -or ($actualPath.EndsWith($expectedProcessName, [System.StringComparison]::OrdinalIgnoreCase))
+$dateMatches = [string]::IsNullOrEmpty($expectedCreationDate) -or [string]::IsNullOrEmpty($actualCreationDate) -or ($actualCreationDate -ieq $expectedCreationDate)
+if (-not ($nameMatches -and ($pathMatches -or $dateMatches))) {
   [PSCustomObject]@{ status = 'mismatch' } | ConvertTo-Json -Compress
   exit 0
 }
@@ -340,11 +365,17 @@ if ($actualCreationDate -ine $expectedCreationDate -or $actualPath -ine $expecte
 export function createWindowsDesktopLifecycleAdapter(
   platform: NodeJS.Platform = process.platform
 ): WindowsDesktopLifecycleAdapter {
+  let cachedPackages: WindowsDesktopPackageSnapshot[] | null = null;
+  let cachedStartApps: WindowsStartAppSnapshot[] | null = null;
+  let cacheExpiresAt = 0;
+
   return {
     platform,
     async snapshot() {
       if (platform !== "win32") return { packages: [], startApps: [], processes: [] };
-      const output = await runPowerShell(`
+      const now = Date.now();
+      const needsFullDiscovery = !cachedPackages || !cachedStartApps || now > cacheExpiresAt;
+      const script = needsFullDiscovery ? `
 $ErrorActionPreference = 'Stop'
 $packages = @(Get-AppxPackage -ErrorAction SilentlyContinue |
   Where-Object { $_.Name -in @('OpenAI.Codex', 'OpenAI.ChatGPT') } |
@@ -380,10 +411,14 @@ $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         $mainWindowHandle = [int64](Get-Process -Id $_.ProcessId -ErrorAction Stop).MainWindowHandle
       } catch {}
     }
+    $cDate = ''
+    if ($_.CreationDate) {
+      try { $cDate = $_.CreationDate.ToUniversalTime().ToString('o') } catch {}
+    }
     [PSCustomObject]@{
       pid = [int]$_.ProcessId
       parentPid = [int]$_.ParentProcessId
-      creationDate = $_.CreationDate.ToUniversalTime().ToString('o')
+      creationDate = $cDate
       executablePath = [string]$_.ExecutablePath
       processName = [string]$_.Name
       commandLine = [string]$_.CommandLine
@@ -392,15 +427,59 @@ $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
   })
 [PSCustomObject]@{ packages = $packages; startApps = $startApps; processes = $processes } |
   ConvertTo-Json -Compress -Depth 5
-`);
-      return parseSnapshot(JSON.parse(output || "{}"));
+` : `
+$ErrorActionPreference = 'Stop'
+$processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+  ForEach-Object {
+    $mainWindowHandle = 0
+    if ($_.Name -ieq 'ChatGPT.exe' -or $_.Name -ieq 'Codex.exe') {
+      try {
+        $mainWindowHandle = [int64](Get-Process -Id $_.ProcessId -ErrorAction Stop).MainWindowHandle
+      } catch {}
+    }
+    $cDate = ''
+    if ($_.CreationDate) {
+      try { $cDate = $_.CreationDate.ToUniversalTime().ToString('o') } catch {}
+    }
+    [PSCustomObject]@{
+      pid = [int]$_.ProcessId
+      parentPid = [int]$_.ParentProcessId
+      creationDate = $cDate
+      executablePath = [string]$_.ExecutablePath
+      processName = [string]$_.Name
+      commandLine = [string]$_.CommandLine
+      mainWindowHandle = $mainWindowHandle
+    }
+  })
+[PSCustomObject]@{ packages = @(); startApps = @(); processes = $processes } |
+  ConvertTo-Json -Compress -Depth 5
+`;
+      const output = await runPowerShell(script);
+      const parsed = parseSnapshot(JSON.parse(output || "{}"));
+      if (needsFullDiscovery) {
+        cachedPackages = parsed.packages;
+        cachedStartApps = parsed.startApps;
+        cacheExpiresAt = Date.now() + 60_000;
+        return parsed;
+      }
+      return {
+        packages: cachedPackages ?? [],
+        startApps: cachedStartApps ?? [],
+        processes: parsed.processes
+      };
     },
     async requestGracefulClose(process) {
       if (platform !== "win32") return "vanished";
       const output = await runPowerShell(`
 $ErrorActionPreference = 'Stop'
 ${exactProcessGuard(process)}
-$accepted = (Get-Process -Id ${process.pid} -ErrorAction Stop).CloseMainWindow()
+$accepted = $false
+try {
+  $proc = Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue
+  if ($proc) {
+    $accepted = [bool]$proc.CloseMainWindow()
+  }
+} catch {}
 [PSCustomObject]@{ status = $(if ($accepted) { 'accepted' } else { 'refused' }) } | ConvertTo-Json -Compress
 `);
       const status = (JSON.parse(output) as { status?: string }).status;
@@ -413,13 +492,48 @@ $accepted = (Get-Process -Id ${process.pid} -ErrorAction Stop).CloseMainWindow()
       const output = await runPowerShell(`
 $ErrorActionPreference = 'Stop'
 ${exactProcessGuard(process)}
-Stop-Process -Id ${process.pid} -Force -ErrorAction Stop
-[PSCustomObject]@{ status = 'terminated' } | ConvertTo-Json -Compress
+try {
+  Stop-Process -Id ${process.pid} -Force -ErrorAction SilentlyContinue
+  [PSCustomObject]@{ status = 'terminated' } | ConvertTo-Json -Compress
+} catch {
+  [PSCustomObject]@{ status = 'vanished' } | ConvertTo-Json -Compress
+}
 `);
       const status = (JSON.parse(output) as { status?: string }).status;
       return status === "terminated" || status === "vanished" || status === "mismatch"
         ? status
         : "refused";
+    },
+    async terminateExactBatch(processes) {
+      if (platform !== "win32" || processes.length === 0) return;
+      const targetsJson = JSON.stringify(processes.map((p) => ({
+        pid: p.pid,
+        creationDate: p.creationDate,
+        executablePath: p.executablePath ?? "",
+        processName: p.processName
+      })));
+      const script = `
+$ErrorActionPreference = 'SilentlyContinue'
+$targets = ConvertFrom-Json ${decodeBase64PowerShell(targetsJson)}
+foreach ($t in $targets) {
+  $target = Get-CimInstance Win32_Process -Filter "ProcessId = $($t.pid)" -ErrorAction SilentlyContinue
+  if ($target) {
+    $actualCreationDate = ''
+    if ($target.CreationDate) {
+      try { $actualCreationDate = $target.CreationDate.ToUniversalTime().ToString('o') } catch {}
+    }
+    $actualPath = [string]$target.ExecutablePath
+    $actualName = [string]$target.Name
+    $nameMatches = $actualName -ieq $t.processName
+    $pathMatches = [string]::IsNullOrEmpty($t.executablePath) -or ($actualPath -ieq $t.executablePath) -or ($actualPath.EndsWith($t.processName, [System.StringComparison]::OrdinalIgnoreCase))
+    $dateMatches = [string]::IsNullOrEmpty($t.creationDate) -or [string]::IsNullOrEmpty($actualCreationDate) -or ($actualCreationDate -ieq $t.creationDate)
+    if ($nameMatches -and ($pathMatches -or $dateMatches)) {
+      Stop-Process -Id $t.pid -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+`;
+      await runPowerShell(script);
     },
     async launch(identity) {
       if (platform !== "win32") throw new Error("Windows desktop launch is unavailable on this platform");
@@ -448,9 +562,9 @@ export class WindowsDesktopLifecycleService {
     this.options = {
       preferredPackageName: options.preferredPackageName ?? "OpenAI.Codex",
       controllerPid: options.controllerPid ?? process.pid,
-      gracefulTimeoutMs: options.gracefulTimeoutMs ?? 2_500,
+      gracefulTimeoutMs: options.gracefulTimeoutMs ?? 3_500,
       forceTimeoutMs: options.forceTimeoutMs ?? 3_000,
-      pollIntervalMs: options.pollIntervalMs ?? 400,
+      pollIntervalMs: options.pollIntervalMs ?? 150,
       launchReadinessTimeoutMs: options.launchReadinessTimeoutMs ?? 15_000,
       readinessStableSamples: Math.max(1, options.readinessStableSamples ?? 2)
     };
@@ -577,7 +691,10 @@ export class WindowsDesktopLifecycleService {
       resolved.roots.map((root) => this.adapter.requestGracefulClose(root))
     );
     const gracefulCloseAccepted = closeResults.some((result) => result === "accepted");
-    let alive = await this.waitForExit(captured, this.options.gracefulTimeoutMs);
+    const gracefulWaitMs = gracefulCloseAccepted || policy === "graceful-only" || policy === "exact-tree-fallback"
+      ? this.options.gracefulTimeoutMs
+      : Math.min(this.options.gracefulTimeoutMs, 1000);
+    let alive = await this.waitForExit(captured, gracefulWaitMs);
     if (alive.length === 0) {
       return {
         status: "quiesced",
@@ -603,8 +720,12 @@ export class WindowsDesktopLifecycleService {
 
     const current = await this.adapter.snapshot();
     alive = aliveCapturedProcesses(alive, current.processes);
-    for (const process of [...alive].sort((left, right) => right.pid - left.pid)) {
-      await this.adapter.terminateExact(process);
+    if (this.adapter.terminateExactBatch) {
+      await this.adapter.terminateExactBatch([...alive].sort((left, right) => right.pid - left.pid));
+    } else {
+      for (const process of [...alive].sort((left, right) => right.pid - left.pid)) {
+        await this.adapter.terminateExact(process);
+      }
     }
     alive = await this.waitForExit(captured, this.options.forceTimeoutMs);
     return {

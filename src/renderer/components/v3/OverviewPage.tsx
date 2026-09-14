@@ -1,15 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
-  ArrowRight,
   CheckCircle2,
   Clock3,
+  ExternalLink,
   KeyRound,
   Layers3,
   RefreshCcw,
   ShieldCheck,
   Sparkles,
-  TriangleAlert,
   Zap
 } from "lucide-react";
 import type {
@@ -24,28 +23,33 @@ import {
   type ProviderLimitWindowType
 } from "../../../shared/providerAdapter";
 import { buildQuotaFreshness, hasCurrentQuotaRefreshFailure } from "../../../shared/quotaFreshness";
-import { rankSwitchCandidates, type RankedSwitchCandidate } from "../../../shared/smartSelection";
+import { rankSwitchCandidates } from "../../../shared/smartSelection";
+import {
+  formatRemainingCountdown,
+  formatResetTimeShort,
+  selectAccountListQuota
+} from "../../../shared/accountListPresentation";
+import antigravityLogoUrl from "../../assets/antigravity-app-official.png";
+import codexLogoUrl from "../../assets/codex-official.png";
 
 export function formatLiveCountdown(secondsRemaining: number | null, isEnglish: boolean): string | null {
   if (secondsRemaining === null || secondsRemaining <= 0) return null;
   const s = Math.floor(secondsRemaining);
   if (s < 60) {
-    return isEnglish ? `${s}s` : `${s} сек`;
+    return isEnglish ? "< 1m" : "< 1м";
   }
   if (s < 3600) {
     const m = Math.floor(s / 60);
-    const remS = s % 60;
-    return isEnglish ? `${m}m ${remS}s` : `${m} мин ${remS} сек`;
+    return isEnglish ? `${m}m` : `${m}м`;
   }
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
-  const remS = s % 60;
   if (s < 86400) {
-    return isEnglish ? `${h}h ${m}m ${remS}s` : `${h} ч ${m} мин ${remS} сек`;
+    return isEnglish ? (m > 0 ? `${h}h ${m}m` : `${h}h`) : (m > 0 ? `${h}ч ${m}м` : `${h}ч`);
   }
   const d = Math.floor(s / 86400);
   const remH = Math.floor((s % 86400) / 3600);
-  return isEnglish ? `${d}d ${remH}h` : `${d} д ${remH} ч`;
+  return isEnglish ? (remH > 0 ? `${d}d ${remH}h` : `${d}d`) : (remH > 0 ? `${d}д ${remH}ч` : `${d}д`);
 }
 
 function remaining(usedPercent: number | null): number | null {
@@ -60,7 +64,7 @@ function quotaTone(value: number | null): string {
 }
 
 function formatRemaining(value: number | null): string {
-  return value === null ? "—" : `${Math.round(value)}%`;
+  return value === null ? "-" : `${Math.round(value)}%`;
 }
 
 function pluralRu(value: number, one: string, few: string, many: string): string {
@@ -123,14 +127,14 @@ export function selectNearestQuotaReset(
   platform: AccountPlatform
 ): NearestQuotaResetSummary | null {
   const protectedAccounts = accounts.filter((account) =>
-    account.platform === platform
-    && account.credentialState === "ready"
-    && !account.archived
+    account.platform === platform &&
+    account.credentialState === "ready" &&
+    !account.archived
   );
   const candidates = protectedAccounts.flatMap((account) => {
     const freshnessState = buildQuotaFreshness(account, { now, staleAfterSeconds: 15 * 60 }).state;
-    const freshness: NearestQuotaResetSummary["freshness"] = freshnessState === "fresh"
-      && !hasCurrentQuotaRefreshFailure(account)
+    const freshness: NearestQuotaResetSummary["freshness"] = freshnessState === "fresh" &&
+      !hasCurrentQuotaRefreshFailure(account)
       ? "fresh"
       : "saved";
     return buildProviderQuotaState(account).windows.flatMap((window) => {
@@ -149,10 +153,10 @@ export function selectNearestQuotaReset(
   if (candidates.length === 0) return null;
 
   const selected = candidates.slice().sort((left, right) =>
-    left.resetAt - right.resetAt
-    || Number(right.freshness === "fresh") - Number(left.freshness === "fresh")
-    || right.checkedAt - left.checkedAt
-    || left.accountLabel.localeCompare(right.accountLabel)
+    left.resetAt - right.resetAt ||
+    Number(right.freshness === "fresh") - Number(left.freshness === "fresh") ||
+    right.checkedAt - left.checkedAt ||
+    left.accountLabel.localeCompare(right.accountLabel)
   )[0];
   return {
     accountId: selected.accountId,
@@ -164,17 +168,6 @@ export function selectNearestQuotaReset(
     protectedProfiles: protectedAccounts.length,
     profilesWithReset: new Set(candidates.map((candidate) => candidate.accountId)).size
   };
-}
-
-function quotaWindowLabel(windowType: ProviderLimitWindowType, isEnglish: boolean): string {
-  const labels: Record<ProviderLimitWindowType, [string, string]> = {
-    "5h": ["5-hour window", "5-часовой лимит"],
-    daily: ["Daily window", "Дневной лимит"],
-    weekly: ["Weekly window", "Недельный лимит"],
-    rolling: ["Rolling window", "Плавающее окно"],
-    unknown: ["Account limit", "Лимит аккаунта"]
-  };
-  return labels[windowType][isEnglish ? 0 : 1];
 }
 
 export function formatCredentialStore(
@@ -196,24 +189,39 @@ export function formatCredentialStore(
   return labels[diagnostics.configuredMode][isEnglish ? 0 : 1];
 }
 
-function formatLastRefresh(lastRefreshAt: number | null, now: number, isEnglish: boolean): string {
-  if (!lastRefreshAt) return isEnglish ? "No fresh quota snapshot" : "Нет свежего снимка лимитов";
-  const minutes = Math.max(0, Math.floor((now - lastRefreshAt) / 60));
-  if (minutes < 1) return isEnglish ? "Updated just now" : "Обновлено только что";
-  if (minutes < 60) return isEnglish ? `Updated ${minutes} min ago` : `Обновлено ${minutes} мин назад`;
-  const hours = Math.floor(minutes / 60);
-  return isEnglish ? `Updated ${hours} h ago` : `Обновлено ${hours} ч назад`;
+interface PlanMeta {
+  label: string;
+  tone: string;
 }
 
-function formatPlan(plan: string | null): string {
-  if (!plan) return "ChatGPT";
-  if (plan === "google-ai-pro" || plan === "g1-pro-tier") return "Google AI Pro";
-  if (plan === "google-ai-ultra") return "Google AI Ultra";
-  if (plan === "free") return "Free";
-  if (plan === "pro-x20") return "Pro (20x)";
-  if (plan === "pro-x10") return "Pro (10x)";
-  if (plan === "pro") return "Pro";
-  return plan.charAt(0).toUpperCase() + plan.slice(1);
+function getPlanMeta(plan: string | null | undefined, platform: "antigravity" | "codex"): PlanMeta {
+  const raw = String(plan ?? "").trim();
+  const key = raw.toLowerCase().replace(/[\s_-]+/g, "");
+
+  if (platform === "antigravity" || key.startsWith("googleai") || key.startsWith("g1") || key.includes("antigravity")) {
+    if (key === "googleaiultrax20" || key.includes("ultrax20") || (key.includes("ultra") && key.includes("20"))) {
+      return { label: "Ultra x20", tone: "ag-ultrax20" };
+    }
+    if (key === "googleaiultra" || key.includes("ultra")) {
+      return { label: "AI Ultra", tone: "ag-ultra" };
+    }
+    if (key === "googleaipro" || key === "g1protier" || key.includes("pro")) {
+      return { label: "AI Pro", tone: "ag-pro" };
+    }
+    return { label: "Standard", tone: "ag-standard" };
+  }
+
+  if (key === "free") return { label: "Free", tone: "free" };
+  if (key === "go") return { label: "Go", tone: "go" };
+  if (key === "plus") return { label: "Plus", tone: "plus" };
+  if (key === "team" || key === "business") return { label: key === "business" ? "Business" : "Team", tone: "team" };
+  if (key === "enterprise" || key === "edu") return { label: "Enterprise", tone: "enterprise" };
+  if (key.includes("20") || key === "prox20") return { label: "Pro X20", tone: "pro20" };
+  if (key.includes("10") || key === "prox10" || key === "prolite") return { label: key === "prolite" ? "Pro Lite" : "Pro X10", tone: "pro10" };
+  if (key.includes("5") || key === "prox5") return { label: "Pro X5", tone: "pro5" };
+  if (key === "pro") return { label: "Pro", tone: "pro" };
+
+  return { label: raw || "Standard", tone: "unknown" };
 }
 
 function quotaStateLabel(value: number | null, isEnglish: boolean): string {
@@ -223,133 +231,7 @@ function quotaStateLabel(value: number | null, isEnglish: boolean): string {
   return isEnglish ? "Available" : "Доступно";
 }
 
-function candidateStateLabel(candidate: RankedSwitchCandidate, isEnglish: boolean): string {
-  if (candidate.state === "ready") return isEnglish ? "Ready to switch" : "Готов к переключению";
-  if (candidate.state === "needs_reauth") return isEnglish ? "Sign-in required" : "Нужен вход";
-  if (candidate.reason === "refresh_failed") return isEnglish ? "Refresh failed" : "Сбой обновления";
-  if (candidate.reason === "stale") return isEnglish ? "Snapshot expired" : "Снимок устарел";
-  if (candidate.reason === "missing") return isEnglish ? "Refresh limits" : "Обновите лимиты";
-  return isEnglish ? "Unavailable" : "Недоступен";
-}
-
-function sessionCopy(account: ManagedAccount, isEnglish: boolean): { title: string; body: string; tone: string } {
-  const isAntigravity = account.platform === "antigravity";
-  const platformName = isAntigravity ? "Antigravity" : "Codex";
-  if (account.credentialState === "ready") {
-    return {
-      title: isEnglish ? "Encrypted profile is saved" : "Зашифрованный профиль сохранён",
-      body: isEnglish
-        ? (isAntigravity
-          ? "The current Antigravity session is protected in the DPAPI vault and synced with Windows Credential Manager."
-          : "The current session is copied to protected local storage every 30 seconds.")
-        : (isAntigravity
-          ? "Актуальная сессия Antigravity защищена в хранилище DPAPI и синхронизирована с Windows Credential Manager."
-          : "Актуальная сессия сохраняется в локальное защищённое хранилище каждые 30 секунд."),
-      tone: "ready"
-    };
-  }
-  if (account.credentialState === "needs_reauth") {
-    return {
-      title: isEnglish ? "Saved profile retained" : "Сохранённый профиль не потерян",
-      body: isEnglish
-        ? `${platformName} requires sign-in again; the encrypted account record remains available.`
-        : `${platformName} запросил повторный вход, но зашифрованная запись аккаунта осталась в менеджере.`,
-      tone: "warning"
-    };
-  }
-  return {
-    title: isEnglish ? "Profile needs review" : "Профиль нужно проверить",
-    body: isEnglish ? "The stored authorization was not overwritten by an ambiguous external change." : "Неоднозначное внешнее изменение не перезаписало сохранённую авторизацию.",
-    tone: "warning"
-  };
-}
-
-function transactionLabel(transaction: SwitchTransaction | null, isEnglish: boolean): string {
-  if (!transaction) return isEnglish ? "No switch activity yet" : "Переключений пока не было";
-  const labels: Record<SwitchTransaction["phase"], [string, string]> = {
-    preparing: ["Preparing", "Подготовка"],
-    validating_previous: ["Checking current profile", "Проверка текущего профиля"],
-    validating_target: ["Checking target profile", "Проверка целевого профиля"],
-    ready: ["Ready", "Готово"],
-    quiescing: ["Closing Codex", "Закрытие Codex"],
-    activating: ["Applying authorization", "Применение авторизации"],
-    launching: ["Launching Codex", "Запуск Codex"],
-    verifying: ["Verifying identity", "Проверка аккаунта"],
-    committed: ["Switch verified", "Переключение подтверждено"],
-    rolling_back: ["Restoring previous profile", "Возврат предыдущего профиля"],
-    rolled_back: ["Previous profile restored", "Предыдущий профиль восстановлен"],
-    aborted: ["Canceled safely", "Безопасно отменено"],
-    failed: ["Switch failed", "Ошибка переключения"],
-    recovery_required: ["Recovery required", "Требуется восстановление"]
-  };
-  return labels[transaction.phase][isEnglish ? 0 : 1];
-}
-
-function quotaCard(
-  id: string,
-  label: string,
-  value: number | null,
-  resetAt: number | null,
-  now: number,
-  isEnglish: boolean,
-  isUnlimited = false
-) {
-  const valueLabel = isUnlimited ? (isEnglish ? "Unlimited" : "Не ограничен") : formatRemaining(value);
-  const ariaLabel = isUnlimited
-    ? `${label}: ${isEnglish ? "unlimited" : "не ограничен"}`
-    : value === null
-      ? `${label}: ${isEnglish ? "data unavailable" : "данные недоступны"}`
-      : `${label}: ${valueLabel} ${isEnglish ? "remaining" : "доступно"}`;
-  const secondsToReset = resetAt && resetAt > now ? resetAt - now : null;
-  const liveCountdown = formatLiveCountdown(secondsToReset, isEnglish);
-  const resetCopy = isUnlimited
-    ? (isEnglish ? "Included in Pro plan" : "В рамках подписки Pro")
-    : formatQuotaReset(resetAt, now, isEnglish);
-  return (
-    <article className={`quota-card ${isUnlimited ? "ready is-unlimited" : quotaTone(value)}`} key={id}>
-      <header className="quota-card-head">
-        <strong>{label}</strong>
-        <span>{isUnlimited ? (isEnglish ? "Unlimited" : "Не ограничен") : quotaStateLabel(value, isEnglish)}</span>
-      </header>
-      <div className="quota-card-visual">
-        <div
-          className={`quota-ring ${isUnlimited ? "is-unlimited" : ""}`}
-          style={{ "--quota-value": isUnlimited ? "100%" : `${value ?? 0}%` } as React.CSSProperties}
-          role="progressbar"
-          aria-label={ariaLabel}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={isUnlimited ? 100 : (value ?? undefined)}
-        >
-          <strong>{isUnlimited ? "∞" : valueLabel}</strong>
-          <span>{isUnlimited ? (isEnglish ? "no cap" : "без лимита") : (isEnglish ? "left" : "остаток")}</span>
-        </div>
-        <div className="quota-copy">
-          <span>{isEnglish ? "Next reset" : "Следующий сброс"}</span>
-          <strong>{resetCopy}</strong>
-          {liveCountdown ? <small className="quota-live-countdown">{liveCountdown}</small> : null}
-        </div>
-      </div>
-      <div className="quota-meter" aria-hidden="true"><i style={{ width: isUnlimited ? "100%" : `${value ?? 0}%` }} /></div>
-    </article>
-  );
-}
-
-export function OverviewPage({
-  accounts,
-  diagnostics,
-  latestTransaction,
-  busy,
-  autoRefreshIntervalMs,
-  smartSwitchThresholdPercent,
-  isEnglish,
-  displayEmail,
-  onAdd,
-  onRefresh,
-  onSwitch,
-  onOpenAccounts,
-  onOpenActivity
-}: {
+export interface OverviewPageProps {
   accounts: ManagedAccount[];
   diagnostics: AppDiagnostics | null;
   latestTransaction: SwitchTransaction | null;
@@ -359,12 +241,33 @@ export function OverviewPage({
   isEnglish: boolean;
   displayEmail: (value: string) => string;
   onAdd: () => void;
+  onAddAntigravity?: () => void;
+  onAddCodex?: () => void;
   onRefresh: () => void;
   onSwitch: (accountId: string) => void;
   onOpenAccounts: () => void;
-  onOpenActivity: () => void;
-}) {
+  onOpenActivity?: () => void;
+}
+
+export function OverviewPage({
+  accounts,
+  diagnostics: _diagnostics,
+  latestTransaction: _latestTransaction,
+  busy,
+  autoRefreshIntervalMs: _autoRefreshIntervalMs,
+  smartSwitchThresholdPercent,
+  isEnglish,
+  displayEmail,
+  onAdd,
+  onAddAntigravity,
+  onAddCodex,
+  onRefresh,
+  onSwitch,
+  onOpenAccounts,
+  onOpenActivity
+}: OverviewPageProps) {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+
   useEffect(() => {
     const timer = setInterval(() => {
       setNow(Math.floor(Date.now() / 1000));
@@ -372,357 +275,676 @@ export function OverviewPage({
     return () => clearInterval(timer);
   }, []);
 
-  const active = accounts.find((account) => account.isActive) ?? null;
-  const isAntigravity = active?.platform === "antigravity";
+  // Dual Active Profiles
+  const activeAg = accounts.find((a) => a.platform === "antigravity" && a.isActive) ?? null;
+  const activeCodex = accounts.find((a) => a.platform === "codex" && a.isActive) ?? null;
 
-  let primaryRemaining: number | null = null;
-  let primaryLabel = isEnglish ? "5 hours" : "5 часов";
-  let primaryResetAt: number | null = null;
+  // Antigravity Quotas
+  const agPrimaryRemaining = remaining(activeAg?.primaryUsedPercent ?? null);
+  const agPrimaryLabel = activeAg?.primaryWindowDurationMins === 300
+    ? (isEnglish ? "5-hour limit" : "5-часовой лимит")
+    : (isEnglish ? "Model limit" : "Лимит модели");
+  const agPrimaryResetAt = activeAg?.primaryResetsAt ?? null;
 
-  let secondaryRemaining: number | null = null;
-  let secondaryLabel = isEnglish ? "Week" : "Неделя";
-  let secondaryResetAt: number | null = null;
-  let secondaryIsUnlimited = false;
+  const agSecondaryRemaining = remaining(activeAg?.secondaryUsedPercent ?? null);
+  const agSecondaryLabel = isEnglish ? "Weekly limit" : "Недельный лимит";
+  const agSecondaryResetAt = activeAg?.secondaryResetsAt ?? null;
+  const agSecondaryIsUnlimited = activeAg !== null && activeAg.secondaryUsedPercent === null && activeAg.secondaryResetsAt === null;
 
-  if (isAntigravity) {
-    primaryRemaining = remaining(active?.primaryUsedPercent ?? null);
-    primaryLabel = isEnglish ? "Active model" : "Лимит модели";
-    primaryResetAt = active?.primaryResetsAt ?? null;
+  // OpenAI Codex Quotas
+  const codexHas5h = activeCodex?.fiveHourUsedPercent !== null;
+  const codexHasWeekly = activeCodex?.weeklyUsedPercent !== null;
 
-    secondaryRemaining = remaining(active?.secondaryUsedPercent ?? null);
-    secondaryLabel = isEnglish ? "Weekly limit" : "Недельный лимит";
-    secondaryResetAt = active?.secondaryResetsAt ?? null;
-    secondaryIsUnlimited = active?.secondaryUsedPercent === null && active?.secondaryResetsAt === null;
-  } else {
-    // For Codex:
-    const has5h = active?.fiveHourUsedPercent !== null;
-    const hasWeekly = active?.weeklyUsedPercent !== null && (active?.weeklyResetsAt !== null || active?.secondaryWindowDurationMins === 10080);
+  let codex5hRemaining: number | null = null;
+  let codex5hResetAt: number | null = null;
+  let codexWeeklyRemaining: number | null = null;
+  let codexWeeklyResetAt: number | null = null;
+  let codexWeeklyIsUnlimited = false;
 
-    if (!has5h && hasWeekly) {
-      primaryRemaining = remaining(active?.weeklyUsedPercent ?? null);
-      primaryLabel = isEnglish ? "Weekly limit" : "Недельный лимит";
-      primaryResetAt = active?.weeklyResetsAt ?? null;
-
-      secondaryLabel = isEnglish ? "5-hour window" : "5-часовой лимит";
-      secondaryRemaining = null;
-      secondaryResetAt = null;
-      secondaryIsUnlimited = true;
-    } else if (has5h) {
-      primaryRemaining = remaining(active?.fiveHourUsedPercent ?? null);
-      primaryLabel = isEnglish ? "5 hours" : "5 часов";
-      primaryResetAt = active?.fiveHourResetsAt ?? null;
-
-      if (hasWeekly) {
-        secondaryRemaining = remaining(active?.weeklyUsedPercent ?? null);
-        secondaryLabel = isEnglish ? "Weekly limit" : "Недельный лимит";
-        secondaryResetAt = active?.weeklyResetsAt ?? null;
-        secondaryIsUnlimited = false;
-      } else {
-        secondaryLabel = isEnglish ? "Weekly limit" : "Недельный лимит";
-        secondaryRemaining = null;
-        secondaryResetAt = null;
-        secondaryIsUnlimited = true;
-      }
+  if (codexHas5h) {
+    codex5hRemaining = remaining(activeCodex?.fiveHourUsedPercent ?? null);
+    codex5hResetAt = activeCodex?.fiveHourResetsAt ?? null;
+    if (codexHasWeekly) {
+      codexWeeklyRemaining = remaining(activeCodex?.weeklyUsedPercent ?? null);
+      codexWeeklyResetAt = activeCodex?.weeklyResetsAt ?? null;
     } else {
-      primaryRemaining = remaining(active?.primaryUsedPercent ?? null);
-      primaryLabel = isEnglish ? "Current limit" : "Текущий лимит";
-      primaryResetAt = active?.primaryResetsAt ?? null;
-
-      secondaryLabel = isEnglish ? "Weekly limit" : "Недельный лимит";
-      secondaryRemaining = null;
-      secondaryResetAt = null;
-      secondaryIsUnlimited = true;
+      codexWeeklyIsUnlimited = true;
     }
+  } else if (codexHasWeekly) {
+    codexWeeklyRemaining = remaining(activeCodex?.weeklyUsedPercent ?? null);
+    codexWeeklyResetAt = activeCodex?.weeklyResetsAt ?? null;
+    codex5hRemaining = null;
+    codexWeeklyIsUnlimited = false;
+  } else if (activeCodex) {
+    codex5hRemaining = remaining(activeCodex.primaryUsedPercent ?? null);
+    codex5hResetAt = activeCodex.primaryResetsAt ?? null;
+    codexWeeklyIsUnlimited = true;
   }
 
-  const desktop = diagnostics?.desktopLifecycle;
-  const protocolReady = isAntigravity ? true : diagnostics?.codexCapabilities?.protocol.compatible === true;
-  const identityReady = isAntigravity ? Boolean(active?.id) : Boolean(diagnostics?.codexCapabilities?.identity.authMode);
-  const credentialStoreReady = isAntigravity ? true : diagnostics?.credentialStore?.managerCompatible === true;
-  const environmentReady = isAntigravity ? true : (desktop?.status === "ready" || desktop?.status === "running");
-  const switchReady = environmentReady && protocolReady && credentialStoreReady && (accounts.length === 0 || identityReady);
-  const transactionNeedsAttention = latestTransaction?.status === "recovery_required" || latestTransaction?.status === "failed";
-  const activeSession = active ? sessionCopy(active, isEnglish) : null;
-  const activeQuotaError = active && hasCurrentQuotaRefreshFailure(active) ? active.lastRefreshError : null;
-  const savedProfiles = accounts.filter((account) => account.credentialState === "ready").length;
-  const freshProfiles = accounts.filter((account) =>
-    !hasCurrentQuotaRefreshFailure(account)
-    && account.lastRefreshAt !== null
-    && now - account.lastRefreshAt < 15 * 60
-  ).length;
-  const attentionProfiles = accounts.filter((account) =>
-    account.credentialState !== "ready" || hasCurrentQuotaRefreshFailure(account)
-  ).length;
+  // Switch Recommendations
   const switchCandidates = rankSwitchCandidates(accounts, { now, staleAfterSeconds: 15 * 60 });
-  const nextCandidate = switchCandidates.find((candidate) => candidate.state === "ready") ?? null;
-  const visibleCandidates = switchCandidates.slice(0, 3);
-  const activeKnownRemaining = [primaryRemaining, secondaryRemaining].filter((value): value is number => value !== null);
-  const activeMinimumRemaining = activeKnownRemaining.length ? Math.min(...activeKnownRemaining) : null;
   const threshold = Math.max(5, Math.min(50, Math.round(smartSwitchThresholdPercent)));
-  const activeNearThreshold = activeMinimumRemaining !== null && activeMinimumRemaining <= threshold;
-  const autoRefreshLabel = autoRefreshIntervalMs === 0
-    ? (isEnglish ? "off" : "выключено")
-    : `${Math.round(autoRefreshIntervalMs / 60_000)} ${isEnglish ? "min" : "мин"}`;
-  const transactionDuration = latestTransaction
-    ? Math.max(0, (latestTransaction.completedAt ?? latestTransaction.updatedAt) - latestTransaction.createdAt)
+
+  const agKnown = [agPrimaryRemaining, agSecondaryRemaining].filter((v): v is number => v !== null);
+  const agMin = agKnown.length ? Math.min(...agKnown) : null;
+  const agNeedsSwitch = agMin !== null && agMin <= threshold;
+  const agCandidate = agNeedsSwitch
+    ? switchCandidates.find((c) => c.account.platform === "antigravity" && c.state === "ready" && c.account.id !== activeAg?.id) ?? null
     : null;
-  const resetPlatform = active?.platform ?? (accounts[0]?.platform ?? "codex");
-  const nearestReset = selectNearestQuotaReset(accounts, now, resetPlatform);
-  const nearestResetSeconds = nearestReset?.resetAt && nearestReset.resetAt > now ? nearestReset.resetAt - now : null;
-  const nearestLiveCountdown = formatLiveCountdown(nearestResetSeconds, isEnglish);
+
+  const codexKnown = [codex5hRemaining, codexWeeklyRemaining].filter((v): v is number => v !== null);
+  const codexMin = codexKnown.length ? Math.min(...codexKnown) : null;
+  const codexNeedsSwitch = codexMin !== null && codexMin <= threshold;
+  const codexCandidate = codexNeedsSwitch
+    ? switchCandidates.find((c) => c.account.platform === "codex" && c.state === "ready" && c.account.id !== activeCodex?.id) ?? null
+    : null;
+
+  // Fleet Standby Statistics
+  const readyStandbyCount = accounts.filter(
+    (a) => !a.isActive && !a.archived && a.credentialState === "ready" && (remaining(a.fiveHourUsedPercent ?? a.primaryUsedPercent ?? null) ?? 100) >= 50
+  ).length;
+
+  const protectedProfilesCount = accounts.filter((a) => a.credentialState === "ready" && !a.archived).length;
+
+  // Earliest Reset across Fleet
+  const futureResets = accounts
+    .filter((a) => !a.archived && a.credentialState === "ready")
+    .flatMap((a) => {
+      const q = selectAccountListQuota(a, now);
+      return q.resetAt && q.resetAt > now ? [{ account: a, resetAt: q.resetAt, windowType: q.windowType }] : [];
+    })
+    .sort((a, b) => a.resetAt - b.resetAt);
+  const earliestFleetReset = futureResets[0] ?? null;
+
+  // Process Standby Fleets per platform (scheduleAccounts compatibility for test contracts)
+  const scheduleAccounts = useMemo(() => {
+    return accounts
+      .filter((a) => !a.archived)
+      .map((account) => {
+        const quota = selectAccountListQuota(account, now);
+        const countdown = formatRemainingCountdown(quota.resetAt, now, isEnglish);
+        return {
+          account,
+          remaining: quota.remainingPercent,
+          resetAt: quota.resetAt,
+          windowType: quota.windowType,
+          countdown
+        };
+      })
+      .sort((a, b) => {
+        if (a.account.isActive && !b.account.isActive) return -1;
+        if (!a.account.isActive && b.account.isActive) return 1;
+        return (b.remaining ?? 0) - (a.remaining ?? 0);
+      });
+  }, [accounts, now, isEnglish]);
+
+  // Standby accounts for Antigravity
+  const agStandbyAccounts = useMemo(() => {
+    return scheduleAccounts.filter((item) => item.account.platform === "antigravity" && !item.account.isActive);
+  }, [scheduleAccounts]);
+
+  // Standby accounts for Codex
+  const codexStandbyAccounts = useMemo(() => {
+    return scheduleAccounts.filter((item) => item.account.platform === "codex" && !item.account.isActive);
+  }, [scheduleAccounts]);
 
   return (
-    <div className="v3-page overview-page overview-v304 overview-v306">
-      <section className="overview-command-grid">
-        <div className="overview-session-panel">
-          <div className="overview-live-line">
-            <span className="v3-kicker">{isEnglish ? "ACTIVE SESSION" : "АКТИВНАЯ СЕССИЯ"}</span>
-            <span className={`overview-live-pill ${active ? "is-live" : ""}`}><span />{active ? (isEnglish ? "live" : "в работе") : (isEnglish ? "offline" : "нет входа")}</span>
-          </div>
-          {active ? (
-            <>
-              <div className="overview-account-title">
-                <span className="account-orb" aria-hidden="true">{active.label.slice(0, 1).toUpperCase()}</span>
-                <div>
-                  <h2 title={active.label}>{active.label}</h2>
-                  <p>
-                    <span>{displayEmail(active.email)}</span>
-                    <span className="plan-chip">{formatPlan(active.planType)}</span>
-                    <span className="platform-chip">{active.platform === "antigravity" ? "Antigravity" : "Codex"}</span>
-                    {active.antigravity?.googleProjectId ? (
-                      <span className="gcp-chip" title={`GCP: ${active.antigravity.googleProjectId}`}>
-                        {active.antigravity.googleProjectId}
-                      </span>
-                    ) : null}
-                  </p>
-                </div>
-              </div>
-              <div className={`session-verification ${activeSession?.tone ?? "ready"}`}>
-                <ShieldCheck />
-                <span>
-                  <strong>{activeSession?.title}</strong>
-                  {activeSession?.body}
-                </span>
-              </div>
-            </>
-          ) : (
-            <div className="overview-empty-account">
-              <KeyRound />
-              <div>
-                <h2>{isEnglish ? "Connect your first account" : "Подключите первый аккаунт"}</h2>
-                <p>{isEnglish ? "Google OAuth, browser, device code and API keys are supported." : "Доступны Google OAuth, браузер, device code и API-ключи."}</p>
-              </div>
-            </div>
-          )}
-          <div className="overview-actions">
-            {active ? (
-              <button className="button" onClick={onOpenAccounts}>
-                {isEnglish ? "Accounts" : "Аккаунты"}<ArrowRight />
-              </button>
-            ) : (
-              <button className="button" disabled={busy !== null} onClick={onAdd}><KeyRound />{isEnglish ? "Add account" : "Добавить аккаунт"}</button>
-            )}
-            <button className="button secondary" disabled={busy !== null || accounts.length === 0} onClick={onRefresh}>
-              {busy === "refresh:all" ? <RefreshCcw className="spin" /> : <RefreshCcw />}
-              {isEnglish ? "Refresh" : "Обновить"}
-            </button>
-            <button className="button ghost-button" onClick={onOpenActivity}>{isEnglish ? "History" : "История"}</button>
-          </div>
+    <div className="v3-page overview-page overview-dual-v5">
+      {/* Top Header */}
+      <div className="overview-page-header">
+        <div>
+          <h1 className="overview-headline">
+            {isEnglish ? "Command Center" : "Панель управления"}
+          </h1>
+          <p className="overview-subheadline">
+            {isEnglish
+              ? "Dual-engine status, live quota telemetry, and fast profile switching."
+              : "Мониторинг сессий Antigravity и Codex, учёт лимитов и быстрое переключение."}
+          </p>
         </div>
-
-        <div className="overview-quota-panel" aria-label={isEnglish ? "Active account limits" : "Лимиты активного аккаунта"}>
-          <div className="overview-data-orbit" aria-hidden="true"><span /><span /><span /></div>
-          <div className="quota-stage-heading">
-            <div>
-              <span className="v3-kicker">{isEnglish ? "ACCOUNT LIMITS" : "ЛИМИТЫ АККАУНТА"}</span>
-              <strong>{isEnglish ? "Current available quota" : "Текущий доступный запас"}</strong>
-            </div>
-            <span className={activeQuotaError ? "has-refresh-error" : ""}>{activeQuotaError ? (isEnglish ? "Refresh failed · showing saved snapshot" : "Сбой обновления · показан сохранённый снимок") : formatLastRefresh(active?.lastRefreshAt ?? null, now, isEnglish)}</span>
-          </div>
-          <div className="quota-grid">
-            {quotaCard("primary-quota", primaryLabel, primaryRemaining, primaryResetAt, now, isEnglish)}
-            {quotaCard("secondary-quota", secondaryLabel, secondaryRemaining, secondaryResetAt, now, isEnglish, secondaryIsUnlimited)}
-          </div>
-          <div className="quota-refresh-line">
-            <RefreshCcw />
-            <span>{isEnglish ? "Background refresh" : "Фоновое обновление"}</span>
-            <strong>{autoRefreshLabel}</strong>
-            <i>{activeQuotaError
-              ? (isEnglish ? "last good snapshot kept" : "последний снимок сохранён")
-              : isAntigravity
-                ? "Google Code Assist API"
-                : (isEnglish ? "official app-server" : "официальный app-server")}</i>
-          </div>
-        </div>
-      </section>
-
-      <section className="overview-signal-strip" aria-label={isEnglish ? "Control plane status" : "Состояние системы"}>
-        <div><Layers3 /><span>{isEnglish ? "Profiles" : "Профили"}</span><strong>{accounts.length}</strong></div>
-        <div><ShieldCheck /><span>{isEnglish ? "Protected sign-ins" : "Вход сохранён"}</span><strong>{savedProfiles} {isEnglish ? `of ${accounts.length}` : `из ${accounts.length}`}</strong></div>
-        <div className={attentionProfiles ? "is-warning" : "is-ready"}><RefreshCcw /><span>{isEnglish ? "Fresh quotas" : "Свежие лимиты"}</span><strong>{freshProfiles} {isEnglish ? `of ${accounts.length}` : `из ${accounts.length}`}</strong></div>
-        <div className={switchReady ? "is-ready" : "is-warning"}>{switchReady ? <CheckCircle2 /> : <TriangleAlert />}<span>{isEnglish ? "Switch chain" : "Переключение"}</span><strong>{switchReady ? (isEnglish ? "Ready" : "Готово") : (isEnglish ? "Review" : "Проверить")}</strong></div>
-        <div><Clock3 /><span>{isEnglish ? "Quota refresh" : "Обновление лимитов"}</span><strong>{autoRefreshLabel}</strong></div>
-      </section>
-
-      <section className="overview-secondary-grid">
-        <article className={`overview-recommendation overview-continuation ${activeNearThreshold ? "is-urgent" : ""}`}>
-          <header className="continuation-head">
-            <span className="recommendation-icon"><Sparkles /></span>
-            <div>
-              <span className="v3-kicker">{isEnglish ? "CONTINUATION PLAN" : "ПЛАН ПРОДОЛЖЕНИЯ"}</span>
-              <h3>
-                {nextCandidate
-                  ? (activeNearThreshold
-                    ? (isEnglish ? "A backup profile is ready now" : "Резерв готов к переключению")
-                    : (isEnglish ? "The next profile is ready in advance" : "Следующий профиль готов заранее"))
-                  : (switchCandidates.length
-                    ? (isEnglish ? "Backup profiles need attention" : "Резервные профили требуют внимания")
-                    : (isEnglish ? "Add a backup profile" : "Добавьте резервный профиль"))}
-              </h3>
-            </div>
-            <span className={`continuation-state ${nextCandidate ? "is-ready" : "is-warning"}`}>
-              {nextCandidate ? <CheckCircle2 /> : <TriangleAlert />}
-              {nextCandidate ? (isEnglish ? "ready" : "готов") : (isEnglish ? "review" : "проверить")}
-            </span>
-          </header>
-
-          <div className="handoff-lane" aria-label={isEnglish ? "Account continuation route" : "Маршрут продолжения"}>
-            <div>
-              <span>{isEnglish ? "Now" : "Сейчас"}</span>
-              <strong title={active?.label}>{active?.label ?? (isEnglish ? "No active profile" : "Нет активного профиля")}</strong>
-              <small>{activeMinimumRemaining === null ? (isEnglish ? "quota unknown" : "лимиты неизвестны") : `${activeMinimumRemaining}% ${isEnglish ? "minimum left" : "минимальный остаток"}`}</small>
-            </div>
-            <span className="handoff-arrow"><ArrowRight /></span>
-            <div className={nextCandidate ? "is-ready" : "is-warning"}>
-              <span>{isEnglish ? "Next" : "Следующий"}</span>
-              <strong title={nextCandidate?.account.label}>{nextCandidate?.account.label ?? (isEnglish ? "Not selected" : "Не выбран")}</strong>
-              <small>{nextCandidate?.remainingPercent !== null && nextCandidate?.remainingPercent !== undefined
-                ? `${nextCandidate.remainingPercent}% ${isEnglish ? "minimum reserve" : "минимальный запас"}`
-                : (isEnglish ? "fresh quota data required" : "нужны свежие лимиты")}</small>
-            </div>
-            <span className="handoff-rule">≤ {threshold}%<small>{isEnglish ? "suggestion threshold" : "порог рекомендации"}</small></span>
-          </div>
-
-          {visibleCandidates.length > 0 ? (
-            <div className="continuation-queue" aria-label={isEnglish ? "Backup profile readiness" : "Готовность резервных профилей"}>
-              {visibleCandidates.map((candidate, index) => (
-                <div
-                  className={`continuation-row is-${candidate.state}`}
-                  key={candidate.account.id}
-                  onClick={() => {
-                    if (busy === null) onSwitch(candidate.account.id);
-                  }}
-                  style={{ cursor: "pointer" }}
-                  title={isEnglish ? "Click to switch to this profile" : "Нажмите для переключения на этот профиль"}
-                >
-                  <span className="queue-index">{String(index + 1).padStart(2, "0")}</span>
-                  <span className="queue-account"><b title={candidate.account.label}>{candidate.account.label}</b><small>{formatPlan(candidate.account.planType)}</small></span>
-                  <span className="queue-state">{candidateStateLabel(candidate, isEnglish)}</span>
-                  <strong>{candidate.remainingPercent === null ? "—" : `${candidate.remainingPercent}%`}</strong>
-                  <button
-                    className="button secondary compact-button queue-fast-switch"
-                    disabled={busy !== null}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSwitch(candidate.account.id);
-                    }}
-                    title={isEnglish ? "Switch" : "Переключить"}
-                  >
-                    <Zap />
-                    {isEnglish ? "Use" : "Использовать"}
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="continuation-empty">{isEnglish ? "A second protected sign-in will appear here." : "Здесь появится второй защищённый вход."}</p>
-          )}
-
-          <div className="continuation-guardrails" aria-label={isEnglish ? "Switch safety policy" : "Правила безопасного переключения"}>
-            <div><Zap /><span>{isEnglish ? "Mode" : "Режим"}</span><strong>{isEnglish ? "Suggestion only" : "Только рекомендация"}</strong></div>
-            <div><Clock3 /><span>{isEnglish ? "Safe point" : "Безопасная точка"}</span><strong>{isEnglish ? "After the current step" : "После текущего шага"}</strong></div>
-            <div><ShieldCheck /><span>{isEnglish ? "Protection" : "Защита"}</span><strong>{isEnglish ? "Verify + rollback" : "Проверка + откат"}</strong></div>
-          </div>
-
-          <footer className="continuation-foot">
-            <span>{isEnglish ? "The manager only suggests a switch; it never changes the account without confirmation." : "Менеджер только предлагает смену и не переключает аккаунт без подтверждения."}</span>
-            {nextCandidate ? (
-              <button className="button recommendation-action" disabled={busy !== null} onClick={() => onSwitch(nextCandidate.account.id)}>
-                <Zap />{isEnglish ? "Switch now" : "Переключить"}
-              </button>
-            ) : switchCandidates.length ? (
-              <button className="button secondary recommendation-action" disabled={busy !== null} onClick={onRefresh}>
-                <RefreshCcw />{isEnglish ? "Refresh" : "Обновить"}
-              </button>
-            ) : (
-              <button className="button secondary recommendation-action" onClick={onOpenAccounts}>
-                {isEnglish ? "Accounts" : "Аккаунты"}<ArrowRight />
-              </button>
-            )}
-          </footer>
-        </article>
-
-        <article className={`overview-operation ${transactionNeedsAttention ? "needs-attention" : ""}`}>
-          <div className="overview-operation-head">
-            <span className={transactionNeedsAttention ? "is-warning" : "is-ready"}>{transactionNeedsAttention ? <TriangleAlert /> : <Activity />}</span>
-            <div><span className="v3-kicker">{isEnglish ? "LAST OPERATION" : "ПОСЛЕДНЯЯ ОПЕРАЦИЯ"}</span><h3>{transactionLabel(latestTransaction, isEnglish)}</h3></div>
-          </div>
-          <div className="operation-meta">
-            <span><Clock3 />{transactionDuration === null ? "—" : `${transactionDuration} ${isEnglish ? "sec" : "с"}`}</span>
-            <span><ShieldCheck />{isEnglish ? `${savedProfiles} protected` : `${savedProfiles} защищено`}</span>
-          </div>
-          <p>{latestTransaction?.errorMessage ?? (isEnglish ? "Every switch is verified and can be rolled back." : "Каждое переключение проверяется и допускает безопасный откат.")}</p>
-          <div className="overview-operation-route" aria-label={isEnglish ? "Verified switch route" : "Проверенный маршрут переключения"}>
-            <span><i>1</i><b>{isEnglish ? "Snapshot" : "Снимок"}</b><small>{isEnglish ? "DPAPI vault" : "DPAPI vault"}</small></span>
-            <span><i>2</i><b>{isEnglish ? "Restart" : "Перезапуск"}</b><small>{isAntigravity ? (isEnglish ? "Antigravity Process" : "Процесс Antigravity") : (isEnglish ? "Exact Codex tree" : "Точное дерево Codex")}</small></span>
-            <span><i>3</i><b>{isEnglish ? "Identity" : "Личность"}</b><small>{isEnglish ? "Account verified" : "Аккаунт подтверждён"}</small></span>
-          </div>
-          <div className="overview-operation-signals" aria-label={isEnglish ? "Operational readiness" : "Готовность системы"}>
-            <div className={savedProfiles === accounts.length ? "is-ready" : "is-warning"}><ShieldCheck /><span>{isEnglish ? "Saved sign-ins" : "Сохранённые входы"}</span><strong>{savedProfiles}/{accounts.length}</strong></div>
-            <div className={freshProfiles === accounts.length ? "is-ready" : "is-warning"}><RefreshCcw /><span>{isEnglish ? "Fresh profiles" : "Свежие профили"}</span><strong>{freshProfiles}/{accounts.length}</strong></div>
-            <div className={protocolReady ? "is-ready" : "is-warning"}><CheckCircle2 /><span>{isAntigravity ? "Antigravity" : "App-server"}</span><strong>{protocolReady ? (isEnglish ? "Ready" : "Готов") : (isEnglish ? "Review" : "Проверить")}</strong></div>
-            <div
-              className={`overview-reset-signal ${nearestReset?.freshness === "fresh" ? "is-fresh" : "is-saved"}`}
-              aria-label={`${isEnglish ? "Nearest reset across profiles" : "Ближайший сброс по профилям"}: ${formatQuotaResetMoment(nearestReset?.resetAt ?? null, isEnglish)}`}
+        <div className="overview-header-actions">
+          <button
+            className="button clean-action-button"
+            disabled={busy !== null || accounts.length === 0}
+            onClick={onRefresh}
+            title={isEnglish ? "Refresh all rate limits" : "Обновить лимиты всех профилей"}
+          >
+            <RefreshCcw className={busy === "refresh:all" ? "spin" : ""} size={14} />
+            <span>{isEnglish ? "Refresh limits" : "Обновить лимиты"}</span>
+          </button>
+          <button className="button secondary clean-action-button" onClick={onOpenAccounts}>
+            <Layers3 size={14} />
+            <span>{isEnglish ? "All accounts" : "Все аккаунты"}</span>
+          </button>
+          {onOpenActivity && (
+            <button
+              className="button secondary clean-action-button"
+              onClick={onOpenActivity}
+              title={isEnglish ? "Switch audit journal" : "Журнал аудита переключений"}
             >
-              <span className="reset-signal-icon"><Clock3 /></span>
-              <span className="reset-signal-copy">
-                <span className="reset-signal-label">{isEnglish ? "Nearest reset" : "Ближайший сброс"}</span>
-                <strong>{formatQuotaResetMoment(nearestReset?.resetAt ?? null, isEnglish)}</strong>
-                <small>{nearestReset
-                  ? `${quotaWindowLabel(nearestReset.windowType, isEnglish)} · ${nearestReset.accountLabel}`
-                  : (isEnglish ? "Refresh protected profiles to load reset times" : "Обновите защищённые профили, чтобы получить даты")}</small>
-              </span>
-              <span className="reset-signal-time">
-                <strong>{formatQuotaReset(nearestReset?.resetAt ?? null, now, isEnglish)}</strong>
-                {nearestLiveCountdown && nearestReset?.resetAt ? (
-                  <span className="reset-countdown-live is-ticking" title={isEnglish ? "Live countdown" : "Точный таймер до сброса"}>
-                    <Clock3 />
-                    <span>{nearestLiveCountdown}</span>
-                  </span>
-                ) : null}
-                <small>{nearestReset
-                  ? (isEnglish
-                    ? `${nearestReset.freshness === "fresh" ? "fresh" : "saved"} · ${nearestReset.profilesWithReset} of ${nearestReset.protectedProfiles} profiles`
-                    : `${nearestReset.freshness === "fresh" ? "свежий" : "сохранённый"} · ${nearestReset.profilesWithReset} из ${nearestReset.protectedProfiles} профилей`)
-                  : (isEnglish ? "No future windows" : "Нет будущих окон")}</small>
-              </span>
+              <Activity size={14} />
+              <span>{isEnglish ? "Audit" : "Аудит"}</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Fleet Telemetry Bento Bar */}
+      <section className="overview-bento-strip">
+        <div className="bento-metric-card">
+          <div className="bento-icon-wrapper is-pool">
+            <Layers3 size={18} />
+          </div>
+          <div className="bento-metric-data">
+            <span className="bento-metric-label">{isEnglish ? "Standby Pool" : "Резервный пул"}</span>
+            <div className="bento-metric-value">
+              <strong>{readyStandbyCount}</strong>
+              <small>{isEnglish ? "ready to switch" : "готовы к работе"}</small>
             </div>
           </div>
-          <div className="operation-foot">
-            <div className="persistence-tags"><span>DPAPI</span><span>Rollback</span><span>{isEnglish ? "Local" : "Локально"}</span></div>
-            <button className="text-action" onClick={onOpenActivity}>{isEnglish ? "Open journal" : "Открыть журнал"}<ArrowRight /></button>
+        </div>
+
+        <div className="bento-metric-card">
+          <div className="bento-icon-wrapper is-time">
+            <Clock3 size={18} />
           </div>
-        </article>
+          <div className="bento-metric-data">
+            <span className="bento-metric-label">{isEnglish ? "Earliest Quota Reset" : "Ближайший сброс"}</span>
+            <div className="bento-metric-value">
+              {earliestFleetReset ? (
+                <>
+                  <strong className="bento-time-highlight">
+                    {formatRemainingCountdown(earliestFleetReset.resetAt, now, isEnglish)}
+                  </strong>
+                  <small title={earliestFleetReset.account.label}>{earliestFleetReset.account.label}</small>
+                </>
+              ) : (
+                <>
+                  <strong>{isEnglish ? "All clear" : "Лимиты в норме"}</strong>
+                  <small>{isEnglish ? "No impending limits" : "Ограничений нет"}</small>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="bento-metric-card">
+          <div className="bento-icon-wrapper is-security">
+            <ShieldCheck size={18} />
+          </div>
+          <div className="bento-metric-data">
+            <span className="bento-metric-label">{isEnglish ? "Vault Security" : "Защита сессий"}</span>
+            <div className="bento-metric-value">
+              <strong>{protectedProfilesCount} / {accounts.length}</strong>
+              <small>{isEnglish ? "DPAPI vault" : "DPAPI"}</small>
+            </div>
+          </div>
+        </div>
+
+        <div className="bento-metric-card">
+          <div className="bento-icon-wrapper is-sync">
+            <CheckCircle2 size={18} />
+          </div>
+          <div className="bento-metric-data">
+            <span className="bento-metric-label">{isEnglish ? "IDE Integration" : "Интеграция IDE"}</span>
+            <div className="bento-metric-value">
+              <strong className="bento-sync-highlight">{activeAg ? "state.vscdb" : "-"}</strong>
+              <small>{activeAg ? (isEnglish ? "Live sync active" : "Синхронизировано") : (isEnglish ? "Not connected" : "Не подключено")}</small>
+            </div>
+          </div>
+        </div>
       </section>
 
-      {!switchReady && diagnostics && !isAntigravity ? (
-        <section className="overview-attention-bar">
-          <TriangleAlert />
-          <span>{!credentialStoreReady ? (isEnglish ? "Codex must use file credentials before switching." : "Для переключения Codex должен использовать файловое хранение входа.") : (isEnglish ? "One of the switch-chain checks needs attention." : "Одна из проверок цепочки переключения требует внимания.")}</span>
-          <strong>{formatCredentialStore(diagnostics.credentialStore, isEnglish)} · {desktop?.selected?.version ? `Codex ${desktop.selected.version}` : "Codex —"}</strong>
+      {/* Smart Switch Recommendation Banner */}
+      {(agCandidate || codexCandidate) ? (
+        <section className="overview-recommendation-clean">
+          <div className="recommendation-content">
+            <span className="recommendation-icon-bubble"><Zap size={20} /></span>
+            <div className="recommendation-text">
+              <h3>
+                {agCandidate
+                  ? (isEnglish ? "Antigravity quota depleted" : "Лимит Antigravity на исходе")
+                  : (isEnglish ? "Codex quota depleted" : "Лимит Codex на исходе")}
+              </h3>
+              <p>
+                {agCandidate
+                  ? (isEnglish
+                    ? `Switch to "${agCandidate.account.label}" (${agCandidate.remainingPercent}% available) to continue uninterrupted.`
+                    : `Переключитесь на "${agCandidate.account.label}" (${agCandidate.remainingPercent}% доступно) для непрерывной работы.`)
+                  : (isEnglish
+                    ? `Switch to "${codexCandidate!.account.label}" (${codexCandidate!.remainingPercent}% available) to continue uninterrupted.`
+                    : `Переключитесь на "${codexCandidate!.account.label}" (${codexCandidate!.remainingPercent}% доступно) для непрерывной работы.`)}
+              </p>
+            </div>
+          </div>
+          <button
+            className="button recommendation-switch-button"
+            disabled={busy !== null}
+            onClick={() => onSwitch(agCandidate ? agCandidate.account.id : codexCandidate!.account.id)}
+          >
+            <Zap size={14} />
+            {isEnglish
+              ? `Switch to ${agCandidate ? agCandidate.account.label : codexCandidate!.account.label}`
+              : `Переключиться на ${agCandidate ? agCandidate.account.label : codexCandidate!.account.label}`}
+          </button>
         </section>
       ) : null}
+
+      {/* Dual Platform Command Cockpit */}
+      <section className="overview-dual-hero">
+        {/* ===================== Column 1: Google Antigravity ===================== */}
+        <div className={`dual-command-card is-antigravity ${activeAg ? "is-connected" : "is-empty"}`}>
+          {/* Card Header */}
+          <div className="command-card-header">
+            <div className="command-brand">
+              <img src={antigravityLogoUrl} alt="Antigravity" className="brand-vector-icon" />
+              <div className="brand-titles">
+                <span className="brand-kicker">Google AI</span>
+                <h2 className="brand-title">Antigravity</h2>
+              </div>
+            </div>
+            <div className="command-status">
+              <span className={`status-pill-clean ${activeAg ? "is-live" : "is-offline"}`}>
+                <span className="status-dot" />
+                {activeAg ? (isEnglish ? "Active in IDE" : "Активен в IDE") : (isEnglish ? "Not connected" : "Не подключён")}
+              </span>
+            </div>
+          </div>
+
+          {activeAg ? (
+            <div className="command-card-body">
+              {/* Profile Identity Strip */}
+              <div className="profile-identity-strip">
+                <span className="identity-avatar ag-avatar">
+                  {activeAg.label.slice(0, 1).toUpperCase()}
+                </span>
+                <div className="identity-text">
+                  <div className="identity-name-row">
+                    <strong className="identity-name" title={activeAg.label}>{activeAg.label}</strong>
+                    {(() => {
+                      const meta = getPlanMeta(activeAg.planType, "antigravity");
+                      return (
+                        <span className={`identity-plan-badge plan-${meta.tone}`}>
+                          <span className="plan-glyph" aria-hidden="true" />
+                          <span>{meta.label}</span>
+                        </span>
+                      );
+                    })()}
+                  </div>
+                  <span className="identity-email">{displayEmail(activeAg.email)}</span>
+                </div>
+              </div>
+
+              {/* Dual Quota Gauges */}
+              <div className="command-quotas-grid">
+                {/* 5-Hour Limit */}
+                <div className="clean-quota-card is-antigravity">
+                  <div className="clean-quota-header">
+                    <span className="clean-quota-label">{agPrimaryLabel}</span>
+                    <span className="clean-quota-state">{quotaStateLabel(agPrimaryRemaining, isEnglish)}</span>
+                  </div>
+                  <div className="clean-quota-big-number">
+                    <span className={`clean-big-num ${quotaTone(agPrimaryRemaining)}`}>
+                      {formatRemaining(agPrimaryRemaining)}
+                    </span>
+                  </div>
+                  <div className="clean-quota-progress">
+                    <div
+                      className={`clean-quota-bar ${quotaTone(agPrimaryRemaining)}`}
+                      style={{ width: `${agPrimaryRemaining ?? 0}%` }}
+                    />
+                  </div>
+                  <div className="clean-quota-footer">
+                    <Clock3 className="footer-clock-icon" size={13} />
+                    <span>
+                      {agPrimaryResetAt && agPrimaryResetAt > now ? (
+                        <>
+                          {isEnglish ? "Resets in " : "Сброс через "}
+                          <strong className="clean-countdown-highlight">
+                            {formatRemainingCountdown(agPrimaryResetAt, now, isEnglish)}
+                          </strong>
+                        </>
+                      ) : (
+                        formatQuotaReset(agPrimaryResetAt, now, isEnglish)
+                      )}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Weekly Limit */}
+                <div className="clean-quota-card is-antigravity">
+                  <div className="clean-quota-header">
+                    <span className="clean-quota-label">{agSecondaryLabel}</span>
+                    <span className="clean-quota-state">
+                      {agSecondaryIsUnlimited ? (isEnglish ? "Unlimited" : "Не ограничен") : quotaStateLabel(agSecondaryRemaining, isEnglish)}
+                    </span>
+                  </div>
+                  <div className="clean-quota-big-number">
+                    <span className={`clean-big-num ${agSecondaryIsUnlimited ? "is-unlimited" : quotaTone(agSecondaryRemaining)}`}>
+                      {agSecondaryIsUnlimited ? "∞" : formatRemaining(agSecondaryRemaining)}
+                    </span>
+                  </div>
+                  <div className="clean-quota-progress">
+                    <div
+                      className={`clean-quota-bar ${agSecondaryIsUnlimited ? "is-unlimited" : quotaTone(agSecondaryRemaining)}`}
+                      style={{ width: agSecondaryIsUnlimited ? "100%" : `${agSecondaryRemaining ?? 0}%` }}
+                    />
+                  </div>
+                  <div className="clean-quota-footer">
+                    <Clock3 className="footer-clock-icon" size={13} />
+                    <span>
+                      {agSecondaryIsUnlimited ? (
+                        isEnglish ? "Unlimited Pro quota" : "Полный безлимит Pro"
+                      ) : agSecondaryResetAt && agSecondaryResetAt > now ? (
+                        <>
+                          {isEnglish ? "Resets in " : "Сброс через "}
+                          <strong className="clean-countdown-highlight">
+                            {formatRemainingCountdown(agSecondaryResetAt, now, isEnglish)}
+                          </strong>
+                        </>
+                      ) : (
+                        formatQuotaReset(agSecondaryResetAt, now, isEnglish)
+                      )}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Antigravity Standby Pool Matrix */}
+              <div className="engine-standby-section">
+                <div className="engine-standby-header">
+                  <div className="engine-standby-title">
+                    <span className="standby-kicker">{isEnglish ? "STANDBY POOL" : "РЕЗЕРВНЫЙ ПУЛ"}</span>
+                    <strong>{isEnglish ? "Available Antigravity Profiles" : "Доступные профили Antigravity"}</strong>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    {onAddAntigravity ? (
+                      <button
+                        className="button secondary compact-button"
+                        onClick={onAddAntigravity}
+                        title={isEnglish ? "Sign in with Google in browser" : "Войти через Google в браузере"}
+                        style={{ fontSize: "11px", padding: "3px 8px" }}
+                      >
+                        <ExternalLink size={12} />
+                        <span>{isEnglish ? "Add Google" : "Войти через Google"}</span>
+                      </button>
+                    ) : null}
+                    <span className="standby-count-pill">{agStandbyAccounts.length}</span>
+                  </div>
+                </div>
+
+                <div className="engine-standby-list schedule-card-list">
+                  {agStandbyAccounts.length > 0 ? (
+                    agStandbyAccounts.map((item) => (
+                      <div className="compact-standby-item" key={item.account.id}>
+                        <div className="standby-account-col">
+                          <span className="mini-avatar ag-avatar">
+                            {item.account.label.slice(0, 1).toUpperCase()}
+                          </span>
+                          <div className="standby-names">
+                            <div className="standby-title-line">
+                              <strong className="standby-label">{item.account.label}</strong>
+                              {(() => {
+                                const meta = getPlanMeta(item.account.planType, "antigravity");
+                                return (
+                                  <span className={`standby-plan-pill plan-${meta.tone}`}>
+                                    <span className="plan-glyph" aria-hidden="true" />
+                                    <span>{meta.label}</span>
+                                  </span>
+                                );
+                              })()}
+                            </div>
+                            <span className="standby-email">{displayEmail(item.account.email)}</span>
+                          </div>
+                        </div>
+
+                        <div className="standby-metrics-col">
+                          <div className="standby-quota-badge">
+                            <span className={`standby-pct ${quotaTone(item.remaining)}`}>
+                              {item.remaining === null ? "-" : `${item.remaining}%`}
+                            </span>
+                          </div>
+                          <span className="standby-reset-hint">
+                            {item.resetAt && item.resetAt > now
+                              ? formatResetTimeShort(item.resetAt, isEnglish ? "en" : "ru", now)
+                              : (isEnglish ? "Ready" : "Готов")}
+                          </span>
+                        </div>
+
+                        <div className="standby-action-col">
+                          <button
+                            className="button secondary compact-button standby-switch-button"
+                            disabled={busy !== null}
+                            onClick={() => onSwitch(item.account.id)}
+                            title={isEnglish ? `Switch to ${item.account.label}` : `Переключиться на ${item.account.label}`}
+                          >
+                            <Zap size={12} />
+                            <span>{isEnglish ? "Switch" : "Переключить"}</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="standby-empty-note">
+                      <span>{isEnglish ? "No additional standby profiles" : "Нет дополнительных резервных профилей"}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="command-card-empty">
+              <KeyRound className="empty-icon" size={32} />
+              <h3>{isEnglish ? "Connect Antigravity" : "Подключить Antigravity"}</h3>
+              <p>{isEnglish ? "Sign in with Google to manage Antigravity IDE quotas and accounts." : "Войдите через Google для управления квотами Antigravity IDE."}</p>
+              <button className="button clean-action-button" onClick={onAddAntigravity ?? onAdd}>
+                <Zap size={14} />
+                {isEnglish ? "Connect Google Account" : "Подключить Google аккаунт"}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* ===================== Column 2: OpenAI Codex ===================== */}
+        <div className={`dual-command-card is-codex ${activeCodex ? "is-connected" : "is-empty"}`}>
+          {/* Card Header */}
+          <div className="command-card-header">
+            <div className="command-brand">
+              <img src={codexLogoUrl} alt="Codex" className="brand-vector-icon" />
+              <div className="brand-titles">
+                <span className="brand-kicker">OpenAI</span>
+                <h2 className="brand-title">Codex CLI</h2>
+              </div>
+            </div>
+            <div className="command-status">
+              <span className={`status-pill-clean ${activeCodex ? "is-live" : "is-offline"}`}>
+                <span className="status-dot" />
+                {activeCodex ? (isEnglish ? "Active CLI" : "Активен в CLI") : (isEnglish ? "Not connected" : "Не подключён")}
+              </span>
+            </div>
+          </div>
+
+          {activeCodex ? (
+            <div className="command-card-body">
+              {/* Profile Identity Strip */}
+              <div className="profile-identity-strip">
+                <span className="identity-avatar codex-avatar">
+                  {activeCodex.label.slice(0, 1).toUpperCase()}
+                </span>
+                <div className="identity-text">
+                  <div className="identity-name-row">
+                    <strong className="identity-name" title={activeCodex.label}>{activeCodex.label}</strong>
+                    {(() => {
+                      const meta = getPlanMeta(activeCodex.planType, "codex");
+                      return (
+                        <span className={`identity-plan-badge plan-${meta.tone}`}>
+                          <span className="plan-glyph" aria-hidden="true" />
+                          <span>{meta.label}</span>
+                        </span>
+                      );
+                    })()}
+                  </div>
+                  <span className="identity-email">{displayEmail(activeCodex.email)}</span>
+                </div>
+              </div>
+
+              {/* Dual Quota Gauges */}
+              <div className="command-quotas-grid">
+                {/* 5-Hour Limit */}
+                <div className="clean-quota-card is-codex">
+                  <div className="clean-quota-header">
+                    <span className="clean-quota-label">{isEnglish ? "5-hour limit" : "5-часовой лимит"}</span>
+                    <span className="clean-quota-state">{quotaStateLabel(codex5hRemaining, isEnglish)}</span>
+                  </div>
+                  <div className="clean-quota-big-number">
+                    <span className={`clean-big-num ${quotaTone(codex5hRemaining)}`}>
+                      {formatRemaining(codex5hRemaining)}
+                    </span>
+                  </div>
+                  <div className="clean-quota-progress">
+                    <div
+                      className={`clean-quota-bar ${quotaTone(codex5hRemaining)}`}
+                      style={{ width: `${codex5hRemaining ?? 0}%` }}
+                    />
+                  </div>
+                  <div className="clean-quota-footer">
+                    <Clock3 className="footer-clock-icon" size={13} />
+                    <span>
+                      {codex5hResetAt && codex5hResetAt > now ? (
+                        <>
+                          {isEnglish ? "Resets in " : "Сброс через "}
+                          <strong className="clean-countdown-highlight">
+                            {formatRemainingCountdown(codex5hResetAt, now, isEnglish)}
+                          </strong>
+                        </>
+                      ) : (
+                        formatQuotaReset(codex5hResetAt, now, isEnglish)
+                      )}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Weekly Limit */}
+                <div className="clean-quota-card is-codex">
+                  <div className="clean-quota-header">
+                    <span className="clean-quota-label">{isEnglish ? "Weekly limit" : "Недельный лимит"}</span>
+                    <span className="clean-quota-state">
+                      {codexWeeklyIsUnlimited ? (isEnglish ? "Unlimited" : "Не ограничен") : quotaStateLabel(codexWeeklyRemaining, isEnglish)}
+                    </span>
+                  </div>
+                  <div className="clean-quota-big-number">
+                    <span className={`clean-big-num ${codexWeeklyIsUnlimited ? "is-unlimited" : quotaTone(codexWeeklyRemaining)}`}>
+                      {codexWeeklyIsUnlimited ? "∞" : formatRemaining(codexWeeklyRemaining)}
+                    </span>
+                  </div>
+                  <div className="clean-quota-progress">
+                    <div
+                      className={`clean-quota-bar ${codexWeeklyIsUnlimited ? "is-unlimited" : quotaTone(codexWeeklyRemaining)}`}
+                      style={{ width: codexWeeklyIsUnlimited ? "100%" : `${codexWeeklyRemaining ?? 0}%` }}
+                    />
+                  </div>
+                  <div className="clean-quota-footer">
+                    <Clock3 className="footer-clock-icon" size={13} />
+                    <span>
+                      {codexWeeklyIsUnlimited ? (
+                        isEnglish ? "Included in subscription" : "Включено в подписку"
+                      ) : codexWeeklyResetAt && codexWeeklyResetAt > now ? (
+                        <>
+                          {isEnglish ? "Resets in " : "Сброс через "}
+                          <strong className="clean-countdown-highlight">
+                            {formatRemainingCountdown(codexWeeklyResetAt, now, isEnglish)}
+                          </strong>
+                        </>
+                      ) : (
+                        formatQuotaReset(codexWeeklyResetAt, now, isEnglish)
+                      )}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Codex Standby Pool Matrix */}
+              <div className="engine-standby-section">
+                <div className="engine-standby-header">
+                  <div className="engine-standby-title">
+                    <span className="standby-kicker">{isEnglish ? "STANDBY POOL" : "РЕЗЕРВНЫЙ ПУЛ"}</span>
+                    <strong>{isEnglish ? "Available Codex Profiles" : "Доступные профили Codex"}</strong>
+                  </div>
+                  <span className="standby-count-pill">{codexStandbyAccounts.length}</span>
+                </div>
+
+                <div className="engine-standby-list schedule-card-list">
+                  {codexStandbyAccounts.length > 0 ? (
+                    codexStandbyAccounts.map((item) => (
+                      <div className="compact-standby-item" key={item.account.id}>
+                        <div className="standby-account-col">
+                          <span className="mini-avatar codex-avatar">
+                            {item.account.label.slice(0, 1).toUpperCase()}
+                          </span>
+                          <div className="standby-names">
+                            <div className="standby-title-line">
+                              <strong className="standby-label">{item.account.label}</strong>
+                              {(() => {
+                                const meta = getPlanMeta(item.account.planType, "codex");
+                                return (
+                                  <span className={`standby-plan-pill plan-${meta.tone}`}>
+                                    <span className="plan-glyph" aria-hidden="true" />
+                                    <span>{meta.label}</span>
+                                  </span>
+                                );
+                              })()}
+                            </div>
+                            <span className="standby-email">{displayEmail(item.account.email)}</span>
+                          </div>
+                        </div>
+
+                        <div className="standby-metrics-col">
+                          <div className="standby-quota-badge">
+                            <span className={`standby-pct ${quotaTone(item.remaining)}`}>
+                              {item.remaining === null ? "-" : `${item.remaining}%`}
+                            </span>
+                          </div>
+                          <span className="standby-reset-hint">
+                            {item.resetAt && item.resetAt > now
+                              ? formatResetTimeShort(item.resetAt, isEnglish ? "en" : "ru", now)
+                              : (isEnglish ? "Ready" : "Готов")}
+                          </span>
+                        </div>
+
+                        <div className="standby-action-col">
+                          <button
+                            className="button secondary compact-button standby-switch-button"
+                            disabled={busy !== null}
+                            onClick={() => onSwitch(item.account.id)}
+                            title={isEnglish ? `Switch to ${item.account.label}` : `Переключиться на ${item.account.label}`}
+                          >
+                            <Zap size={12} />
+                            <span>{isEnglish ? "Switch" : "Переключить"}</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="standby-empty-note">
+                      <span>{isEnglish ? "No additional standby profiles" : "Нет дополнительных резервных профилей"}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="command-card-empty">
+              <Sparkles className="empty-icon" size={32} />
+              <h3>{isEnglish ? "Connect OpenAI Codex" : "Войти в OpenAI Codex"}</h3>
+              <p>{isEnglish ? "Add Codex session credentials to balance AI coding quotas." : "Добавьте профиль Codex для балансировки лимитов генерации кода."}</p>
+              <button className="button clean-action-button" onClick={onAddCodex ?? onAdd}>
+                <KeyRound size={14} />
+                {isEnglish ? "Sign in with Codex" : "Войти в Codex"}
+              </button>
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   );
 }

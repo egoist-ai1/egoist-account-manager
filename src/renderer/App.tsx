@@ -5,7 +5,7 @@ import {
   Activity,
   Archive,
   CheckCircle2,
-  ChevronRight,
+  Clock,
   Command,
   Copy,
   Database,
@@ -63,7 +63,13 @@ import type {
 } from "../shared/types";
 import type { AppViewKey, CommandPaletteCommand } from "../shared/commandPalette";
 import { buildCommandPalette, filterCommandPalette } from "../shared/commandPalette";
-import { selectAccountListQuota, sortAccountList, type AccountListSort } from "../shared/accountListPresentation";
+import {
+  formatRemainingCountdown,
+  formatResetTimeShort,
+  selectAccountListQuota,
+  sortAccountList,
+  type AccountListSort
+} from "../shared/accountListPresentation";
 import { maskEmailForPrivacy, maskPathForPrivacy, maskSensitiveDisplayText } from "../shared/privacyDisplay";
 import { buildProviderQuotaState } from "../shared/providerAdapter";
 import { buildQuotaFreshness, hasCurrentQuotaRefreshFailure } from "../shared/quotaFreshness";
@@ -72,15 +78,16 @@ import { buildQuotaRefreshAccountMessage, buildQuotaRefreshMessage } from "../sh
 import { selectSmartAccount } from "../shared/smartSelection";
 import { appVersion, releaseNotes } from "../shared/releaseNotes";
 import appAvatarUrl from "./assets/app-avatar-mark.png";
-import codexLogoUrl from "./assets/codex-color.svg";
-import antigravityLogoUrl from "./assets/antigravity-icon.png";
+import codexLogoUrl from "./assets/codex-official.png";
+import antigravityLogoUrl from "./assets/antigravity-app-official.png";
 import { getUiText } from "./i18n";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ActivityPage } from "./components/v3/ActivityPage";
+import { AuditDrawer } from "./components/v3/AuditDrawer";
 import { OverviewPage } from "./components/v3/OverviewPage";
 import { TrayPopover } from "./components/TrayPopover";
 import { TrayHoverPopover } from "./components/TrayHoverPopover";
-import "@fontsource-variable/montserrat";
+import "@fontsource-variable/unbounded";
 import "./styles.css";
 import "./v3.css";
 import "./v306.css";
@@ -91,16 +98,17 @@ import "./v310.css";
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
-function codexLoginMethodLabel(id: CodexLoginMethodId, isEnglish: boolean): string {
-  const labels: Record<CodexLoginMethodId, [string, string]> = {
-    chatgpt: ["ChatGPT browser", "ChatGPT в браузере"],
-    chatgptDeviceCode: ["Device code", "Код устройства"],
-    apiKey: ["API key", "API key"],
-    enterpriseAccessToken: ["Enterprise token", "Enterprise-токен"],
-    chatgptAuthTokens: ["Access token", "Access token"]
-  };
-  return labels[id][isEnglish ? 0 : 1];
+function useNowSeconds(intervalMs = 1000): number {
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), intervalMs);
+    return () => window.clearInterval(timer);
+  }, [intervalMs]);
+  return now;
 }
+
+
+
 
 const demoSettings: AppSettings = {
   language: "ru",
@@ -108,7 +116,7 @@ const demoSettings: AppSettings = {
   trayRefreshIntervalMs: 60_000,
   privacyMode: false,
   confirmSwitch: true,
-  desktopClosePolicy: "graceful-only",
+  desktopClosePolicy: "exact-tree-fallback",
   smartSwitchMode: "suggest",
   smartSwitchThresholdPercent: 10,
   notificationSoundEnabled: true,
@@ -328,7 +336,7 @@ const demoSwitchHistory: SwitchHistoryItem[] = demoSwitchTransactions.map((trans
 
 const cam: AppApi = window.cam ?? {
   listAccounts: async () => demoAccounts,
-  getAppInfo: async () => ({ name: "Egoist Account Manager", publisher: "Egoist AI", version: appVersion, vaultDegraded: false }),
+  getAppInfo: async () => ({ name: "Account Manager EGO", publisher: "Egoist AI", version: appVersion, vaultDegraded: false }),
   startLogin: async (input: CodexLoginRequest) => ({
     loginId: "demo-login",
     profileId: "demo-profile",
@@ -617,8 +625,10 @@ const cam: AppApi = window.cam ?? {
   onAccountsUpdated: () => () => undefined,
   onSwitchTransaction: () => () => undefined,
   onAntigravityOAuthStep: () => () => undefined,
-  onUpdateStatus: () => () => undefined
-  ,onAppNotification: () => () => undefined
+  onUpdateStatus: () => () => undefined,
+  onAppNotification: () => () => undefined,
+  getTrayPlatform: async () => "codex",
+  onTrayPlatform: () => () => undefined
 };
 
 function formatTime(value: number | null): string {
@@ -648,23 +658,32 @@ function QuotaFreshnessChip({ account }: { account: ManagedAccount }) {
   const refreshFailed = hasCurrentQuotaRefreshFailure(account);
   return (
     <span
-      className={`quota-freshness-chip ${refreshFailed ? "refresh-error" : freshness.state}`}
+      className={`quota-freshness-chip ${refreshFailed ? "refresh-error failed" : freshness.state}`}
       title={refreshFailed ? `Последний запрос завершился ошибкой. ${freshness.title}. Корректный снимок сохранён.` : freshness.title}
     >
-      {refreshFailed ? "сбой обновления" : freshness.label}
+      {refreshFailed ? <AlertTriangle size={11} className="chip-icon alert-red" /> : <span className="status-dot" />}
+      <span>{refreshFailed ? "сбой обновления" : freshness.label}</span>
     </span>
   );
 }
 
 function CredentialStateChip({ account }: { account: ManagedAccount }) {
-  const meta = account.credentialState === "ready"
-    ? { label: "вход сохранён", tone: "ready", title: "Авторизация зашифрована и сохранена локально" }
-    : account.credentialState === "needs_reauth"
-      ? { label: "нужен вход", tone: "warning", title: "Профиль сохранён, но Codex требует повторный вход" }
-      : account.credentialState === "drifted"
-        ? { label: "проверить вход", tone: "warning", title: "Обнаружено изменение авторизации вне менеджера" }
-        : { label: "проверить профиль", tone: "neutral", title: "Нужно подтвердить принадлежность сохранённого профиля" };
-  return <span className={`credential-chip ${meta.tone}`} title={meta.title}><ShieldCheck />{meta.label}</span>;
+  const isFailed = account.status === "error" || account.credentialState !== "ready";
+  const meta = account.status === "error"
+    ? { label: "сбой проверки", tone: "failed", title: account.statusReason || "Ошибка проверки профиля" }
+    : account.credentialState === "ready"
+      ? { label: "вход сохранён", tone: "ready", title: "Авторизация зашифрована и сохранена локально" }
+      : account.credentialState === "needs_reauth"
+        ? { label: "нужен вход", tone: "failed", title: "Профиль сохранён, но требуется повторный вход" }
+        : account.credentialState === "drifted"
+          ? { label: "сбой сессии", tone: "failed", title: "Обнаружено изменение авторизации вне менеджера" }
+          : { label: "проверить вход", tone: "failed", title: "Нужно подтвердить принадлежность сохранённого профиля" };
+  return (
+    <span className={`credential-chip ${meta.tone}`} title={meta.title}>
+      {isFailed ? <AlertTriangle size={11} className="chip-icon alert-red" /> : <ShieldCheck size={11} />}
+      <span>{meta.label}</span>
+    </span>
+  );
 }
 
 function statusClass(account: ManagedAccount): string {
@@ -702,16 +721,16 @@ function switchErrorMessage(error: unknown): string {
     return "В Codex сейчас нет активной авторизации. Менеджер сохранил профили и попробует активировать выбранный аккаунт повторно.";
   }
   if (/different account|different provider account/i.test(detail)) {
-    return "Текущая сессия Codex не совпала с отметкой в менеджере. Обнови список и повтори переключение — сессия будет согласована автоматически.";
+    return "Текущая сессия Codex не совпала с отметкой в менеджере. Обновите список и повторите переключение. Сессия будет согласована автоматически.";
   }
   if (/hosted inside the active Codex process tree/i.test(detail)) {
-    return "Manager был открыт из процесса Codex, поэтому безопасное переключение остановлено до закрытия сессии. Закрой только Manager и открой его из меню «Пуск» или с ярлыка, затем повтори.";
+    return "Manager был открыт из процесса Codex, поэтому безопасное переключение остановлено до закрытия сессии. Перезапустите Manager из меню «Пуск» или с ярлыка.";
   }
   if (/could not be safely closed|did not exit|still running/i.test(detail)) {
-    return "Codex не удалось полностью закрыть. Включи «Автоматическое закрытие» в настройках и повтори.";
+    return "Codex не удалось завершить. Включите «Автоматическое закрытие» в настройках и повторите попытку.";
   }
   if (/still being reauthenticated|reauthentication is still in progress/i.test(detail)) {
-    return "Для выбранного профиля ещё открыт вход. Заверши его или запусти авторизацию заново — предыдущая незавершённая попытка будет безопасно заменена.";
+    return "Для выбранного профиля ещё открыт вход. Завершите его или запустите авторизацию заново. Предыдущая попытка будет безопасно заменена.";
   }
   if (/another switch transaction is already active/i.test(detail)) {
     return "Предыдущая попытка переключения ещё не завершена. Менеджер отменит её до изменения авторизации; затем повтори переключение.";
@@ -719,11 +738,7 @@ function switchErrorMessage(error: unknown): string {
   return `Не удалось переключить аккаунт: ${detail}`;
 }
 
-function autoRefreshLabel(ms?: number, language: AppSettings["language"] = "ru"): string {
-  if (!ms) return language === "en" ? "auto" : "авто";
-  const minutes = Math.max(1, Math.round(ms / 60000));
-  return language === "en" ? `${minutes} min` : `${minutes} мин`;
-}
+
 
 function relativeRefresh(account: ManagedAccount): string {
   if (!account.lastRefreshAt) return "нет снимка";
@@ -735,8 +750,8 @@ function relativeRefresh(account: ManagedAccount): string {
 
 function meterTone(usedPercent: number | null): string {
   const usedValue = usedPercent ?? 0;
-  if (usedValue >= 90) return "danger";
-  if (usedValue >= 72) return "warn";
+  if (usedValue >= 85) return "danger";
+  if (usedValue >= 60) return "warn";
   return "good";
 }
 
@@ -748,30 +763,58 @@ function LimitMeter({
   label,
   usedPercent,
   resetsAt,
-  unavailableReason
+  unavailableReason,
+  platform = "codex",
+  language = "ru"
 }: {
   label: string;
   usedPercent: number | null;
   resetsAt: number | null;
   unavailableReason?: string;
+  platform?: "codex" | "antigravity";
+  language?: AppSettings["language"];
 }) {
+  const now = useNowSeconds(1000);
   const remaining = remainingPercent(usedPercent);
   const isAvailable = usedPercent !== null;
-  const emptyReason = unavailableReason ?? "Синхронизация...";
+  const isEnglish = language === "en";
+  const emptyReason = unavailableReason ?? (isEnglish ? "Syncing..." : "Синхронизация...");
+  const countdown = formatRemainingCountdown(resetsAt, now, isEnglish);
+  const isAntigravity = platform === "antigravity";
+  const resetText = resetsAt
+    ? (isEnglish ? `resets ${formatResetTimeShort(resetsAt, language, now)}` : `сброс ${formatResetTimeShort(resetsAt, language, now)}`)
+    : (isAvailable ? (isEnglish ? "no timer" : "нет таймера") : "-");
+
   return (
     <div
-      className={`limit-meter ${isAvailable ? meterTone(usedPercent) : "is-inactive"}`}
-      title={isAvailable ? `Осталось ${remaining?.toFixed(0)}%, использовано ${usedPercent?.toFixed(0)}%` : emptyReason}
-      aria-label={isAvailable ? `${label}: осталось ${remaining?.toFixed(0)} процентов` : `${label}: ${emptyReason}`}
+      className={`limit-meter is-${platform} ${isAvailable ? meterTone(usedPercent) : "is-inactive"} ${remaining === 0 ? "is-depleted" : ""}`}
+      title={isAvailable ? (isEnglish ? `Remaining ${remaining?.toFixed(0)}%, used ${usedPercent?.toFixed(0)}%` : `Осталось ${remaining?.toFixed(0)}%, использовано ${usedPercent?.toFixed(0)}%`) : emptyReason}
+      aria-label={isAvailable ? `${label}: ${remaining?.toFixed(0)}%` : `${label}: ${emptyReason}`}
     >
       <div className="limit-line">
-        <span>{label}</span>
-        <strong>{isAvailable ? `${remaining?.toFixed(0)}%` : emptyReason}</strong>
+        <span className="limit-label-text">{label}</span>
+        <strong className="limit-value-percent">{isAvailable ? `${remaining?.toFixed(0)}%` : emptyReason}</strong>
       </div>
       <div className="bar">
         <span style={{ width: `${isAvailable ? (remaining ?? 0) : 0}%` }} />
       </div>
-      <small>{resetsAt ? `сброс ${formatTime(resetsAt)}` : emptyReason}</small>
+      <div className="limit-meter-footer">
+        <small
+          className="limit-reset-time"
+          title={resetsAt ? (isEnglish ? `Exact reset: ${formatTime(resetsAt)}` : `Точный сброс: ${formatTime(resetsAt)}`) : undefined}
+        >
+          {resetText}
+        </small>
+        {countdown ? (
+          <span
+            className={`limit-countdown-badge ${isAntigravity ? "is-ag" : "is-codex"}`}
+            title={isEnglish ? `Time until reset: ${countdown}` : `До сброса: ${countdown}`}
+          >
+            <Clock className="countdown-icon" aria-hidden="true" />
+            <span>{countdown}</span>
+          </span>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -787,19 +830,23 @@ function accountLimitDisplay(account: ManagedAccount): {
   secondaryUnavailableReason?: string;
 } {
   if (accountPlatform(account) === "antigravity") {
+    const pUsed = account.primaryUsedPercent ?? account.fiveHourUsedPercent;
+    const pReset = account.primaryResetsAt ?? account.fiveHourResetsAt;
+    const pDur = account.primaryWindowDurationMins ?? (pUsed !== null ? 300 : null);
+
+    const sUsed = account.secondaryUsedPercent ?? account.weeklyUsedPercent;
+    const sReset = account.secondaryResetsAt ?? account.weeklyResetsAt;
+    const sDur = account.secondaryWindowDurationMins ?? (sUsed !== null ? 10080 : null);
+
     return {
-      primaryLabel: windowLabel(account.primaryWindowDurationMins, "5 часов"),
-      primaryUsedPercent: account.primaryUsedPercent,
-      primaryResetsAt: account.primaryResetsAt,
-      primaryUnavailableReason: account.primaryUsedPercent == null
-        ? "Синхронизация..."
-        : undefined,
-      secondaryLabel: windowLabel(account.secondaryWindowDurationMins, "неделя"),
-      secondaryUsedPercent: account.secondaryUsedPercent,
-      secondaryResetsAt: account.secondaryResetsAt,
-      secondaryUnavailableReason: account.secondaryUsedPercent == null
-        ? "Не ограничен"
-        : undefined
+      primaryLabel: windowLabel(pDur, "5 часов"),
+      primaryUsedPercent: pUsed,
+      primaryResetsAt: pReset,
+      primaryUnavailableReason: pUsed == null ? "Синхронизация..." : undefined,
+      secondaryLabel: windowLabel(sDur, "неделя"),
+      secondaryUsedPercent: sUsed,
+      secondaryResetsAt: sReset,
+      secondaryUnavailableReason: sUsed == null ? "Не ограничен" : undefined
     };
   }
 
@@ -838,11 +885,11 @@ function windowLabel(durationMins: number | null, fallback: string): string {
 
 function antigravityAccessLabel(account: ManagedAccount, language: AppSettings["language"] = "ru"): string {
   const en = language === "en";
-  if (account.antigravity?.forbidden) return en ? "restricted" : "ограничен";
   if (account.status === "error") return en ? "error" : "ошибка";
   if (account.status === "limited") return en ? "limited" : "лимит";
   if (account.antigravity?.lastQuotaRefreshAt || account.primaryUsedPercent != null || account.secondaryUsedPercent != null) return en ? "ready" : "готов";
   if (account.isActive || account.status === "active" || account.status === "near_limit") return en ? "ready" : "готов";
+  if (account.antigravity?.forbidden) return en ? "ready" : "готов";
   return en ? "preparing" : "готовится";
 }
 
@@ -879,32 +926,66 @@ function AccountPlatformMark({ account, size = "small" }: { account: ManagedAcco
   return <PlatformMark platform={platform} size={size} label={platformLabel(account)} />;
 }
 
-type PlanBadgeTone = "free" | "go" | "standard" | "plus" | "team" | "pro" | "pro5" | "pro10" | "pro20" | "enterprise" | "unknown";
+type PlanBadgeTone =
+  | "ag-standard"
+  | "ag-pro"
+  | "ag-ultra"
+  | "ag-ultrax20"
+  | "free"
+  | "go"
+  | "standard"
+  | "plus"
+  | "team"
+  | "pro"
+  | "pro5"
+  | "pro10"
+  | "pro20"
+  | "enterprise"
+  | "unknown";
 
-function planBadgeMeta(planType: ManagedAccount["planType"]): { tone: PlanBadgeTone; label: string; title: string } {
+function planBadgeMeta(
+  planType: ManagedAccount["planType"],
+  platform?: "codex" | "antigravity"
+): { tone: PlanBadgeTone; label: string; title: string } {
   const raw = String(planType ?? "unknown").trim();
   const key = raw.toLowerCase().replace(/[\s_-]+/g, "");
-  if (key === "standard" || key === "standardtier" || key === "antigravitystandard") {
-    return { tone: "standard", label: "Code Assist", title: "Внутренний tier Code Assist. Это не подтверждённое название платной подписки Google." };
-  }
+
   if (!raw || key === "unknown") return { tone: "unknown", label: "Не определён", title: "Тариф не определён" };
-  if (key === "free") return { tone: "free", label: "Free", title: "Code Assist сообщил free-tier как текущий доступ." };
-  if (key === "googleaipro") return { tone: "plus", label: "AI Pro", title: "Google AI Pro: подтверждено текущим tier Code Assist" };
-  if (key === "googleaiultra") return { tone: "pro10", label: "Ultra", title: "Google AI Ultra: подтверждено текущим tier Code Assist" };
-  if (key === "googleaiultrax20") return { tone: "pro20", label: "Ultra x20", title: "Google AI Ultra X20: подтверждено текущим tier Code Assist" };
+
+  if (platform === "antigravity" || key.startsWith("googleai") || key.startsWith("g1") || key.includes("antigravity")) {
+    if (key === "googleaiultrax20" || key.includes("ultrax20") || (key.includes("ultra") && key.includes("20"))) {
+      return { tone: "ag-ultrax20", label: "Ultra x20", title: "Google AI Ultra x20: подтверждено текущим tier Code Assist" };
+    }
+    if (key === "googleaiultra" || key.includes("ultra")) {
+      return { tone: "ag-ultra", label: "AI Ultra", title: "Google AI Ultra: подтверждено текущим tier Code Assist" };
+    }
+    if (key === "googleaipro" || key === "g1protier" || key.includes("pro")) {
+      return { tone: "ag-pro", label: "AI Pro", title: "Google AI Pro: подтверждено текущим tier Code Assist" };
+    }
+    return { tone: "ag-standard", label: "Standard", title: "Тариф Antigravity Standard (Code Assist)" };
+  }
+
+  if (key === "free") return { tone: "free", label: "Free", title: "Codex Free tier" };
   if (key === "go") return { tone: "go", label: "Go", title: "Go: начальный платный уровень" };
   if (key === "plus") return { tone: "plus", label: "Plus", title: "Plus: повышенный персональный уровень" };
   if (key === "team" || key === "business") return { tone: "team", label: key === "business" ? "Business" : "Team", title: "Командный тариф" };
   if (key === "enterprise" || key === "edu") return { tone: "enterprise", label: raw, title: "Enterprise/Edu: организационный уровень" };
-  if (key.includes("20")) return { tone: "pro20", label: "Pro X20", title: "Pro X20: подтверждённый максимальный уровень" };
-  if (key.includes("10") || key === "prolite") return { tone: "pro10", label: key === "prolite" ? "Pro Lite" : "Pro X10", title: "Профессиональный уровень" };
-  if (key.includes("5")) return { tone: "pro5", label: "Pro X5", title: "Pro X5: подтверждённый профессиональный уровень" };
+  if (key.includes("20") || key === "prox20") return { tone: "pro20", label: "Pro X20", title: "Pro X20: подтверждённый максимальный уровень" };
+  if (key.includes("10") || key === "prox10" || key === "prolite") return { tone: "pro10", label: key === "prolite" ? "Pro Lite" : "Pro X10", title: "Профессиональный уровень" };
+  if (key.includes("5") || key === "prox5") return { tone: "pro5", label: "Pro X5", title: "Pro X5: подтверждённый профессиональный уровень" };
   if (key === "pro") return { tone: "pro", label: "Pro", title: "Codex Pro: профессиональный тариф" };
+
   return { tone: "unknown", label: raw, title: `Тариф: ${raw}` };
 }
 
-function PlanBadge({ planType }: { planType: ManagedAccount["planType"] }) {
-  const meta = planBadgeMeta(planType);
+function PlanBadge({
+  planType,
+  platform
+}: {
+  planType: ManagedAccount["planType"];
+  platform?: "codex" | "antigravity";
+}) {
+  const meta = planBadgeMeta(planType, platform);
   return (
     <span className={`plan plan-badge plan-${meta.tone}`} title={meta.title}>
       <span className="plan-glyph" aria-hidden="true" />
@@ -930,8 +1011,11 @@ function AccountCompactRow({
   onSelect: (id: string) => void;
   onSwitch: (id: string) => void;
 }) {
-  const quota = selectAccountListQuota(account, nowSeconds());
+  const now = useNowSeconds(1000);
+  const quota = selectAccountListQuota(account, now);
   const remaining = quota.remainingPercent;
+  const isAntigravity = (account.platform ?? "codex") === "antigravity";
+  const countdown = formatRemainingCountdown(quota.resetAt, now, isEnglish);
   const windowName = quota.windowType === "5h"
     ? (isEnglish ? "5-hour window" : "5-часовой лимит")
     : quota.windowType === "weekly"
@@ -940,19 +1024,20 @@ function AccountCompactRow({
         ? (isEnglish ? "Daily limit" : "Дневной лимит")
         : (isEnglish ? "Current limit" : "Текущий лимит");
   const resetLabel = quota.resetAt
-    ? quota.resetAt <= nowSeconds()
-      ? (isEnglish ? "Reset time reached · refresh data" : "Время сброса наступило · обновите данные")
-      : `${isEnglish ? "Reset" : "Сброс"} ${formatTime(quota.resetAt)}`
+    ? quota.resetAt <= now
+      ? (isEnglish ? "Reset reached" : "Сброс наступил")
+      : `${isEnglish ? "Reset" : "Сброс"} ${formatResetTimeShort(quota.resetAt, isEnglish ? "en" : "ru", now)}`
     : (isEnglish ? "Reset time unavailable" : "Время сброса неизвестно");
   const tone = remaining === null ? "unknown" : remaining <= 10 ? "danger" : remaining <= 25 ? "warn" : "good";
+  const hasFailure = account.status === "error" || account.credentialState !== "ready" || hasCurrentQuotaRefreshFailure(account);
   return (
-    <article className={`account-compact-row ${selected ? "is-selected" : ""} ${account.isActive ? "is-active" : ""}`} role="listitem" onClick={() => onSelect(account.id)}>
+    <article className={`account-compact-row ${selected ? "is-selected" : ""} ${account.isActive ? "is-active" : ""} ${hasFailure ? "has-error" : "is-healthy"} is-${isAntigravity ? "antigravity" : "codex"}`} role="listitem" onClick={() => onSelect(account.id)}>
       <div className="account-compact-identity">
         <AccountPlatformMark account={account} />
         <div className="account-copy">
           <div className="name">
             <span className="account-label" title={account.label}>{account.label}</span>
-            <PlanBadge planType={account.planType} />
+            <PlanBadge planType={account.planType} platform={account.platform} />
           </div>
           <div className="email" title={privacyMode ? undefined : account.email}>{privacyMode ? maskEmailForPrivacy(account.email) : account.email}</div>
         </div>
@@ -960,17 +1045,30 @@ function AccountCompactRow({
       <div className={`account-compact-quota ${tone}`} title={remaining === null ? (isEnglish ? "No fresh quota data" : "Нет свежих данных лимита") : `${windowName}: ${remaining.toFixed(0)}%`}>
         <div>
           <span>{windowName}</span>
-          <strong>{remaining === null ? "—" : `${remaining.toFixed(0)}%`}</strong>
+          <strong>{remaining === null ? "-" : `${remaining.toFixed(0)}%`}</strong>
         </div>
         <div className="bar"><span style={{ width: `${remaining ?? 0}%` }} /></div>
-        <small>{resetLabel}</small>
+        <div className="compact-quota-timing">
+          <small title={quota.resetAt ? (isEnglish ? `Exact reset: ${formatTime(quota.resetAt)}` : `Точный сброс: ${formatTime(quota.resetAt)}`) : undefined}>
+            {resetLabel}
+          </small>
+          {countdown ? (
+            <span
+              className={`limit-countdown-badge ${isAntigravity ? "is-ag" : "is-codex"}`}
+              title={isEnglish ? `Time until reset: ${countdown}` : `До сброса: ${countdown}`}
+            >
+              <Clock className="countdown-icon" aria-hidden="true" />
+              <span>{countdown}</span>
+            </span>
+          ) : null}
+        </div>
       </div>
       <div className="account-compact-state">
         <CredentialStateChip account={account} />
         <QuotaFreshnessChip account={account} />
       </div>
       <button
-        className="profile-switch-action account-compact-switch"
+        className={`profile-switch-action account-compact-switch ${account.isActive ? "is-active" : ""}`}
         disabled={busy !== null || account.isActive || account.credentialState !== "ready"}
         onClick={(event) => {
           event.stopPropagation();
@@ -1009,11 +1107,12 @@ function AccountCard({
   onInspect: (id: string, trigger: HTMLButtonElement) => void;
 }) {
   const isAntigravity = accountPlatform(account) === "antigravity";
+  const hasFailure = account.status === "error" || account.credentialState !== "ready" || hasCurrentQuotaRefreshFailure(account);
   const needsRepair = hasCurrentQuotaRefreshFailure(account) || account.credentialState !== "ready";
   const limits = accountLimitDisplay(account);
   return (
     <article
-      className={`profile-card ${selected ? "is-selected" : ""} ${account.isActive ? "is-active" : ""}`}
+      className={`profile-card ${selected ? "is-selected" : ""} ${account.isActive ? "is-active" : ""} ${hasFailure ? "has-error" : "is-healthy"} is-${isAntigravity ? "antigravity" : "codex"}`}
       tabIndex={0}
       aria-label={`${account.label}, ${account.planType ?? "ChatGPT"}${account.isActive ? ", активный профиль" : ""}`}
       onClick={() => onSelect(account.id)}
@@ -1031,19 +1130,36 @@ function AccountCard({
               <span className="account-label" title={account.label}>{account.label}</span>
               {account.favorite ? <Star className="inline-mark" /> : null}
               {account.archived ? <span className="badge compact">архив</span> : null}
-              {account.isActive ? <span className="badge active compact">активен</span> : null}
+              {account.isActive ? (
+                <span className="status-pill-clean is-live account-card-live-pill" title={isAntigravity ? "Активен в Antigravity IDE" : "Активен в Codex CLI"}>
+                  <span className="status-dot" />
+                  <span>Активен</span>
+                </span>
+              ) : null}
             </div>
             <div className="email" title={privacyMode ? undefined : account.email}>{privacyMode ? maskEmailForPrivacy(account.email) : account.email}</div>
           </div>
         </div>
         <div className="profile-card-status">
-          <PlanBadge planType={account.planType} />
+          <PlanBadge planType={account.planType} platform={account.platform} />
           <CredentialStateChip account={account} />
         </div>
       </div>
       <div className="profile-card-body">
-        <LimitMeter label={limits.primaryLabel} usedPercent={limits.primaryUsedPercent} resetsAt={limits.primaryResetsAt} unavailableReason={limits.primaryUnavailableReason} />
-        <LimitMeter label={limits.secondaryLabel} usedPercent={limits.secondaryUsedPercent} resetsAt={limits.secondaryResetsAt} unavailableReason={limits.secondaryUnavailableReason} />
+        <LimitMeter
+          label={limits.primaryLabel}
+          usedPercent={limits.primaryUsedPercent}
+          resetsAt={limits.primaryResetsAt}
+          unavailableReason={limits.primaryUnavailableReason}
+          platform={account.platform}
+        />
+        <LimitMeter
+          label={limits.secondaryLabel}
+          usedPercent={limits.secondaryUsedPercent}
+          resetsAt={limits.secondaryResetsAt}
+          unavailableReason={limits.secondaryUnavailableReason}
+          platform={account.platform}
+        />
       </div>
       <div className="profile-card-foot">
         <QuotaFreshnessChip account={account} />
@@ -1065,7 +1181,7 @@ function AccountCard({
         <button className="icon-btn" aria-label="Подробнее о профиле" disabled={busy !== null} onClick={(event) => onInspect(account.id, event.currentTarget)} title="Подробнее о профиле">
           <MoreHorizontal />
         </button>
-        <button className="profile-switch-action" disabled={busy !== null || account.isActive} onClick={() => onSwitch(account.id)} title="Сделать активным">
+        <button className={`profile-switch-action ${account.isActive ? "is-active" : ""}`} disabled={busy !== null || account.isActive} onClick={() => onSwitch(account.id)} title={account.isActive ? "Активный профиль" : "Сделать активным"}>
           {busy === `switch:${account.id}` ? <Loader2 className="spin" /> : account.isActive ? <CheckCircle2 /> : <Zap />}
           <span>{account.isActive ? "Активен" : "Переключить"}</span>
         </button>
@@ -1123,7 +1239,7 @@ function AccountInspector({
   const currentQuotaFailure = hasCurrentQuotaRefreshFailure(account);
 
   return (
-    <aside className={`inspector ${statusClass(account)}`}>
+    <aside className={`inspector ${statusClass(account)} is-${isAntigravity ? "antigravity" : "codex"}`}>
       <div className="inspector-profile-row">
         <div className="inspector-identity">
           <AccountPlatformMark account={account} size="large" />
@@ -1133,7 +1249,7 @@ function AccountInspector({
           </div>
         </div>
         <div className="inspector-meta-chips inspector-meta-line">
-          <PlanBadge planType={account.planType} />
+          <PlanBadge planType={account.planType} platform={account.platform} />
           <CredentialStateChip account={account} />
           <QuotaFreshnessChip account={account} />
           <span className="inspector-refresh-age">{relativeRefresh(account)}</span>
@@ -1158,8 +1274,22 @@ function AccountInspector({
         </div>
       </div>
       <div className="inspector-limit-grid">
-        <LimitMeter label={limits.primaryLabel} usedPercent={limits.primaryUsedPercent} resetsAt={limits.primaryResetsAt} unavailableReason={limits.primaryUnavailableReason} />
-        <LimitMeter label={limits.secondaryLabel} usedPercent={limits.secondaryUsedPercent} resetsAt={limits.secondaryResetsAt} unavailableReason={limits.secondaryUnavailableReason} />
+        <LimitMeter
+          label={limits.primaryLabel}
+          usedPercent={limits.primaryUsedPercent}
+          resetsAt={limits.primaryResetsAt}
+          unavailableReason={limits.primaryUnavailableReason}
+          platform={account.platform}
+          language={language}
+        />
+        <LimitMeter
+          label={limits.secondaryLabel}
+          usedPercent={limits.secondaryUsedPercent}
+          resetsAt={limits.secondaryResetsAt}
+          unavailableReason={limits.secondaryUnavailableReason}
+          platform={account.platform}
+          language={language}
+        />
       </div>
       {currentQuotaFailure ? (
         <div className="quota-refresh-warning" title={account.lastRefreshError ?? undefined}>
@@ -1653,7 +1783,7 @@ function AntigravityImportModal({
         <div className="modal-head">
           <div>
             <div className="panel-title">Добавить Antigravity</div>
-            <p className="muted">Выберите обычный Google-вход, уже настроенную IDE или локальный JSON. Секреты остаются в защищённом main process.</p>
+            <p className="muted">Вход через браузер в 1 клик без SMS, прямое подключение установленной IDE или локальный JSON.</p>
           </div>
           <button className="icon-btn" onClick={onClose} title="Закрыть">
             <X />
@@ -1694,7 +1824,7 @@ function AntigravityImportModal({
           <div className="antigravity-primary-grid">
             <button className="antigravity-method-card is-recommended" disabled={busy !== null} onClick={onStartOAuth}>
               <span className="method-card-icon">{busy === "antigravity-oauth-start" ? <Loader2 className="spin" /> : <ExternalLink />}</span>
-              <span><strong>Войти через Google</strong><small>Рекомендуется · автоматический callback и проверка профиля</small></span>
+              <span><strong>Войти через Google</strong><small>Рекомендуется · доверенный браузер без SMS-верификации</small></span>
               <em>Основной</em>
             </button>
             <button className="antigravity-method-card" disabled={busy !== null || !profileStatus?.detected} onClick={onImportLocalProfile}>
@@ -1857,6 +1987,7 @@ function App() {
   const inspectorTriggerRef = useRef<HTMLElement | null>(null);
   const inspectorCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const [activeView, setActiveView] = useState<ViewKey>("overview");
+  const [auditDrawerOpen, setAuditDrawerOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandSearch, setCommandSearch] = useState("");
   const [loginWizard, setLoginWizard] = useState<LoginWizardState>({ open: false, phase: "method", type: null, result: null, error: null });
@@ -1927,11 +2058,6 @@ function App() {
     const antigravity = accounts.filter((account) => accountPlatform(account) === "antigravity").length;
     return { active, low, avg, usable, stale, codex, antigravity };
   }, [accounts]);
-  const overviewAccounts = useMemo(() => {
-    if (platformFilter === "all") return accounts;
-    const scoped = accounts.filter((account) => accountPlatform(account) === platformFilter);
-    return scoped.length > 0 ? scoped : accounts;
-  }, [accounts, platformFilter]);
 
   const smartRecommendation = useMemo(() => selectSmartAccount(accounts, workspaceBinding), [accounts, workspaceBinding]);
   const bestAccount = useMemo(() => {
@@ -1975,7 +2101,6 @@ function App() {
   const navItems: NavItem[] = [
     { key: "overview", label: isEnglish ? "Overview" : "Обзор", description: isEnglish ? "Session and readiness" : "Сессия и готовность", icon: LayoutDashboard },
     { key: "accounts", label: uiText.nav.accounts, description: platformFilter === "antigravity" ? "Antigravity" : "Codex", icon: Layers3 },
-    { key: "activity", label: isEnglish ? "Activity" : "Активность", description: isEnglish ? "Switch journal" : "Журнал переключений", icon: Activity },
     { key: "settings", label: uiText.nav.settings, description: isEnglish ? "App behavior" : "Поведение приложения", icon: SlidersHorizontal }
   ];
   const activeNav = navItems.find((item) => item.key === activeView) ?? navItems[0];
@@ -2165,7 +2290,7 @@ function App() {
         preparing: "Готовлю безопасное переключение",
         validating_previous: "Проверяю текущий профиль",
         validating_target: "Проверяю целевой профиль",
-        ready: "Проверка завершена — можно переключать",
+        ready: "Проверка завершена. Готово к переключению",
         quiescing: "Закрываю активный Codex",
         activating: "Активирую выбранную авторизацию",
         launching: "Запускаю Codex с новым профилем",
@@ -2394,7 +2519,7 @@ function App() {
 
       const result = await cam.reauthenticateAccount(id, { type: "chatgptDeviceCode" });
       setLoginWizard({ open: true, phase: "waiting", type: "chatgptDeviceCode", result, error: null });
-      setMessage("Сохранённый профиль не удалён. Заверши вход по коду устройства — аккаунт будет починен на месте");
+      setMessage("Сохранённый профиль сохранён. Завершите вход по коду устройства для восстановления сессии.");
     } catch (error) {
       setMessage(buildQuotaRefreshErrorMessage("Не удалось автоматически починить аккаунт", error));
     } finally {
@@ -2759,7 +2884,7 @@ function App() {
       const confirmed = await requestConfirm({
         title: "Переключить аккаунт",
         body: isAntigravity
-          ? "Менеджер применит подготовленный профиль Antigravity и сохранит резервную копию перед записью. Полная совместимость IDE-коннектора ещё проверяется."
+          ? "Менеджер активирует авторизацию выбранного аккаунта в Antigravity IDE, сохранит резервную копию и перезапустит среду. Сессия запустится напрямую без запроса SMS-верификации."
           : settingsData?.desktopClosePolicy === "graceful-only"
             ? "Менеджер заменит активный Codex auth.json только после мягкого закрытия приложения. Если Codex не завершится, переключение будет отменено."
             : "Менеджер сначала мягко закроет Codex, а затем при необходимости завершит только заранее проверенное дерево процессов установленного пакета. После активации он сразу запустит тот же Codex с выбранным профилем.",
@@ -2787,7 +2912,7 @@ function App() {
           ? { ...item, isActive: false }
           : item));
       setMessage(account && accountPlatform(account) === "antigravity"
-        ? "Antigravity профиль переключён, резервная копия сохранена"
+        ? "Профиль Antigravity переключён. IDE перезапускается со свежей сессией без запроса SMS."
         : "Профиль Codex переключён. ChatGPT/Codex безопасно перезапускается с выбранным аккаунтом.");
       void reload();
     } catch (error) {
@@ -2943,6 +3068,10 @@ function App() {
       setActiveView(command.view ?? "accounts");
       return;
     }
+    if (command.view === "activity" || command.action === "navigate:activity") {
+      setAuditDrawerOpen(true);
+      return;
+    }
     if (command.view) {
       setActiveView(command.view);
       return;
@@ -2985,7 +3114,7 @@ function App() {
       case "overview":
         return (
           <OverviewPage
-            accounts={overviewAccounts}
+            accounts={accounts}
             diagnostics={diagnostics}
             latestTransaction={switchTransactions[0] ?? null}
             busy={busy}
@@ -2994,10 +3123,12 @@ function App() {
             isEnglish={isEnglish}
             displayEmail={displayEmail}
             onAdd={platformFilter === "antigravity" ? () => openAntigravityImport() : openLoginWizard}
+            onAddAntigravity={() => openAntigravityImport()}
+            onAddCodex={openLoginWizard}
             onRefresh={() => void refreshAllAccounts()}
             onSwitch={(accountId) => void switchAccount(accountId)}
             onOpenAccounts={() => setActiveView("accounts")}
-            onOpenActivity={() => setActiveView("activity")}
+            onOpenActivity={() => setAuditDrawerOpen(true)}
           />
         );
       case "accounts":
@@ -3136,138 +3267,20 @@ function App() {
           />
         );
       case "settings":
-        {
-          const capabilities = diagnostics?.codexCapabilities;
-          const desktopLifecycle = diagnostics?.desktopLifecycle;
         return (
-          <>
-            <SettingsPage settings={settingsData} busy={busy === "settings"} onUpdate={(input) => void updateSettings(input)} />
-            <details className="settings-runtime-details">
-              <summary><span><TerminalSquare />{isEnglish ? "Runtime and diagnostics" : "Среда и диагностика"}</span><ChevronRight /></summary>
-              <div className="settings-runtime-body">
-            <section className="codex-runtime-panel" aria-label={isEnglish ? "Codex runtime diagnostics" : "Диагностика среды Codex"}>
-              <div className="runtime-heading">
-                <div>
-                  <span>{isEnglish ? "OFFICIAL RUNTIME" : "ОФИЦИАЛЬНАЯ СРЕДА"}</span>
-                  <h3>{isEnglish ? "Codex compatibility" : "Совместимость Codex"}</h3>
-                </div>
-                <span className={`runtime-status ${capabilities?.protocol.compatible ? "is-ready" : "is-warning"}`}>
-                  {capabilities?.protocol.compatible
-                    ? (isEnglish ? "verified" : "проверено")
-                    : (isEnglish ? "attention" : "требует внимания")}
-                </span>
-              </div>
-              <div className="runtime-grid">
-                <div>
-                  <span>{isEnglish ? "Desktop package" : "Desktop-пакет"}</span>
-                  <strong>{desktopLifecycle?.selected?.version ?? (isEnglish ? "not found" : "не найден")}</strong>
-                </div>
-                <div>
-                  <span>AppUserModelId</span>
-                  <strong title={desktopLifecycle?.selected?.appUserModelId ?? undefined}>
-                    {desktopLifecycle?.selected?.appUserModelId ?? "—"}
-                  </strong>
-                </div>
-                <div>
-                  <span>{isEnglish ? "Process tree" : "Дерево процессов"}</span>
-                  <strong>
-                    {desktopLifecycle
-                      ? `${desktopLifecycle.runningRootCount} / ${desktopLifecycle.capturedProcessCount}`
-                      : "—"}
-                  </strong>
-                </div>
-                <div>
-                  <span>{isEnglish ? "CLI" : "CLI"}</span>
-                  <strong>{capabilities?.cliVersion ?? (diagnostics?.codexPath ? (isEnglish ? "probing…" : "проверяется…") : (isEnglish ? "not found" : "не найден"))}</strong>
-                </div>
-                <div>
-                  <span>{isEnglish ? "Identity" : "Профиль"}</span>
-                  <strong>{capabilities?.identity.email ?? capabilities?.identity.authMode ?? (isEnglish ? "not signed in" : "нет входа")}</strong>
-                </div>
-                <div>
-                  <span>{isEnglish ? "Protocol" : "Протокол"}</span>
-                  <strong>{capabilities?.protocol.userAgent ?? "—"}</strong>
-                </div>
-              </div>
-              <div className="runtime-methods" aria-label={isEnglish ? "Supported login methods" : "Поддерживаемые способы входа"}>
-                {(capabilities?.loginMethods ?? []).map((method) => (
-                  <span
-                    key={method.id}
-                    className={`runtime-method ${method.available ? "is-available" : "is-unavailable"} ${method.stability === "internal" ? "is-internal" : ""}`}
-                    title={method.reason ?? undefined}
-                  >
-                    {codexLoginMethodLabel(method.id, isEnglish)}
-                    {method.stability === "internal" ? " · internal" : ""}
-                  </span>
-                ))}
-              </div>
-              {capabilities?.protocol.error ? <p className="runtime-error">{capabilities.protocol.error}</p> : null}
-              {desktopLifecycle ? (
-                <p className={desktopLifecycle.status === "ambiguous" || desktopLifecycle.status === "error" ? "runtime-error" : "settings-help"}>
-                  {desktopLifecycle.message}
-                </p>
-              ) : null}
-            </section>
-            <section className="diagnostic-preview" aria-label={isEnglish ? "Diagnostic export contents" : "Состав диагностического отчёта"}>
-              <div>
-                <span>{isEnglish ? "REDACTED DIAGNOSTICS" : "ОБЕЗЛИЧЕННАЯ ДИАГНОСТИКА"}</span>
-                <h3>{isEnglish ? "Preview before export" : "Предпросмотр состава отчёта"}</h3>
-                <p>
-                  {isEnglish
-                    ? "Includes app/runtime versions, health, switch integrity, release readiness, safe settings and redacted account status."
-                    : "Включает версии приложения и среды, health, целостность переключений, готовность релиза, безопасные настройки и обезличенные статусы аккаунтов."}
-                </p>
-                <p className="diagnostic-exclusion">
-                  <ShieldCheck />
-                  {isEnglish
-                    ? "Never includes tokens, cookies, API keys, auth.json contents or unredacted personal paths."
-                    : "Никогда не включает токены, cookies, API keys, содержимое auth.json и открытые персональные пути."}
-                </p>
-              </div>
-              <div className="diagnostic-preview-actions">
-                <button className="button secondary" disabled={busy !== null} onClick={openLogViewer}><TerminalSquare />{isEnglish ? "View log" : "Посмотреть журнал"}</button>
-                <button className="button" disabled={busy !== null} onClick={exportDiagnosticReport}><FileDown />{isEnglish ? "Export report" : "Сохранить отчёт"}</button>
-              </div>
-            </section>
-            <section className="settings-strip">
-              <div className="workspace-card">
-                <div className="workspace-meta">
-                  <span>{isEnglish ? "Codex workspace" : "Рабочая папка Codex"}</span>
-                  <strong>{displayPath(diagnostics?.workspacePath, isEnglish ? "not selected" : "не выбрана")}</strong>
-                </div>
-                <button className="button secondary" onClick={selectWorkspace}>
-                  <FolderOpen />
-                  {isEnglish ? "Choose" : "Выбрать"}
-                </button>
-              </div>
-              <div className="health-card">
-                <div>
-                  <span>{isEnglish ? "Auto-refresh" : "Автообновление"}</span>
-                  <strong>{autoRefreshLabel(diagnostics?.rateLimitRefreshIntervalMs, language)}</strong>
-                </div>
-                <div>
-                  <span>{isEnglish ? "Accounts" : "Аккаунтов"}</span>
-                  <strong>{accounts.length}</strong>
-                </div>
-                <div>
-                  <span>{isEnglish ? "Active" : "Активный"}</span>
-                  <strong>{stats.active?.label ?? (isEnglish ? "not selected" : "не выбран")}</strong>
-                </div>
-                <div>
-                  <span>{isEnglish ? "Smart mode" : "Умный режим"}</span>
-                  <strong>{settingsData?.smartSwitchMode === "auto" ? (isEnglish ? "auto" : "авто") : settingsData?.smartSwitchMode === "off" ? (isEnglish ? "off" : "выкл") : (isEnglish ? "suggest" : "предлагать")}</strong>
-                </div>
-                <div>
-                  <span>{isEnglish ? "Threshold" : "Порог"}</span>
-                  <strong>{settingsData?.smartSwitchThresholdPercent ?? 10}%</strong>
-                </div>
-              </div>
-            </section>
-              </div>
-            </details>
-          </>
+          <SettingsPage
+            settings={settingsData}
+            diagnostics={diagnostics}
+            antigravityStatus={antigravityProfileStatus}
+            accounts={accounts}
+            busy={busy === "settings"}
+            onUpdate={(input) => void updateSettings(input)}
+            onSelectWorkspace={selectWorkspace}
+            onOpenLogViewer={openLogViewer}
+            onExportDiagnosticReport={exportDiagnosticReport}
+            displayPath={displayPath}
+          />
         );
-        }
     }
   })();
 
@@ -3283,7 +3296,7 @@ function App() {
               <span className="eyebrow">{isEnglish ? "SESSION CONTROL" : "ЦЕНТР СЕССИЙ"}</span>
               <span className="version">v{appVersion}</span>
             </div>
-            <h1>Egoist Account Manager</h1>
+            <h1>Account Manager EGO</h1>
           </div>
         </div>
         <nav className="rail-nav">
@@ -3354,6 +3367,18 @@ function App() {
             ))}
           </nav>
           <div className="actions top-actions">
+            <button
+              className="button secondary audit-top-trigger"
+              onClick={() => setAuditDrawerOpen(true)}
+              title={isEnglish ? "Switch audit journal" : "Журнал аудита переключений"}
+              aria-label={isEnglish ? "Switch audit journal" : "Журнал аудита переключений"}
+            >
+              <Activity size={14} />
+              <span>{isEnglish ? "Audit" : "Аудит"}</span>
+              {switchTransactions.length > 0 && (
+                <span className="audit-badge">{switchTransactions.length}</span>
+              )}
+            </button>
             <button className="button secondary command-trigger" onClick={() => {
               setCommandOpen(true);
               setCommandSearch("");
@@ -3388,9 +3413,6 @@ function App() {
           <section className="process-notice-stack" aria-label={isEnglish ? "Application notifications" : "Уведомления приложения"}>
             {appNotifications.map((notice) => (
               <aside className={`process-notice is-${notice.tone}`} role={notice.tone === "error" ? "alert" : "status"} aria-live={notice.tone === "error" ? "assertive" : "polite"} key={notice.key}>
-                <span className="process-notice-icon">
-                  {notice.tone === "success" ? <CheckCircle2 /> : notice.tone === "warning" || notice.tone === "error" ? <AlertTriangle /> : <Activity />}
-                </span>
                 <span className="process-notice-copy">
                   <span>{notice.progress?.label ?? (notice.tone === "warning" ? (isEnglish ? "ATTENTION" : "ВНИМАНИЕ") : notice.tone === "error" ? (isEnglish ? "ACTION REQUIRED" : "НУЖНО ДЕЙСТВИЕ") : (isEnglish ? "CODEX MANAGER" : "CODEX MANAGER"))}</span>
                   <strong>{notice.title}</strong>
@@ -3620,6 +3642,15 @@ function App() {
           </div>
         </div>
       ) : null}
+      <AuditDrawer
+        open={auditDrawerOpen}
+        onClose={() => setAuditDrawerOpen(false)}
+        transactions={switchTransactions}
+        history={switchHistory}
+        accounts={accounts}
+        isEnglish={isEnglish}
+        displayEmail={displayEmail}
+      />
     </main>
   );
 }
@@ -3631,7 +3662,7 @@ function BridgeUnavailable() {
       <div>
         <p>DESKTOP BRIDGE</p>
         <h1>Интерфейс не подключён к приложению</h1>
-        <p>Данные аккаунтов не загружены и не потеряны. Полностью закрой Egoist Account Manager и открой его снова. Если экран повторится — переустанови текущую версию поверх существующей.</p>
+        <p>Данные аккаунтов не загружены и не потеряны. Перезапустите Account Manager EGO. При повторении экрана переустановите текущую версию поверх существующей.</p>
       </div>
     </main>
   );

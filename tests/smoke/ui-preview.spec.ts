@@ -23,7 +23,7 @@ test("3.0.10 помещает 3×3 аккаунта и открывает пол
       insideMeta: titleRect.left >= metaRect.left - 1 && titleRect.right <= metaRect.right + 1
     };
   });
-  expect(brandLayout).toEqual({ title: "Egoist Account Manager", fitsWidth: true, insideMeta: true });
+  expect(brandLayout).toEqual({ title: "Account Manager EGO", fitsWidth: true, insideMeta: true });
   await nav.getByText("Аккаунты", { exact: true }).click();
   await expect(page.locator(".profile-card")).toHaveCount(2);
 

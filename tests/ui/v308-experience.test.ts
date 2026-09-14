@@ -36,10 +36,8 @@ describe("3.0.8 authorization and control-room experience", () => {
     expect(styles).toMatch(/\.switch-stage::before,[\s\S]*?display:\s*none;/);
   });
 
-  it("fills the overview with reserve and readiness information", () => {
-    expect(overviewSource).toContain("continuation-queue");
-    expect(overviewSource).toContain("overview-operation-signals");
-    expect(overviewSource).toContain("Ближайший сброс");
-    expect(styles).toContain("grid-template-rows: auto auto minmax(250px, 1fr)");
+  it("fills the overview with clean quota metrics and schedule", () => {
+    expect(overviewSource).toContain("clean-quota-card");
+    expect(overviewSource).toContain("schedule-card-list");
   });
 });

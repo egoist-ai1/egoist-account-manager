@@ -1,8 +1,8 @@
 {
   "name": "codex-account-manager",
-  "productName": "Egoist Account Manager",
-  "version": "3.1.6",
-  "description": "Egoist Account Manager — local Windows profile switcher and quota dashboard for user-authorized AI coding accounts.",
+  "productName": "Account Manager EGO",
+  "version": "3.1.7",
+  "description": "Account Manager EGO — local Windows profile switcher and quota dashboard for user-authorized AI coding accounts.",
   "author": "Egoist Gorbachev",
   "license": "MIT",
   "repository": {
@@ -23,6 +23,7 @@
     "build:preload": "esbuild src/main/preload.ts --bundle --platform=browser --format=cjs --external:electron --outfile=dist/main/preload.cjs",
     "build": "pnpm run typecheck && pnpm run lint && pnpm run clean:dist && tsc -p tsconfig.main.json && pnpm run build:preload && vite build && pnpm run rebuild:native:electron && electron-builder --win nsis portable",
     "build:dir": "pnpm run typecheck && pnpm run lint && pnpm run clean:dist && tsc -p tsconfig.main.json && pnpm run build:preload && vite build && pnpm run rebuild:native:electron && electron-builder --dir",
+    "build:installer": "node scripts/package-branded-installer.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "smoke": "playwright test",
     "typecheck": "tsc --noEmit",
@@ -43,6 +44,7 @@
   },
   "dependencies": {
     "@fontsource-variable/montserrat": "^5.2.8",
+    "@fontsource-variable/unbounded": "^5.3.0",
     "better-sqlite3": "^12.4.6",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
@@ -53,16 +55,16 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
-    "@electron/fuses": "1.8.0",
     "@electron/asar": "3.4.1",
+    "@electron/fuses": "1.8.0",
     "@electron/rebuild": "^4.0.4",
     "@eslint/js": "9.0.0",
     "@playwright/test": "^1.57.0",
-    "@vitejs/plugin-react": "^4.6.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.10.1",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",
     "electron": "^39.2.7",
@@ -78,7 +80,7 @@
   },
   "build": {
     "appId": "one.egoist.codex-account-manager",
-    "productName": "Egoist Account Manager",
+    "productName": "Account Manager EGO",
     "electronDist": "node_modules/electron/dist",
     "asar": true,
     "publish": [
@@ -110,24 +112,24 @@
         "nsis",
         "portable"
       ],
-      "requestedExecutionLevel": "asInvoker",
+      "requestedExecutionLevel": "requireAdministrator",
       "signAndEditExecutable": true,
       "signExecutable": false,
       "verifyUpdateCodeSignature": false
     },
     "nsis": {
-      "artifactName": "Egoist-Account-Manager-Setup-${version}.${ext}",
+      "artifactName": "Account-Manager-EGO-Setup-${version}.${ext}",
       "oneClick": true,
       "perMachine": false,
       "allowToChangeInstallationDirectory": false,
       "runAfterFinish": true,
-      "shortcutName": "Egoist Account Manager",
+      "shortcutName": "Account Manager EGO",
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico",
       "deleteAppDataOnUninstall": false
     },
     "portable": {
-      "artifactName": "Egoist-Account-Manager-${version}.${ext}"
+      "artifactName": "Account-Manager-EGO-${version}.${ext}"
     }
   }
 }

@@ -100,6 +100,12 @@ const api: AppApi = {
     const listener = (_event: Electron.IpcRendererEvent, payload: Parameters<typeof callback>[0]) => callback(payload);
     ipcRenderer.on("app:notification", listener);
     return () => ipcRenderer.off("app:notification", listener);
+  },
+  getTrayPlatform: () => ipcRenderer.invoke("tray:getPlatform"),
+  onTrayPlatform: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, platform: "codex" | "antigravity") => callback(platform);
+    ipcRenderer.on("tray:platform", listener);
+    return () => ipcRenderer.off("tray:platform", listener);
   }
 };
 

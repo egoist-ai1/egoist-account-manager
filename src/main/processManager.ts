@@ -52,7 +52,7 @@ function findFromWhere(): string | null {
 }
 
 function findFromAppxPackage(): string | null {
-  const command = "(Get-AppxPackage OpenAI.Codex -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty InstallLocation)";
+  const command = "$ProgressPreference = 'SilentlyContinue'; (Get-AppxPackage OpenAI.Codex -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty InstallLocation)";
   const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], {
     encoding: "utf8",
     windowsHide: true
@@ -75,7 +75,7 @@ export function getOpenAiDesktopCandidates(installLocation: string): string[] {
 
 function findDesktopFromAppxPackage(): string | null {
   const command =
-    "(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @('OpenAI.Codex','OpenAI.ChatGPT') } | Select-Object -First 1 -ExpandProperty InstallLocation)";
+    "$ProgressPreference = 'SilentlyContinue'; (Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @('OpenAI.Codex','OpenAI.ChatGPT') } | Select-Object -First 1 -ExpandProperty InstallLocation)";
   const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], {
     encoding: "utf8",
     windowsHide: true
@@ -108,9 +108,53 @@ function findDesktopFromKnownLocations(): string | null {
   ]);
 }
 
+function findFromOpenAICodexBinDirs(): string | null {
+  if (process.platform !== "win32") return null;
+  const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
+  const baseDirs = [
+    path.join(localAppData, "OpenAI", "Codex", "bin"),
+    path.join(os.homedir(), "AppData", "Local", "OpenAI", "Codex", "bin"),
+    path.join(localAppData, "Programs", "Codex", "bin"),
+    path.join(localAppData, "Programs", "OpenAI", "Codex", "bin")
+  ];
+
+  for (const baseDir of baseDirs) {
+    if (!fs.existsSync(baseDir)) continue;
+    try {
+      const direct = path.join(baseDir, "codex.exe");
+      if (fs.existsSync(direct) && fs.statSync(direct).isFile()) return direct;
+
+      const entries = fs.readdirSync(baseDir, { withFileTypes: true });
+      const candidates: Array<{ path: string; mtimeMs: number }> = [];
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const exePath = path.join(baseDir, entry.name, "codex.exe");
+          if (fs.existsSync(exePath)) {
+            try {
+              const stat = fs.statSync(exePath);
+              if (stat.isFile()) {
+                candidates.push({ path: exePath, mtimeMs: stat.mtimeMs });
+              }
+            } catch {
+              // ignore
+            }
+          }
+        }
+      }
+      if (candidates.length > 0) {
+        candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+        return candidates[0].path;
+      }
+    } catch {
+      // continue
+    }
+  }
+  return null;
+}
+
 function findFromRunningProcesses(): string | null {
   const command =
-    "Get-CimInstance Win32_Process | Where-Object { $_.Name -ieq 'codex.exe' -and $_.CommandLine -match 'resources\\\\codex(\\.exe)?' } | Select-Object -First 1 -ExpandProperty ExecutablePath";
+    "Get-CimInstance Win32_Process | Where-Object { $_.Name -ieq 'codex.exe' -and $_.ExecutablePath -match 'codex\\\\.exe$' } | Select-Object -First 1 -ExpandProperty ExecutablePath";
   const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], {
     encoding: "utf8",
     windowsHide: true
@@ -121,7 +165,7 @@ function findFromRunningProcesses(): string | null {
 
 function findDesktopFromRunningProcesses(): string | null {
   const command =
-    "Get-CimInstance Win32_Process | Where-Object { ($_.Name -ieq 'ChatGPT.exe' -or $_.Name -ieq 'Codex.exe') -and $_.ExecutablePath -match '\\\\app\\\\(ChatGPT|Codex)\\.exe$' -and $_.CommandLine -notmatch '(^|\\s)--type=' } | Select-Object -First 1 -ExpandProperty ExecutablePath";
+    "Get-CimInstance Win32_Process | Where-Object { ($_.Name -ieq 'ChatGPT.exe' -or $_.Name -ieq 'Codex.exe') -and $_.ExecutablePath -match '\\\\(app\\\\)?(ChatGPT|Codex)\\.exe$' -and $_.CommandLine -notmatch '(^|\\s)--type=' } | Select-Object -First 1 -ExpandProperty ExecutablePath";
   const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], {
     encoding: "utf8",
     windowsHide: true
@@ -139,11 +183,11 @@ export function ensureExecutableCodexPath(rawPath: string | null): string | null
   // child_process.spawn() with EPERM (errno -4048). We bridge/stage the binary into
   // %LOCALAPPDATA%\egoist-account-manager\bin\codex\ so it can be spawned freely.
   if (rawPath.toLowerCase().includes("windowsapps")) {
+    const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
+    const targetDir = path.join(localAppData, "egoist-account-manager", "bin", "codex");
+    const targetFile = path.join(targetDir, path.basename(rawPath));
     try {
-      const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
-      const targetDir = path.join(localAppData, "egoist-account-manager", "bin", "codex");
       fs.mkdirSync(targetDir, { recursive: true });
-      const targetFile = path.join(targetDir, path.basename(rawPath));
       let shouldCopy = true;
       if (fs.existsSync(targetFile)) {
         try {
@@ -157,12 +201,19 @@ export function ensureExecutableCodexPath(rawPath: string | null): string | null
         }
       }
       if (shouldCopy) {
-        fs.copyFileSync(rawPath, targetFile);
         try {
-          const srcStat = fs.statSync(rawPath);
-          fs.utimesSync(targetFile, srcStat.atime, srcStat.mtime);
-        } catch {
-          // ignore utimes error
+          fs.copyFileSync(rawPath, targetFile);
+          try {
+            const srcStat = fs.statSync(rawPath);
+            fs.utimesSync(targetFile, srcStat.atime, srcStat.mtime);
+          } catch {
+            // ignore utimes error
+          }
+        } catch (copyErr) {
+          if (fs.existsSync(targetFile)) {
+            return targetFile;
+          }
+          throw copyErr;
         }
         // Copy companion rg.exe if available in source directory
         const srcDir = path.dirname(rawPath);
@@ -178,6 +229,9 @@ export function ensureExecutableCodexPath(rawPath: string | null): string | null
       }
       return targetFile;
     } catch {
+      if (fs.existsSync(targetFile)) {
+        return targetFile;
+      }
       return rawPath;
     }
   }
@@ -187,13 +241,14 @@ export function ensureExecutableCodexPath(rawPath: string | null): string | null
 export function resolveCodexPath(): string | null {
   const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
   const candidate = (
+    findFromOpenAICodexBinDirs() ??
     firstExisting([
       path.join(localAppData, "OpenAI", "Codex", "bin", "codex.exe"),
       path.join(os.homedir(), "AppData", "Local", "OpenAI", "Codex", "bin", "codex.exe")
     ]) ??
+    findFromRunningProcesses() ??
     findFromWhere() ??
-    findFromAppxPackage() ??
-    findFromRunningProcesses()
+    findFromAppxPackage()
   );
   return ensureExecutableCodexPath(candidate);
 }

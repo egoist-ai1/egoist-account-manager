@@ -1,46 +1,50 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import pngToIco from "png-to-ico";
 
 const projectDir = path.resolve(import.meta.dirname, "..");
 const sourcePng = path.join(projectDir, "assets", "icon-3.0.6.png");
 const outputPng = path.join(projectDir, "assets", "icon.png");
 const outputIco = path.join(projectDir, "assets", "icon.ico");
-const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "cam-icon-"));
-const sizes = [16, 24, 32, 48, 64, 128, 256, 512, 1024];
+const buildIco = path.join(projectDir, "build", "icon.ico");
 
-try {
-  const pngPaths = sizes.map((size) => {
-    const output = path.join(tempDir, `icon-${size}.png`);
-    const render = spawnSync("magick.exe", [
-      "-background", "none",
-      sourcePng,
-      "-filter", "LanczosSharp",
-      "-resize", `${size}x${size}`,
-      "-strip",
-      `PNG32:${output}`
-    ], { encoding: "utf8", windowsHide: true });
-    if (render.error || render.status !== 0) {
-      throw new Error(render.error?.message ?? render.stderr.trim() ?? `ImageMagick exited with ${render.status}`);
-    }
-    return output;
-  });
+const pythonScript = `
+import os
+from PIL import Image
 
-  fs.copyFileSync(pngPaths.at(-1), outputPng);
-  fs.writeFileSync(outputIco, await pngToIco(pngPaths.filter((file) => !file.endsWith("512.png") && !file.endsWith("1024.png"))));
+src = r"${sourcePng.replace(/\\/g, "\\\\")}"
+out_png = r"${outputPng.replace(/\\/g, "\\\\")}"
+out_ico = r"${outputIco.replace(/\\/g, "\\\\")}"
+build_ico = r"${buildIco.replace(/\\/g, "\\\\")}"
 
-  for (const destination of [
-    path.join(projectDir, "assets", "logo.png"),
-    path.join(projectDir, "public", "logo.png"),
-    path.join(projectDir, "src", "renderer", "assets", "app-avatar-mark.png"),
-    path.join(projectDir, "src", "renderer", "assets", "logo.png")
-  ]) {
-    fs.copyFileSync(outputPng, destination);
-  }
+img = Image.open(src).convert('RGBA')
+icon_512 = img.resize((512, 512), Image.Resampling.LANCZOS)
+icon_512.save(out_png, 'PNG', optimize=True)
 
-  console.log(`Generated application icons from ImageGen master ${path.relative(projectDir, sourcePng)}.`);
-} finally {
-  fs.rmSync(tempDir, { recursive: true, force: true });
+ico_sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+img.save(out_ico, format='ICO', sizes=ico_sizes)
+img.save(build_ico, format='ICO', sizes=ico_sizes)
+print('Pillow icon generation complete')
+`;
+
+const res = spawnSync("uv", ["run", "--with", "pillow", "python", "-c", pythonScript], {
+  cwd: projectDir,
+  encoding: "utf8",
+  windowsHide: true
+});
+
+if (res.error || res.status !== 0) {
+  throw new Error(res.error?.message ?? res.stderr.trim() ?? `Icon build failed with status ${res.status}`);
 }
+
+for (const destination of [
+  path.join(projectDir, "assets", "logo.png"),
+  path.join(projectDir, "public", "logo.png"),
+  path.join(projectDir, "src", "renderer", "assets", "app-avatar-mark.png"),
+  path.join(projectDir, "src", "renderer", "assets", "logo.png")
+]) {
+  fs.copyFileSync(outputPng, destination);
+}
+
+console.log(`Generated application icons from master ${path.relative(projectDir, sourcePng)}.`);
+

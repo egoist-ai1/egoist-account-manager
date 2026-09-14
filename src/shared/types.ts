@@ -680,4 +680,6 @@ export interface AppApi {
   onAntigravityOAuthError(callback: (message: string) => void): () => void;
   onUpdateStatus(callback: (result: UpdateCheckResult) => void): () => void;
   onAppNotification(callback: (notification: AppNotificationPayload) => void): () => void;
+  getTrayPlatform(): Promise<"codex" | "antigravity">;
+  onTrayPlatform(callback: (platform: "codex" | "antigravity") => void): () => void;
 }

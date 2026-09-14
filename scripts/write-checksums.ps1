@@ -19,6 +19,9 @@ $package = Get-Content -Raw -Encoding utf8 (Join-Path $PSScriptRoot "..\\package
 $version = $package.version
 $files = Get-ChildItem -LiteralPath $ReleaseDir -File | Where-Object {
   $_.Name -in @(
+    "Account-Manager-EGO-Setup-$version.exe",
+    "Account-Manager-EGO-$version.exe",
+    "Account-Manager-EGO-Setup-$version.exe.blockmap",
     "Egoist-Account-Manager-Setup-$version.exe",
     "Egoist-Account-Manager-$version.exe",
     "Egoist-Account-Manager-Setup-$version.exe.blockmap",

@@ -1,0 +1,20 @@
+<svg viewBox="0 0 24 24" width="1em" height="1em" xmlns="http://www.w3.org/2000/svg" style="flex:none;line-height:1">
+  <title>Google Antigravity</title>
+  <defs>
+    <linearGradient id="ag-grad-primary" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#C084FC" />
+      <stop offset="45%" stop-color="#818CF8" />
+      <stop offset="100%" stop-color="#38BDF8" />
+    </linearGradient>
+    <linearGradient id="ag-grad-glow" x1="12" y1="3" x2="12" y2="21" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E879F9" />
+      <stop offset="100%" stop-color="#4F46E5" />
+    </linearGradient>
+  </defs>
+  <!-- Quantum Gravitational Core -->
+  <path d="M12 2.5L20.66 7.5V16.5L12 21.5L3.34 16.5V7.5L12 2.5Z" stroke="url(#ag-grad-primary)" stroke-width="1.6" stroke-linejoin="round" fill="none" opacity="0.85"/>
+  <path d="M12 6.2L17.5 9.4V14.6L12 17.8L6.5 14.6V9.4L12 6.2Z" fill="url(#ag-grad-primary)" opacity="0.25"/>
+  <!-- Central Antigravity Dynamic Spark / Singularity -->
+  <path d="M12 4.5L14.2 9.8L19.5 12L14.2 14.2L12 19.5L9.8 14.2L4.5 12L9.8 9.8L12 4.5Z" fill="url(#ag-grad-glow)"/>
+  <circle cx="12" cy="12" r="1.8" fill="#FFFFFF"/>
+</svg>

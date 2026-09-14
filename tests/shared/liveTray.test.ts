@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LIVE_TRAY_REPRESENTATIONS, buildLiveTraySnapshot, renderLiveTrayBitmap } from "../../src/shared/liveTray";
+import { LIVE_TRAY_REPRESENTATIONS, buildLiveTraySnapshot, buildDualLiveTraySnapshot, renderLiveTrayBitmap } from "../../src/shared/liveTray";
 import type { ManagedAccount } from "../../src/shared/types";
 
 function account(input: Partial<ManagedAccount> = {}): ManagedAccount {
@@ -56,7 +56,7 @@ describe("live tray indicator", () => {
       iconText: "60"
     });
     expect(snapshot.tooltip).toContain("текущий недельный лимит: 60%");
-    expect(snapshot.tooltip).toContain("Egoist Account Manager");
+    expect(snapshot.tooltip).toContain("Account Manager EGO");
   });
 
   it("does not duplicate one generic weekly quota into a five-hour window", () => {
@@ -101,7 +101,7 @@ describe("live tray indicator", () => {
     const snapshot = buildLiveTraySnapshot([account()], { now: 1_100, privacyMode: true });
     expect(snapshot.tooltip).toContain("Активный профиль");
     expect(snapshot.tooltip).not.toContain("Primary profile");
-    expect(snapshot.tooltip).toContain("Egoist Account Manager");
+    expect(snapshot.tooltip).toContain("Account Manager EGO");
     const bitmap = renderLiveTrayBitmap(snapshot);
     expect(bitmap).toHaveLength(32 * 32 * 4);
     expect(bitmap.some((channel) => channel > 0)).toBe(true);
@@ -180,5 +180,24 @@ describe("live tray indicator", () => {
 
   it("reports an empty active state without inventing a percentage", () => {
     expect(buildLiveTraySnapshot([], { now: 1_100 })).toMatchObject({ state: "empty", accountId: null, remainingPercent: null, iconText: "—" });
+  });
+
+  it("builds dual live tray snapshot when both Codex and Antigravity are active", () => {
+    const codexAcc = account({ id: "codex-1", platform: "codex", label: "Codex Plus", fiveHourUsedPercent: 20, weeklyUsedPercent: 20, primaryUsedPercent: 20, secondaryUsedPercent: 20 });
+    const agAcc = account({ id: "ag-1", platform: "antigravity", label: "AG Pro", fiveHourUsedPercent: 10, weeklyUsedPercent: 10, primaryUsedPercent: 10, secondaryUsedPercent: 10 });
+    const dual = buildDualLiveTraySnapshot([codexAcc, agAcc], { now: 1_100 });
+    expect(dual.codex).toMatchObject({ accountId: "codex-1", platform: "codex", remainingPercent: 80 });
+    expect(dual.antigravity).toMatchObject({ accountId: "ag-1", platform: "antigravity", remainingPercent: 90 });
+    expect(dual.primary.accountId).toBe("codex-1");
+  });
+
+  it("renders distinct emerald bitmap for Antigravity", () => {
+    const snapshot = buildLiveTraySnapshot([account()], { now: 1_100 });
+    const codexBitmap = renderLiveTrayBitmap(snapshot, 32, "codex");
+    const agBitmap = renderLiveTrayBitmap(snapshot, 32, "antigravity");
+    expect(codexBitmap).toHaveLength(32 * 32 * 4);
+    expect(agBitmap).toHaveLength(32 * 32 * 4);
+    // Codex accent has higher blue (B in BGRA offset 0), Antigravity has higher green (G in BGRA offset 1)
+    expect(Buffer.from(codexBitmap).toString("hex")).not.toBe(Buffer.from(agBitmap).toString("hex"));
   });
 });

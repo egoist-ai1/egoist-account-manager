@@ -1,4 +1,4 @@
-import type { ManagedAccount } from "./types.js";
+import type { AccountPlatform, ManagedAccount } from "./types.js";
 import { buildQuotaFreshness, hasCurrentQuotaRefreshFailure } from "./quotaFreshness.js";
 import { buildProviderQuotaState } from "./providerAdapter.js";
 import type { ProviderLimitWindowType } from "./providerAdapter.js";
@@ -17,6 +17,17 @@ export interface LiveTraySnapshot {
   iconText: string;
   tooltip: string;
   updatedAt: number | null;
+}
+
+export interface PlatformTraySnapshot extends LiveTraySnapshot {
+  platform: AccountPlatform;
+  planType: string;
+}
+
+export interface DualLiveTraySnapshot {
+  codex: PlatformTraySnapshot | null;
+  antigravity: PlatformTraySnapshot | null;
+  primary: PlatformTraySnapshot;
 }
 
 export const LIVE_TRAY_REPRESENTATIONS = [
@@ -44,30 +55,15 @@ function quotaLabel(value: number | null): string {
   return value === null ? "—" : `${value}%`;
 }
 
-export function buildLiveTraySnapshot(
+export function buildPlatformTraySnapshot(
   accounts: ManagedAccount[],
+  platform: AccountPlatform,
   options: { now?: number; staleAfterSeconds?: number; privacyMode?: boolean; language?: "ru" | "en" } = {}
-): LiveTraySnapshot {
+): PlatformTraySnapshot | null {
   const now = options.now ?? Math.floor(Date.now() / 1000);
   const isEnglish = options.language === "en";
-  const active = accounts.find((account) => account.isActive && account.platform === "codex")
-    ?? accounts.find((account) => account.isActive)
-    ?? null;
-  if (!active) {
-    return {
-      state: "empty",
-      accountId: null,
-      accountLabel: isEnglish ? "No active account" : "Нет активного аккаунта",
-      remainingPercent: null,
-      fiveHourRemaining: null,
-      weeklyRemaining: null,
-      activeWindowType: null,
-      activeWindowResetAt: null,
-      iconText: "—",
-      tooltip: isEnglish ? "Egoist Account Manager · no active account" : "Egoist Account Manager · активный аккаунт не выбран",
-      updatedAt: null
-    };
-  }
+  const active = accounts.find((account) => account.isActive && (account.platform ?? "codex") === platform) ?? null;
+  if (!active) return null;
 
   const accountLabel = options.privacyMode
     ? (isEnglish ? "Active profile" : "Активный профиль")
@@ -102,6 +98,7 @@ export function buildLiveTraySnapshot(
           ? "critical"
           : "fresh";
   const iconText = state === "error" ? "!" : state === "stale" ? "~" : state === "unknown" ? "—" : String(remainingPercent);
+  const platformName = platform === "antigravity" ? "Antigravity" : "Codex";
   const activeWindowName = activeWindow?.windowType === "weekly"
     ? (isEnglish ? "current weekly quota" : "текущий недельный лимит")
     : activeWindow?.windowType === "5h"
@@ -115,12 +112,14 @@ export function buildLiveTraySnapshot(
         ? (isEnglish ? "quota unavailable" : "лимиты недоступны")
         : (isEnglish ? `${activeWindowName} ${remainingPercent}%` : `${activeWindowName} ${remainingPercent}%`);
   const tooltip = [
-    `Egoist Account Manager · ${accountLabel}`,
+    `Account Manager EGO · ${platformName} · ${accountLabel}`,
     activeWindow ? `${activeWindowName}: ${quotaLabel(remainingPercent)}` : (isEnglish ? "Current quota: —" : "Текущий лимит: —"),
     `${status} · ${ageLabel(active.lastRefreshAt, now, isEnglish)}`
   ].join("\n");
 
   return {
+    platform,
+    planType: active.planType,
     state,
     accountId: active.id,
     accountLabel,
@@ -133,6 +132,45 @@ export function buildLiveTraySnapshot(
     tooltip,
     updatedAt: active.lastRefreshAt
   };
+}
+
+export function buildDualLiveTraySnapshot(
+  accounts: ManagedAccount[],
+  options: { now?: number; staleAfterSeconds?: number; privacyMode?: boolean; language?: "ru" | "en" } = {}
+): DualLiveTraySnapshot {
+  const codex = buildPlatformTraySnapshot(accounts, "codex", options);
+  const antigravity = buildPlatformTraySnapshot(accounts, "antigravity", options);
+  const isEnglish = options.language === "en";
+  const primaryFallback: PlatformTraySnapshot = {
+    platform: "codex",
+    planType: "unknown",
+    state: "empty",
+    accountId: null,
+    accountLabel: isEnglish ? "No active account" : "Нет активного аккаунта",
+    remainingPercent: null,
+    fiveHourRemaining: null,
+    weeklyRemaining: null,
+    activeWindowType: null,
+    activeWindowResetAt: null,
+    iconText: "—",
+    tooltip: isEnglish ? "Account Manager EGO · no active account" : "Account Manager EGO · активный аккаунт не выбран",
+    updatedAt: null
+  };
+  const primary = codex ?? antigravity ?? primaryFallback;
+  return { codex, antigravity, primary };
+}
+
+export function buildLiveTraySnapshot(
+  accounts: ManagedAccount[],
+  options: { now?: number; staleAfterSeconds?: number; privacyMode?: boolean; language?: "ru" | "en" } = {},
+  platform?: AccountPlatform
+): LiveTraySnapshot {
+  if (platform) {
+    const pSnap = buildPlatformTraySnapshot(accounts, platform, options);
+    if (pSnap) return pSnap;
+  }
+  const dual = buildDualLiveTraySnapshot(accounts, options);
+  return dual.primary;
 }
 
 type Rgba = readonly [number, number, number, number];
@@ -236,18 +274,31 @@ function downsampleBgra(source: Uint8Array, sourceSize: number, targetSize: numb
 }
 
 /** Renders a pixel-aligned BGRA representation for one Windows tray DPI scale. */
-export function renderLiveTrayBitmap(snapshot: LiveTraySnapshot, targetSize = 32): Uint8Array {
+export function renderLiveTrayBitmap(
+  snapshot: LiveTraySnapshot,
+  targetSize = 32,
+  platform: AccountPlatform = "codex"
+): Uint8Array {
   const scale = 4;
   const size = targetSize * scale;
   const buffer = new Uint8Array(size * size * 4);
-  const palette = {
-    fresh: { accent: [160, 119, 255, 255] as Rgba, surface: [18, 10, 34, 255] as Rgba },
-    critical: { accent: [255, 177, 88, 255] as Rgba, surface: [34, 20, 10, 255] as Rgba },
-    stale: { accent: [151, 147, 169, 255] as Rgba, surface: [18, 17, 24, 255] as Rgba },
-    error: { accent: [255, 107, 145, 255] as Rgba, surface: [35, 12, 23, 255] as Rgba },
-    unknown: { accent: [153, 144, 178, 255] as Rgba, surface: [17, 14, 26, 255] as Rgba },
-    empty: { accent: [118, 107, 143, 255] as Rgba, surface: [15, 13, 21, 255] as Rgba }
-  }[snapshot.state];
+  const palette = platform === "antigravity"
+    ? {
+        fresh: { accent: [49, 208, 170, 255] as Rgba, surface: [10, 26, 22, 255] as Rgba },
+        critical: { accent: [255, 177, 88, 255] as Rgba, surface: [34, 20, 10, 255] as Rgba },
+        stale: { accent: [136, 168, 160, 255] as Rgba, surface: [16, 24, 22, 255] as Rgba },
+        error: { accent: [255, 107, 145, 255] as Rgba, surface: [35, 12, 23, 255] as Rgba },
+        unknown: { accent: [136, 168, 160, 255] as Rgba, surface: [16, 24, 22, 255] as Rgba },
+        empty: { accent: [90, 138, 128, 255] as Rgba, surface: [14, 22, 20, 255] as Rgba }
+      }[snapshot.state]
+    : {
+        fresh: { accent: [160, 119, 255, 255] as Rgba, surface: [18, 10, 34, 255] as Rgba },
+        critical: { accent: [255, 177, 88, 255] as Rgba, surface: [34, 20, 10, 255] as Rgba },
+        stale: { accent: [151, 147, 169, 255] as Rgba, surface: [18, 17, 24, 255] as Rgba },
+        error: { accent: [255, 107, 145, 255] as Rgba, surface: [35, 12, 23, 255] as Rgba },
+        unknown: { accent: [153, 144, 178, 255] as Rgba, surface: [17, 14, 26, 255] as Rgba },
+        empty: { accent: [118, 107, 143, 255] as Rgba, surface: [15, 13, 21, 255] as Rgba }
+      }[snapshot.state];
   const outerInset = Math.max(1, Math.round(size * 0.025));
   const outerRadius = Math.round(size * 0.22);
   fillRoundedSquare(buffer, size, outerInset, outerRadius, palette.surface);

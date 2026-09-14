@@ -27,12 +27,26 @@ describe("antigravityGoogleAuthService", () => {
     expect(url.searchParams.get("redirect_uri")).toBe("http://localhost:36742/oauth-callback");
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
     expect(url.searchParams.get("access_type")).toBe("offline");
-    expect(url.searchParams.get("prompt")).toBe("consent");
+    expect(url.searchParams.get("prompt")).toBe("select_account consent");
     expect(url.searchParams.has("include_granted_scopes")).toBe(false);
     expect(url.searchParams.get("scope")).not.toContain("openid");
     for (const scope of ANTIGRAVITY_GOOGLE_OAUTH_SCOPES) {
       expect(url.searchParams.get("scope")).toContain(scope);
     }
+  });
+
+  it("supports prompt override and loginHint in Google OAuth URL", () => {
+    const url = new URL(buildAntigravityGoogleAuthUrl({
+      clientId: "client-id",
+      redirectUri: "http://localhost:36742/oauth-callback",
+      state: "state-1",
+      codeChallenge: "challenge-1",
+      prompt: "consent",
+      loginHint: "test@example.com"
+    }));
+
+    expect(url.searchParams.get("prompt")).toBe("consent");
+    expect(url.searchParams.get("login_hint")).toBe("test@example.com");
   });
 
   it("provides official Antigravity OAuth credentials by default and allows custom override", () => {

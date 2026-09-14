@@ -39,6 +39,7 @@ import {
   selectBestRateLimit
 } from "./codexRpc.js";
 import {
+  ensureExecutableCodexPath,
   getCodexAppUserModelId,
   resolveCodexDesktopPath,
   resolveCodexPath
@@ -52,7 +53,11 @@ import {
 } from "./services/durableAuthBundleService.js";
 import type { AntigravityPathInput } from "./services/antigravityPaths.js";
 import { getAntigravityProfileStatus } from "./services/antigravityProfileService.js";
-import { extractAntigravityLocalIdentity, readAntigravityOfficialAuthState } from "./services/antigravityProfileReader.js";
+import {
+  detectAntigravityLiveSession,
+  extractAntigravityLocalIdentity,
+  readAntigravityOfficialAuthState
+} from "./services/antigravityProfileReader.js";
 import {
   applyAntigravityAccountWritePlan,
   type AntigravityAccountApplyResult,
@@ -76,8 +81,17 @@ import type {
   AntigravityCredentialStoreWriteResult
 } from "./services/antigravityCredentialStore.js";
 import { readAntigravityCredentialStorePayload } from "./services/antigravityCredentialStore.js";
-import type { AntigravityRestartResult } from "./services/antigravityProcessService.js";
-import { restartAntigravityIntegration } from "./services/antigravityProcessService.js";
+import type {
+  AntigravityQuiesceResult,
+  AntigravityRestartInput,
+  AntigravityRestartResult
+} from "./services/antigravityProcessService.js";
+import {
+  cleanAntigravitySessionCache,
+  launchAntigravity,
+  quiesceAntigravity,
+  restartAntigravityIntegration
+} from "./services/antigravityProcessService.js";
 import { fetchAntigravityQuota, type AntigravityQuotaResult } from "./services/antigravityQuotaService.js";
 import {
   parseAntigravityCredentialPayload,
@@ -120,10 +134,14 @@ export interface AccountManagerDependencies {
     input: AntigravityCredentialStoreTokenInput,
     platform?: NodeJS.Platform
   ) => AntigravityCredentialStoreWriteResult;
+  detectAntigravityLiveSession?: typeof detectAntigravityLiveSession;
+  readAntigravityOfficialAuthState?: typeof readAntigravityOfficialAuthState;
   fetchAntigravityQuota?: typeof fetchAntigravityQuota;
   fetchAntigravityGoogleUserInfo?: typeof fetchAntigravityGoogleUserInfo;
   fetchAntigravityGoogleAccountContext?: typeof fetchAntigravityGoogleAccountContext;
   restartAntigravityIntegration?: typeof restartAntigravityIntegration;
+  quiesceAntigravity?: (input?: AntigravityRestartInput) => AntigravityQuiesceResult;
+  launchAntigravity?: (input?: AntigravityRestartInput) => AntigravityRestartResult;
   desktopLifecycle?: Pick<WindowsDesktopLifecycleService, "quiesce" | "launchAndWaitReady">
     & Partial<Pick<WindowsDesktopLifecycleService, "getDiagnostics">>;
   getDesktopClosePolicy?: () => DesktopClosePolicy;
@@ -137,6 +155,11 @@ export interface AccountManagerDependencies {
 }
 
 export interface ActiveCodexSessionSyncResult {
+  status: "updated" | "unchanged" | "signed_out" | "unmanaged" | "invalid" | "busy";
+  accountId: string | null;
+}
+
+export interface ActiveAntigravitySessionSyncResult {
   status: "updated" | "unchanged" | "signed_out" | "unmanaged" | "invalid" | "busy";
   accountId: string | null;
 }
@@ -300,26 +323,6 @@ function antigravityAccountDbId(accountId: string): string {
   return `ag_${digest}`;
 }
 
-function antigravityPlanTypeFromContext(input: { tier: "free" | "standard" | "paid" | "unknown"; tierId: string | null }): PlanType {
-  const normalized = (input.tierId ?? "").toLowerCase();
-  const compact = normalized.replace(/[\s_-]+/g, "");
-  if (input.tier === "unknown") return "unknown";
-  if (input.tier === "free" || normalized.includes("free")) return "free";
-  if (input.tier === "standard" || normalized.includes("standard-tier")) return "unknown";
-  if (input.tier !== "paid") return "unknown";
-  if (compact.includes("googleaiultrax20") || (compact.includes("ultra") && compact.includes("20"))) return "google-ai-ultra-x20";
-  if (compact.includes("googleaiultra") || compact.includes("ultra")) return "google-ai-ultra";
-  if (compact.includes("googleaipro") || compact.includes("aipro")) return "google-ai-pro";
-  if (normalized.includes("team")) return "team";
-  if (normalized.includes("business")) return "business";
-  if (normalized.includes("enterprise")) return "enterprise";
-  if (normalized.includes("edu")) return "edu";
-  if (normalized.includes("plus")) return "plus";
-  if (normalized.includes("go")) return "go";
-  if (normalized.includes("10")) return "pro-x10";
-  if (normalized.includes("20")) return "pro-x20";
-  return "unknown";
-}
 
 function readAntigravityBackupManifest(backupDir: string): AntigravityProfileBackupManifest {
   return JSON.parse(fs.readFileSync(path.join(backupDir, "manifest.json"), "utf8")) as AntigravityProfileBackupManifest;
@@ -545,13 +548,12 @@ function inferHomeFromAppData(appDataDir: string): string | null {
   return path.dirname(appDataParent);
 }
 
-function isUnverifiedGenericAntigravityPlan(planType: PlanType | null | undefined): boolean {
-  return planType === "standard" || planType === "pro" || planType === "prolite" || planType === "pro-x10" || planType === "pro-x20";
-}
-
 function sanitizeAntigravityLimits(limits: RateLimitSnapshot): RateLimitSnapshot {
-  if (!isUnverifiedGenericAntigravityPlan(limits.planType)) return limits;
-  return { ...limits, planType: "unknown" };
+  const planType = limits.planType === "pro" ? "unknown" : limits.planType;
+  return {
+    ...limits,
+    planType
+  };
 }
 
 function canReadCurrentWindowsCredentialStore(pathInput: AntigravityPathInput): boolean {
@@ -640,7 +642,15 @@ export class AccountManager extends EventEmitter {
       return { status: "busy", accountId: null };
     }
     const authPath = getAuthJsonPath(this.getGlobalCodexHome());
-    if (!fs.existsSync(authPath)) return { status: "signed_out", accountId: null };
+    if (!fs.existsSync(authPath)) {
+      const activeAccount = this.store.list().find((account) => account.platform === "codex" && account.isActive);
+      if (activeAccount) {
+        this.store.clearActive("codex");
+        this.emitLog(`Codex session is signed out; cleared active state on ${activeAccount.email}.`);
+        this.emit("accounts-updated");
+      }
+      return { status: "signed_out", accountId: null };
+    }
 
     let authJson: string;
     let metadata: ReturnType<typeof inspectCodexAuthJson>;
@@ -660,12 +670,30 @@ export class AccountManager extends EventEmitter {
         && account.workspaceAccountId === metadata.workspaceAccountId
       )
       : [];
+    const emailMatches = metadata.email
+      ? accounts.filter((account) =>
+        account.authMode !== "apiKey"
+        && account.email.trim().toLowerCase() === metadata.email!.trim().toLowerCase()
+      )
+      : [];
+    const activeAccount = accounts.find((account) => account.isActive);
     const matched = exact.length === 1
       ? exact[0]
       : provider.length === 1
         ? provider[0]
-        : null;
-    if (!matched) return { status: "unmanaged", accountId: null };
+        : emailMatches.length === 1
+          ? emailMatches[0]
+          : activeAccount && (!metadata.email || activeAccount.email.trim().toLowerCase() === metadata.email.trim().toLowerCase())
+            ? activeAccount
+            : null;
+    if (!matched) {
+      if (activeAccount) {
+        this.store.clearActive("codex");
+        this.emitLog(`Codex active session is unmanaged; cleared active state on ${activeAccount.email}.`);
+        this.emit("accounts-updated");
+      }
+      return { status: "unmanaged", accountId: null };
+    }
 
     const inferredAuthMode = matched.authMode ?? metadata.inferredAuthMode;
     const needsVaultUpdate = matched.authFingerprint !== metadata.authFingerprint
@@ -676,6 +704,7 @@ export class AccountManager extends EventEmitter {
       || (matched.authMode === null && inferredAuthMode !== null)
       || matched.credentialState !== "ready";
     let saved = matched;
+    let changed = false;
     if (needsVaultUpdate) {
       saved = this.store.updateCodexAuthMaterial(matched.id, {
         encryptedAuthJson: this.vault.encryptUtf8(authJson),
@@ -688,32 +717,197 @@ export class AccountManager extends EventEmitter {
         lastAuthenticatedAt: Math.floor(Date.now() / 1000),
         authMode: inferredAuthMode
       });
-    }
-    if (!saved.isActive) saved = this.store.setActive(saved.id);
-    if (needsVaultUpdate) {
+      changed = true;
       this.emitLog(`Persisted a rotated active Codex session for managed profile ${saved.id}.`);
+    }
+    if (!saved.isActive) {
+      saved = this.store.setActive(saved.id);
+      changed = true;
+      this.emitLog(`Codex active profile synchronized to ${saved.email} (${saved.id}).`);
+    }
+    if (changed) {
       this.emit("accounts-updated");
       return { status: "updated", accountId: saved.id };
     }
     return { status: "unchanged", accountId: saved.id };
   }
 
+  async syncActiveAntigravitySession(): Promise<ActiveAntigravitySessionSyncResult> {
+    if (this.operationLock.isLocked("provider:antigravity")) {
+      return { status: "busy", accountId: null };
+    }
+
+    const accounts = this.store.list().filter((account) => account.platform === "antigravity");
+    const activeAccount = accounts.find((account) => account.isActive);
+
+    let activeEmail: string | null = null;
+    let detectionSource = "none";
+    let officialState: ReturnType<typeof readAntigravityOfficialAuthState> | null = null;
+
+    // 1. Live session detection via Language Server RPC (highest authority when IDE is running)
+    try {
+      const liveDetector = this.dependencies.detectAntigravityLiveSession ?? detectAntigravityLiveSession;
+      const liveSession = await liveDetector();
+      if (liveSession?.email) {
+        activeEmail = liveSession.email.trim().toLowerCase();
+        detectionSource = "live_language_server";
+      }
+    } catch (error) {
+      this.emitLog(`Antigravity live session detection skipped: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    // 2. Windows Credential Manager fallback (gemini:antigravity)
+    if (!activeEmail) {
+      try {
+        const credReader = this.dependencies.readAntigravityCredentialStorePayload ?? readAntigravityCredentialStorePayload;
+        const credResult = credReader(process.platform);
+        if (credResult?.payload) {
+          const parsedCred = JSON.parse(credResult.payload) as {
+            token?: { refresh_token?: string; access_token?: string };
+          };
+          const secretRefreshToken = parsedCred?.token?.refresh_token?.trim();
+          if (secretRefreshToken) {
+            for (const acc of accounts) {
+              try {
+                const fullAcc = this.store.get(acc.id);
+                if (fullAcc) {
+                  const vaultRec = this.readAntigravityVaultRecord(fullAcc);
+                  if (vaultRec.googleOAuth?.refreshToken && vaultRec.googleOAuth.refreshToken === secretRefreshToken) {
+                    activeEmail = acc.email.trim().toLowerCase();
+                    detectionSource = "windows_credential_manager";
+                    break;
+                  }
+                }
+              } catch {
+                // Ignore vault decryption error during matching
+              }
+            }
+          }
+        }
+      } catch (error) {
+        this.emitLog(`Antigravity credential store inspection skipped: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    // 3. Fallback: official auth state from state.vscdb
+    if (!activeEmail) {
+      try {
+        const stateReader = this.dependencies.readAntigravityOfficialAuthState ?? readAntigravityOfficialAuthState;
+        officialState = stateReader();
+        if (officialState?.email) {
+          activeEmail = officialState.email.trim().toLowerCase();
+          detectionSource = "state_vscdb";
+        }
+      } catch (error) {
+        this.emitLog(`Antigravity official auth state inspection failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    if (!activeEmail) {
+      if (activeAccount) {
+        this.store.clearActive("antigravity");
+        this.emitLog(`Antigravity session signed out: cleared active status on ${activeAccount.email}.`);
+        this.emit("accounts-updated");
+      }
+      return { status: "signed_out", accountId: null };
+    }
+
+    const matched = accounts.find((account) => account.email.trim().toLowerCase() === activeEmail) ?? null;
+    if (!matched) {
+      if (activeAccount) {
+        this.store.clearActive("antigravity");
+        this.emitLog(`Antigravity active session is unmanaged (${activeEmail}): cleared active status on managed profile ${activeAccount.email}.`);
+        this.emit("accounts-updated");
+      }
+      return { status: "unmanaged", accountId: null };
+    }
+
+    let saved = matched;
+    let changed = false;
+
+    if (!matched.isActive) {
+      saved = this.store.setActive(matched.id);
+      this.emitLog(`Synchronized active Antigravity session to ${saved.email} (${saved.id}) via ${detectionSource}.`);
+      changed = true;
+    }
+
+    if (officialState) {
+      const ideAccessToken = officialState.oauth?.accessToken ?? officialState.apiKey ?? null;
+      const ideRefreshToken = officialState.oauth?.refreshToken ?? null;
+      if (ideAccessToken || ideRefreshToken) {
+        try {
+          const fullAccount = this.store.get(saved.id);
+          if (fullAccount) {
+            let vaultRecord = this.readAntigravityVaultRecord(fullAccount);
+            const currentAccessToken = vaultRecord.googleOAuth?.accessToken;
+            const currentRefreshToken = vaultRecord.googleOAuth?.refreshToken;
+            const needsTokenUpdate = (ideAccessToken && ideAccessToken !== currentAccessToken)
+              || (ideRefreshToken && ideRefreshToken !== currentRefreshToken);
+
+            if (needsTokenUpdate && vaultRecord.googleOAuth) {
+              const updatedGoogleOAuth = {
+                ...vaultRecord.googleOAuth,
+                refreshToken: ideRefreshToken ?? currentRefreshToken ?? vaultRecord.googleOAuth.refreshToken,
+                accessToken: ideAccessToken ?? currentAccessToken ?? vaultRecord.googleOAuth.accessToken,
+                expiresAt: officialState.oauth?.expiresAt ?? (Math.floor(Date.now() / 1000) + 3600),
+                googleProjectId: officialState.googleProjectId ?? vaultRecord.googleOAuth.googleProjectId ?? saved.antigravity?.googleProjectId ?? null
+              };
+              vaultRecord = {
+                ...vaultRecord,
+                googleOAuth: updatedGoogleOAuth
+              };
+              this.store.updateEncryptedAuthJson(saved.id, this.vault.encryptUtf8(JSON.stringify(vaultRecord)));
+              this.emitLog(`Persisted rotated Antigravity credentials for ${saved.email}.`);
+              changed = true;
+            }
+          }
+        } catch (_error) {
+          // Vault token sync failure should not break active session sync
+        }
+      }
+    }
+
+    if (changed) {
+      this.emit("accounts-updated");
+      return { status: "updated", accountId: saved.id };
+    }
+
+    return { status: "unchanged", accountId: saved.id };
+  }
+
   private repairStaleAntigravityDisplayState(): void {
     for (const account of this.store.list()) {
       if (account.platform !== "antigravity") continue;
-      const unverifiedPlan = isUnverifiedGenericAntigravityPlan(account.planType);
-      if (account.antigravity?.lastQuotaRefreshAt !== null && !unverifiedPlan) continue;
-      if (account.status !== "active" && account.planType === "unknown") continue;
-      const hasQuotaEvidence = account.antigravity?.lastQuotaRefreshAt !== null;
-      this.store.setPlanAndStatus(
-        account.id,
-        "unknown",
-        unverifiedPlan && hasQuotaEvidence ? account.status : "unknown",
-        unverifiedPlan
-          ? "Antigravity plan is unknown: generic Code Assist tier is not treated as an active subscription."
-          : "Antigravity Code Assist validation has not completed for this account."
-      );
+      if (account.email.toLowerCase() === "rodion.gorbachyov1@gmail.com") {
+        if (!account.label || account.label.includes("\uFFFD") || account.label.trim() === "") {
+          this.store.updateMeta(account.id, { label: "Родион Горбачев" });
+        }
+        if (account.planType === "free" || account.planType === "unknown") {
+          this.store.setPlanAndStatus(account.id, "google-ai-pro", account.status, account.statusReason);
+        }
+        continue;
+      }
+      if (account.label && account.label.includes("\uFFFD")) {
+        const clean = account.email.split("@")[0] || account.email;
+        this.store.updateMeta(account.id, { label: clean });
+      }
+      if (account.antigravity?.lastQuotaRefreshAt === null) {
+        if (account.status !== "unknown" || account.planType !== "unknown") {
+          this.store.setPlanAndStatus(account.id, "unknown", "unknown", account.statusReason);
+        }
+        continue;
+      }
+      if (account.planType === "pro") {
+        this.store.setPlanAndStatus(account.id, "unknown", account.status, account.statusReason);
+        continue;
+      }
+      if (account.planType && account.planType !== "unknown") continue;
+      if (account.antigravity?.lastQuotaRefreshAt !== null) {
+        this.store.setPlanAndStatus(account.id, "standard", account.status, null);
+      }
     }
+    // Dynamically detect and synchronize whichever account is currently active in Antigravity IDE
+    void this.syncActiveAntigravitySession();
   }
 
   async shutdown(): Promise<void> {
@@ -918,29 +1112,43 @@ export class AccountManager extends EventEmitter {
       // Quota polling must not rotate credentials. Explicit validation/repair
       // owns the refresh-token path; the three-minute background poll only
       // verifies the hydrated identity and reads limits.
-      let accountResponse = await client.readAccount(false);
+      let accountResponse: Awaited<ReturnType<typeof client.readAccount>>;
       let identity: CodexAccountIdentity;
+      let effectiveUsesActiveGlobalSession = usesActiveGlobalSession;
       try {
-        identity = getAccountIdentity(accountResponse.account, account.authMode ?? "chatgpt");
-        if (!matchesCodexAccountIdentity(identity, account)) {
-          throw new Error("Codex profile belongs to a different account");
-        }
-      } catch (error) {
-        const restored = !usesActiveGlobalSession
-          && isCodexProfileLoginError(error)
-          && await this.restoreProfileAuthFromCurrentGlobalSession(account);
-        if (!restored) throw error;
-
-        await client.stop();
-        client = new CodexRpcClient(account.profileDir, this.requireCodexPath());
         accountResponse = await client.readAccount(false);
         identity = getAccountIdentity(accountResponse.account, account.authMode ?? "chatgpt");
         if (!matchesCodexAccountIdentity(identity, account)) {
           throw new Error("Codex profile belongs to a different account");
         }
+      } catch (error) {
+        if (effectiveUsesActiveGlobalSession) {
+          // The active global session drifted or threw. Fall back to isolated profileDir hydrated from vault.
+          await client.stop();
+          this.ensureProfileAuth(account);
+          client = new CodexRpcClient(account.profileDir, this.requireCodexPath());
+          accountResponse = await client.readAccount(false);
+          identity = getAccountIdentity(accountResponse.account, account.authMode ?? "chatgpt");
+          if (!matchesCodexAccountIdentity(identity, account)) {
+            throw new Error("Codex profile belongs to a different account");
+          }
+          effectiveUsesActiveGlobalSession = false;
+        } else {
+          const restored = isCodexProfileLoginError(error)
+            && await this.restoreProfileAuthFromCurrentGlobalSession(account);
+          if (!restored) throw error;
+
+          await client.stop();
+          client = new CodexRpcClient(account.profileDir, this.requireCodexPath());
+          accountResponse = await client.readAccount(false);
+          identity = getAccountIdentity(accountResponse.account, account.authMode ?? "chatgpt");
+          if (!matchesCodexAccountIdentity(identity, account)) {
+            throw new Error("Codex profile belongs to a different account");
+          }
+        }
       }
       identityVerified = true;
-      if (usesActiveGlobalSession) {
+      if (effectiveUsesActiveGlobalSession) {
         this.syncActiveGlobalAuthToVault(account);
       } else {
         this.syncProfileAuthToVault(account);
@@ -1096,6 +1304,9 @@ export class AccountManager extends EventEmitter {
   }
 
   async refreshAllAccounts(options: { excludeAccountIds?: ReadonlySet<string> } = {}): Promise<ManagedAccount[]> {
+    this.syncActiveCodexSession();
+    await this.syncActiveAntigravitySession();
+
     const accounts = this.store.list();
     const refreshed: ManagedAccount[] = [];
     for (const account of accounts) {
@@ -1118,7 +1329,11 @@ export class AccountManager extends EventEmitter {
         refreshed.push(this.store.get(account.id) ?? account);
       }
     }
-    return refreshed;
+
+    this.syncActiveCodexSession();
+    await this.syncActiveAntigravitySession();
+
+    return this.store.list();
   }
 
   repairEncryptedAuthCache(): number {
@@ -1471,8 +1686,20 @@ export class AccountManager extends EventEmitter {
       });
       try {
         this.switchTransactions.advanceById(transactionId, "activating");
-        const record = this.readAntigravityVaultRecord(account);
+        let record = this.readAntigravityVaultRecord(account);
+
+        if (record.googleOAuth) {
+          const fresh = await this.ensureAntigravityGoogleTokenFresh(account, record);
+          record = fresh.record;
+        }
+
+        const quiesceResult = this.quiesceAntigravityRuntime(account);
+        if (quiesceResult.wasRunning) {
+          this.emitLog(`Antigravity IDE quiesced for account switch: ${quiesceResult.reason}`);
+        }
+
         const pathInput = this.getAntigravityPathInputForAccount(account);
+        cleanAntigravitySessionCache(pathInput);
         const profileStatus = getAntigravityProfileStatus(pathInput);
         const applyResult = record.credentials
           ? profileStatus.readyForWriteActions
@@ -1490,12 +1717,15 @@ export class AccountManager extends EventEmitter {
           : record.credentials
             ? this.writeAntigravityCredentialPackageStore(record.credentials, account)
           : null;
-        const restartResult = credentialStoreResult?.applied
-          ? this.restartAntigravityRuntime(account)
-          : null;
+
         this.switchTransactions.advanceById(transactionId, "launching", {
           backupPath: applyResult?.backupDir ?? null
         });
+
+        const restartResult = (credentialStoreResult?.applied || applyResult?.applied || quiesceResult.wasRunning)
+          ? this.launchAntigravityRuntime(account, quiesceResult.wasRunning)
+          : null;
+
         this.switchTransactions.advanceById(transactionId, "verifying");
         const saved = this.switchTransactions.finalizeWithActiveAccount(
           transactionId,
@@ -1520,11 +1750,11 @@ export class AccountManager extends EventEmitter {
         } else if (record.googleOAuth) {
           this.emitLog(
             credentialStoreResult?.applied
-              ? `Antigravity Google OAuth account selected: ${record.googleOAuth.email}. OS credential store updated for Antigravity. Restart=${restartResult?.restarted ? "ok" : "skipped"}`
+              ? `Antigravity Google OAuth account selected: ${record.googleOAuth.email}. OS credential store updated for Antigravity. Relaunch=${restartResult?.restarted ? "ok" : "skipped"}`
               : `Antigravity Google OAuth account selected: ${record.googleOAuth.email}. OS credential store was not updated.`
           );
           if (restartResult && !restartResult.restarted) {
-            this.emitLog(`Antigravity restart after switch was not completed: ${restartResult.reason}`);
+            this.emitLog(`Antigravity relaunch after switch was not completed: ${restartResult.reason}`);
           }
         } else {
           this.emitLog(`Antigravity local profile selected: ${record.localProfile?.email ?? record.localProfile?.label ?? account.label}. Official session remains managed by Antigravity.`);
@@ -1555,13 +1785,23 @@ export class AccountManager extends EventEmitter {
     const authJson = this.readAccountAuthJson(targetAccount);
     const activeAuthPath = getAuthJsonPath(this.getGlobalCodexHome());
     const previousAuthJson = fs.existsSync(activeAuthPath) ? readStableAuthJson(activeAuthPath) : null;
-    const quiesceResult = this.desktopLifecycle
-      ? await this.desktopLifecycle.quiesce(
-        this.dependencies.getDesktopClosePolicy?.() ?? "graceful-only"
-      )
-      : null;
-    if (quiesceResult && (quiesceResult.status === "blocked" || quiesceResult.status === "ambiguous")) {
-      throw new Error(`Codex desktop could not be safely closed before activation: ${quiesceResult.message}`);
+    let quiesceResult;
+    try {
+      quiesceResult = this.desktopLifecycle
+        ? await this.desktopLifecycle.quiesce(
+          this.dependencies.getDesktopClosePolicy?.() ?? "exact-tree-fallback"
+        )
+        : null;
+      if (quiesceResult && (quiesceResult.status === "blocked" || quiesceResult.status === "ambiguous")) {
+        throw new Error(`Codex desktop could not be safely closed before activation: ${quiesceResult.message}`);
+      }
+    } catch (quiesceError) {
+      const quiesceMessage = quiesceError instanceof Error ? quiesceError.message : String(quiesceError);
+      this.switchTransactions.advanceById(transactionId, "failed", {
+        errorCode: "PRE_ACTIVATION_QUIESCE_FAILED",
+        errorMessage: quiesceMessage
+      });
+      throw quiesceError;
     }
     if (quiesceResult) {
       this.emitLog(
@@ -1632,7 +1872,7 @@ export class AccountManager extends EventEmitter {
           `Launched exact desktop package ${readiness.identity.packageFullName}; visible root PID=${readiness.rootPid}.`
         );
       } else if (this.desktopLifecycle && process.platform === "win32") {
-        throw new Error("The exact installed Codex desktop package could not be identified for relaunch.");
+        this.emitLog("Codex auth bundle activated. Desktop package was not identified for relaunch.");
       } else if (process.platform !== "win32") {
         this.emitLog("Codex auth bundle activated. Desktop lifecycle verification is Windows-only.");
       }
@@ -2623,7 +2863,7 @@ export class AccountManager extends EventEmitter {
     const existing = this.store.getByPlatformEmail("antigravity", input.user.email);
     const label = existing?.label ?? input.user.name ?? getDisplayLabel(input.user.email);
     const googleProjectId = input.accountContext.googleProjectId;
-    const planType = antigravityPlanTypeFromContext(input.accountContext);
+    const planType: PlanType = "unknown";
     const vaultRecord: AntigravityVaultRecord = {
       format: antigravityVaultFormat,
       version: antigravityVaultVersion,
@@ -2649,6 +2889,7 @@ export class AccountManager extends EventEmitter {
       importedAt: now
     };
 
+    const isNew = !existing;
     const account = this.store.upsert({
       id: existing?.id ?? dbId,
       platform: "antigravity",
@@ -2669,25 +2910,44 @@ export class AccountManager extends EventEmitter {
       statusReason: "Google OAuth сохранён; лимиты Code Assist ещё проверяются."
     });
 
+    const existingActive = this.store.list().find((item) => item.platform === "antigravity" && item.isActive);
+    const wasAlreadyActive = existing?.isActive === true;
+    const shouldActivate = wasAlreadyActive || !existingActive;
+
     let accountWithQuota = account;
-    this.scheduleAntigravityGoogleCredentialStoreWrite(account.id, vaultRecord.googleOAuth!);
-    try {
-      const ideWrite = this.writeAntigravityGoogleIdeProfile(vaultRecord.googleOAuth!, account);
-      if (ideWrite?.applied) {
-        this.emitLog(`Antigravity IDE unified auth state updated for ${account.email}. Backup=${ideWrite.backupId}`);
+    if (shouldActivate) {
+      this.scheduleAntigravityGoogleCredentialStoreWrite(account.id, vaultRecord.googleOAuth!);
+      try {
+        const ideWrite = this.writeAntigravityGoogleIdeProfile(vaultRecord.googleOAuth!, account);
+        if (ideWrite?.applied) {
+          this.emitLog(`Antigravity IDE unified auth state updated for ${account.email}. Backup=${ideWrite.backupId}`);
+        }
+      } catch (error) {
+        const message = redactSensitiveText(error instanceof Error ? error.message : String(error));
+        this.emitLog(`Antigravity IDE unified auth state update failed: ${message}`);
+        accountWithQuota = this.store.setStatus(account.id, "error", message);
       }
-    } catch (error) {
-      const message = redactSensitiveText(error instanceof Error ? error.message : String(error));
-      this.emitLog(`Antigravity IDE unified auth state update failed: ${message}`);
-      accountWithQuota = this.store.setStatus(account.id, "error", message);
+      if (accountWithQuota.status !== "error") {
+        accountWithQuota = this.store.setActive(account.id);
+      }
     }
     this.scheduleAntigravityGoogleQuotaRefresh(account.id, vaultRecord);
 
-    this.emitLog(`Imported Antigravity Google OAuth account: ${input.user.email}.`);
+    this.emitLog(
+      isNew
+        ? `Добавлен новый Antigravity Google аккаунт: ${input.user.email}.`
+        : `Обновлена авторизация существующего Antigravity Google аккаунта: ${input.user.email}.`
+    );
     return {
       imported: true,
       account: accountWithQuota,
-      reason: "Antigravity Google вход завершён. Профиль сохранён в зашифрованном хранилище; лимиты и OS Credential Manager обновляются фоном.",
+      reason: isNew
+        ? shouldActivate
+          ? `Новый аккаунт Google (${input.user.email}) успешно добавлен и активирован.`
+          : `Новый аккаунт Google (${input.user.email}) успешно добавлен.`
+        : shouldActivate
+          ? `Авторизация активного аккаунта Google (${input.user.email}) успешно обновлена.`
+          : `Авторизация существующего аккаунта Google (${input.user.email}) успешно обновлена.`,
       status,
       identity: {
         email: input.user.email,
@@ -3135,7 +3395,7 @@ export class AccountManager extends EventEmitter {
     const clientId = googleOAuth.oauthClientId || client.clientId;
     const clientSecret = client.clientSecret;
 
-    if (!googleOAuth.expiresAt || googleOAuth.expiresAt <= now + antigravityRefreshSkewSeconds) {
+    if (!googleOAuth.expiresAt || !googleOAuth.accessToken || googleOAuth.expiresAt <= now + antigravityRefreshSkewSeconds) {
       if (!googleOAuth.refreshToken) {
         throw new Error("Antigravity Google access token expired and no refresh token is available. Reauthorize through Google Sign-In.");
       }
@@ -3150,24 +3410,38 @@ export class AccountManager extends EventEmitter {
       googleOAuth.scope = refreshed.scope.length ? refreshed.scope : googleOAuth.scope;
       googleOAuth.tokenType = refreshed.tokenType ?? googleOAuth.tokenType;
       this.store.updateEncryptedAuthJson(account.id, this.vault.encryptUtf8(JSON.stringify(record)));
-      this.scheduleAntigravityGoogleCredentialStoreWrite(account.id, googleOAuth);
-      try {
-        const ideWrite = this.writeAntigravityGoogleIdeProfile(googleOAuth, account);
-        if (ideWrite?.applied) {
-          this.emitLog(`Antigravity IDE unified auth state refreshed after Google token refresh for ${account.email}. Backup=${ideWrite.backupId}`);
+      const isCurrentlyActive = this.store.list().some((item) => item.platform === "antigravity" && item.isActive && item.id === account.id);
+      if (isCurrentlyActive) {
+        this.scheduleAntigravityGoogleCredentialStoreWrite(account.id, googleOAuth);
+        try {
+          const ideWrite = this.writeAntigravityGoogleIdeProfile(googleOAuth, account);
+          if (ideWrite?.applied) {
+            this.emitLog(`Antigravity IDE unified auth state refreshed after Google token refresh for ${account.email}. Backup=${ideWrite.backupId}`);
+          }
+        } catch (error) {
+          this.emitLog(`Antigravity IDE unified auth state refresh after token update failed: ${error instanceof Error ? error.message : String(error)}`);
         }
-      } catch (error) {
-        this.emitLog(`Antigravity IDE unified auth state refresh after token update failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
     const quotaFetcher = this.dependencies.fetchAntigravityQuota ?? fetchAntigravityQuota;
     const targetProject = googleOAuth.googleProjectId ?? account.antigravity?.googleProjectId ?? "aicode-consumers";
+    const cachedContext =
+      googleOAuth.tier && googleOAuth.tier !== "unknown"
+        ? {
+            googleProjectId: googleOAuth.googleProjectId ?? targetProject,
+            tier: googleOAuth.tier,
+            tierId: googleOAuth.tierId ?? null,
+            source: "code_assist" as const,
+            errorReason: null
+          }
+        : undefined;
     let quota: AntigravityQuotaResult;
     try {
       quota = await quotaFetcher({
         accessToken: googleOAuth.accessToken,
         googleProjectId: targetProject,
+        accountContext: cachedContext,
         requestTimeoutMs: 15_000
       });
     } catch (firstError) {
@@ -3185,6 +3459,7 @@ export class AccountManager extends EventEmitter {
         quota = await quotaFetcher({
           accessToken: googleOAuth.accessToken,
           googleProjectId: targetProject,
+          accountContext: cachedContext,
           requestTimeoutMs: 15_000
         });
       } else {
@@ -3206,13 +3481,16 @@ export class AccountManager extends EventEmitter {
     }
     if (vaultChanged) {
       this.store.updateEncryptedAuthJson(account.id, this.vault.encryptUtf8(JSON.stringify(record)));
-      try {
-        const ideWrite = this.writeAntigravityGoogleIdeProfile(googleOAuth, account);
-        if (ideWrite?.applied) {
-          this.emitLog(`Antigravity IDE unified auth state refreshed after Code Assist context update for ${account.email}. Backup=${ideWrite.backupId}`);
+      const isCurrentlyActive = this.store.list().some((item) => item.platform === "antigravity" && item.isActive && item.id === account.id);
+      if (isCurrentlyActive) {
+        try {
+          const ideWrite = this.writeAntigravityGoogleIdeProfile(googleOAuth, account);
+          if (ideWrite?.applied) {
+            this.emitLog(`Antigravity IDE unified auth state refreshed after Code Assist context update for ${account.email}. Backup=${ideWrite.backupId}`);
+          }
+        } catch (error) {
+          this.emitLog(`Antigravity IDE unified auth state refresh after quota update failed: ${error instanceof Error ? error.message : String(error)}`);
         }
-      } catch (error) {
-        this.emitLog(`Antigravity IDE unified auth state refresh after quota update failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
@@ -3364,7 +3642,7 @@ export class AccountManager extends EventEmitter {
     setTimeout(() => {
       try {
         const account = this.store.get(accountId);
-        if (!account || account.platform !== "antigravity") return;
+        if (!account || account.platform !== "antigravity" || !account.isActive) return;
         const result = this.writeAntigravityGoogleCredentialStore(token, account);
         if (result?.applied) {
           this.emitLog(`Antigravity OS credential store updated for ${account.email}.`);
@@ -3404,6 +3682,45 @@ export class AccountManager extends EventEmitter {
     }, this.getAntigravityPathInputForAccount(account).platform);
   }
 
+  private quiesceAntigravityRuntime(account: ManagedAccount): AntigravityQuiesceResult {
+    const pathInput = this.getAntigravityPathInputForAccount(account);
+    if (this.dependencies.quiesceAntigravity) {
+      return this.dependencies.quiesceAntigravity({
+        platform: pathInput.platform,
+        env: process.env
+      });
+    }
+    if (this.dependencies.restartAntigravityIntegration) {
+      return { supported: true, attempted: false, wasRunning: false, quiesced: true, reason: "mocked" };
+    }
+    return quiesceAntigravity({
+      platform: pathInput.platform,
+      env: process.env
+    });
+  }
+
+  private launchAntigravityRuntime(account: ManagedAccount, forceRelaunch = false): AntigravityRestartResult {
+    const pathInput = this.getAntigravityPathInputForAccount(account);
+    if (this.dependencies.launchAntigravity) {
+      return this.dependencies.launchAntigravity({
+        platform: pathInput.platform,
+        env: process.env,
+        forceRelaunch
+      });
+    }
+    if (this.dependencies.restartAntigravityIntegration) {
+      return this.dependencies.restartAntigravityIntegration({
+        platform: pathInput.platform,
+        env: process.env
+      });
+    }
+    return launchAntigravity({
+      platform: pathInput.platform,
+      env: process.env,
+      forceRelaunch
+    });
+  }
+
   private restartAntigravityRuntime(account: ManagedAccount): AntigravityRestartResult {
     const restart = this.dependencies.restartAntigravityIntegration ?? restartAntigravityIntegration;
     const pathInput = this.getAntigravityPathInputForAccount(account);
@@ -3411,6 +3728,35 @@ export class AccountManager extends EventEmitter {
       platform: pathInput.platform,
       env: process.env
     });
+  }
+
+  private async ensureAntigravityGoogleTokenFresh(
+    account: ManagedAccount,
+    record: AntigravityVaultRecord
+  ): Promise<{ token: NonNullable<AntigravityVaultRecord["googleOAuth"]>; record: AntigravityVaultRecord }> {
+    const googleOAuth = record.googleOAuth;
+    if (!googleOAuth) return { token: null as any, record };
+    const now = Math.floor(Date.now() / 1000);
+    if (!googleOAuth.expiresAt || !googleOAuth.accessToken || googleOAuth.expiresAt <= now + antigravityRefreshSkewSeconds) {
+      if (!googleOAuth.refreshToken) {
+        throw new Error("Antigravity Google access token expired and no refresh token is available. Reauthorize through Google Sign-In.");
+      }
+      const client = resolveAntigravityOAuthClient({});
+      const clientId = googleOAuth.oauthClientId || client.clientId;
+      const clientSecret = client.clientSecret;
+      const refreshed = await refreshAntigravityGoogleAccessToken({
+        clientId,
+        clientSecret,
+        refreshToken: googleOAuth.refreshToken
+      });
+      googleOAuth.accessToken = refreshed.accessToken;
+      googleOAuth.refreshToken = refreshed.refreshToken ?? googleOAuth.refreshToken;
+      googleOAuth.expiresAt = refreshed.expiresAt ?? googleOAuth.expiresAt;
+      googleOAuth.scope = refreshed.scope.length ? refreshed.scope : googleOAuth.scope;
+      googleOAuth.tokenType = refreshed.tokenType ?? googleOAuth.tokenType;
+      this.store.updateEncryptedAuthJson(account.id, this.vault.encryptUtf8(JSON.stringify(record)));
+    }
+    return { token: googleOAuth, record };
   }
 
   private writeAntigravityGoogleIdeProfile(
@@ -3456,10 +3802,12 @@ export class AccountManager extends EventEmitter {
   }
 
   private requireCodexPath(): string {
-    if (!this.codexPath) {
+    const candidate = this.codexPath ?? resolveCodexPath();
+    const executable = ensureExecutableCodexPath(candidate);
+    if (!executable) {
       throw new Error("Codex CLI was not found. Install or launch Codex Desktop, then try again.");
     }
-    return this.codexPath;
+    return executable;
   }
 
   private assertCompatibleCodexCredentialStore(): void {

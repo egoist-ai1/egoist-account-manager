@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { PlanType, RateLimitSnapshot } from "../shared/types.js";
 import { appVersion } from "../shared/releaseNotes.js";
+import { ensureExecutableCodexPath } from "./processManager.js";
 
 type RpcResponse<T> = { id: number; result?: T; error?: { code: number; message: string; data?: unknown } };
 type Notification = { method: string; params?: unknown };
@@ -50,7 +51,8 @@ interface PendingCall {
   timer: NodeJS.Timeout;
 }
 
-export function spawnCodexProcess(codexPath: string, args: string[], env: NodeJS.ProcessEnv): ChildProcessWithoutNullStreams {
+export function spawnCodexProcess(rawCodexPath: string, args: string[], env: NodeJS.ProcessEnv): ChildProcessWithoutNullStreams {
+  const codexPath = ensureExecutableCodexPath(rawCodexPath) ?? rawCodexPath;
   const extension = path.extname(codexPath).toLowerCase();
   if (process.platform === "win32" && (extension === ".cmd" || extension === ".bat")) {
     return spawn("cmd.exe", ["/d", "/c", "call", codexPath, ...args], {

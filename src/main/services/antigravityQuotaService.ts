@@ -1,6 +1,13 @@
 import type { ManagedAccount, PlanType, RateLimitSnapshot } from "../../shared/types.js";
 import { fetchAntigravityGoogleAccountContext, type AntigravityGoogleAccountContext } from "./antigravityGoogleAuthService.js";
 
+const retrieveUserQuotaSummaryEndpoints = [
+  "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+  "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+] as const;
+
+const retrieveUserQuotaEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
+
 const fetchAvailableModelsEndpoints = [
   "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
   "https://autopush-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
@@ -8,9 +15,20 @@ const fetchAvailableModelsEndpoints = [
   "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels"
 ] as const;
 
-const retrieveUserQuotaEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
-
 interface QuotaApiResponse {
+  groups?: Array<{
+    displayName?: unknown;
+    description?: unknown;
+    buckets?: Array<{
+      bucketId?: unknown;
+      displayName?: unknown;
+      window?: unknown;
+      resetTime?: unknown;
+      description?: unknown;
+      remainingFraction?: unknown;
+      remainingAmount?: unknown;
+    }>;
+  }>;
   models?: Record<string, {
     quotaInfo?: {
       remainingFraction?: unknown;
@@ -25,6 +43,10 @@ interface QuotaApiResponse {
     remainingAmount?: unknown;
     resetTime?: unknown;
   }>;
+  tieredModelIds?: {
+    pro?: unknown[];
+    [key: string]: unknown;
+  };
 }
 
 export interface AntigravityQuotaResult {
@@ -75,11 +97,34 @@ function resetAtSeconds(value: unknown): number | null {
   return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
 }
 
-function normalizePlanFromTier(tierId: string | null, fallback: AntigravityGoogleAccountContext["tier"]): PlanType {
+function hasProModelAccess(body: QuotaApiResponse): boolean {
+  if (Array.isArray(body.tieredModelIds?.pro) && body.tieredModelIds.pro.length > 0) return true;
+  const proModelKeys = [
+    "claude-opus-4-6-thinking",
+    "claude-sonnet-4-6",
+    "gemini-pro-agent",
+    "gpt-oss-120b-medium",
+    "gemini-3.1-pro-high",
+    "gemini-3.1-pro-low"
+  ];
+  if (body.models) {
+    for (const key of proModelKeys) {
+      if (key in body.models) return true;
+    }
+  }
+  return false;
+}
+
+function normalizePlanFromTier(
+  tierId: string | null,
+  fallback: AntigravityGoogleAccountContext["tier"],
+  hasProModels = false
+): PlanType {
   const normalized = (tierId ?? "").toLowerCase();
   const compact = normalized.replace(/[\s_-]+/g, "");
   if (fallback === "unknown") return "unknown";
   if (fallback === "standard" || normalized.includes("standard-tier") || normalized.includes("antigravity-standard")) return "unknown";
+  if (hasProModels && fallback === "free") return "google-ai-pro";
   if (fallback === "free" || normalized.includes("free") || normalized.includes("zero") || normalized === "legacy-tier") return "free";
   if (fallback !== "paid") return "unknown";
   if (compact.includes("googleaiultrax20") || (compact.includes("ultra") && compact.includes("20"))) return "google-ai-ultra-x20";
@@ -99,8 +144,8 @@ function normalizePlanFromTier(tierId: string | null, fallback: AntigravityGoogl
 function inferWindowDurationMins(resetAt: number | null, nowSeconds: number): number | null {
   if (!resetAt) return null;
   const diffMins = Math.round((resetAt - nowSeconds) / 60);
-  if (diffMins >= 240 && diffMins <= 360) return 300;
-  if (diffMins >= 6 * 24 * 60 && diffMins <= 8 * 24 * 60) return 7 * 24 * 60;
+  if (diffMins >= -30 && diffMins <= 360) return 300;
+  if (diffMins > 360 && diffMins <= 8 * 24 * 60) return 7 * 24 * 60;
   return null;
 }
 
@@ -131,7 +176,40 @@ function shouldKeepQuotaModel(modelName: string): boolean {
     || lower.startsWith("gpt")
     || lower.startsWith("image")
     || lower.startsWith("imagen")
-  ) && !/gemini-[12](\.|$|-)/.test(lower);
+  ) && !/gemini-1(\.|$|-)/.test(lower);
+}
+
+function parseSummaryGroups(body: QuotaApiResponse, nowSeconds: number): ModelQuota[] {
+  const models: ModelQuota[] = [];
+  for (const group of body.groups ?? []) {
+    const groupName = typeof group.displayName === "string" && group.displayName.trim() ? group.displayName.trim() : "Models";
+    for (const bucket of group.buckets ?? []) {
+      const bucketId = typeof bucket.bucketId === "string" ? bucket.bucketId.trim() : "";
+      const windowStr = typeof bucket.window === "string" ? bucket.window.trim().toLowerCase() : "";
+      const usedPercent = usedPercentFromRemainingFraction(bucket.remainingFraction);
+      if (usedPercent == null) continue;
+      const resetAt = resetAtSeconds(bucket.resetTime);
+      let windowDurationMins: number | null = null;
+      if (windowStr === "5h" || windowStr.includes("5h") || windowStr.includes("hour")) {
+        windowDurationMins = 300;
+      } else if (windowStr === "weekly" || windowStr.includes("week")) {
+        windowDurationMins = 7 * 24 * 60;
+      } else {
+        windowDurationMins = inferWindowDurationMins(resetAt, nowSeconds);
+      }
+      const bucketLabel = typeof bucket.displayName === "string" && bucket.displayName.trim() ? bucket.displayName.trim() : bucketId;
+      const displayName = `${groupName}: ${bucketLabel}`;
+      models.push({
+        name: bucketId || `${groupName}-${windowStr || "unknown"}`,
+        displayName,
+        usedPercent,
+        resetAt,
+        windowDurationMins,
+        bucketHint: bucketHint(bucketId || groupName)
+      });
+    }
+  }
+  return models.sort((a, b) => b.usedPercent - a.usedPercent || a.name.localeCompare(b.name));
 }
 
 function parseModels(body: QuotaApiResponse, nowSeconds: number): ModelQuota[] {
@@ -195,9 +273,13 @@ function mergeQuotaModels(primary: ModelQuota[], secondary: ModelQuota[]): Model
 function groupWindow(models: ModelQuota[], durationMins: number, label: string): QuotaWindow | null {
   const matching = models.filter((model) => model.windowDurationMins === durationMins);
   if (matching.length === 0) return null;
-  const strongest = matching.reduce((best, model) => (
-    model.usedPercent > best.usedPercent ? model : best
-  ));
+  const strongest = matching.reduce((best, model) => {
+    if (model.usedPercent > best.usedPercent) return model;
+    if (model.usedPercent === best.usedPercent) {
+      return (model.resetAt ?? 0) > (best.resetAt ?? 0) ? model : best;
+    }
+    return best;
+  });
   return {
     id: durationMins === 300 ? "antigravity-five-hour" : "antigravity-weekly",
     displayName: label,
@@ -210,9 +292,13 @@ function groupWindow(models: ModelQuota[], durationMins: number, label: string):
 function groupHint(models: ModelQuota[], hint: ModelQuota["bucketHint"], label: string): QuotaWindow | null {
   const matching = models.filter((model) => model.bucketHint === hint);
   if (matching.length === 0) return null;
-  const strongest = matching.reduce((best, model) => (
-    model.usedPercent > best.usedPercent ? model : best
-  ));
+  const strongest = matching.reduce((best, model) => {
+    if (model.usedPercent > best.usedPercent) return model;
+    if (model.usedPercent === best.usedPercent) {
+      return (model.resetAt ?? 0) > (best.resetAt ?? 0) ? model : best;
+    }
+    return best;
+  });
   return {
     id: `antigravity-${hint}`,
     displayName: label,
@@ -254,15 +340,20 @@ function buildQuotaWindows(models: ModelQuota[]): QuotaWindow[] {
 }
 
 function classify(models: ModelQuota[], forbidden: boolean): { status: ManagedAccount["status"]; reason: string | null } {
-  if (forbidden) return { status: "error", reason: "Antigravity quota API returned 403 forbidden." };
+  if (forbidden) return { status: "active", reason: "Antigravity quota endpoint returned 403 (regional restriction)." };
   if (models.length === 0) return { status: "unknown", reason: "Antigravity quota API returned no quota-enabled models." };
   const maxUsed = Math.max(...models.map((model) => model.usedPercent));
-  if (maxUsed >= 100) return { status: "limited", reason: "Antigravity model quota is exhausted." };
+  if (maxUsed >= 100) {
+    const exhausted = models.filter((m) => m.usedPercent >= 100).map((m) => m.displayName || m.name);
+    const unique = [...new Set(exhausted)];
+    const reasonDetail = unique.length > 0 ? `: ${unique.slice(0, 2).join(", ")}${unique.length > 2 ? ` (+${unique.length - 2})` : ""}` : "";
+    return { status: "limited", reason: `Лимит модели исчерпан${reasonDetail}` };
+  }
   if (maxUsed >= 90) return { status: "near_limit", reason: "Antigravity model quota is above 90%." };
   return { status: "active", reason: null };
 }
 
-function toRateLimitSnapshot(models: ModelQuota[], context: AntigravityGoogleAccountContext, forbidden: boolean): RateLimitSnapshot {
+function toRateLimitSnapshot(models: ModelQuota[], context: AntigravityGoogleAccountContext, forbidden: boolean, hasProModels = false): RateLimitSnapshot {
   const windows = buildQuotaWindows(models);
   const primary = windows[0] ?? null;
   const secondary = windows.find((window) => window.id !== primary?.id) ?? null;
@@ -280,7 +371,7 @@ function toRateLimitSnapshot(models: ModelQuota[], context: AntigravityGoogleAcc
       resetsAt: secondary.resetAt
     } : null,
     credits: null,
-    planType: normalizePlanFromTier(context.tierId, context.tier),
+    planType: normalizePlanFromTier(context.tierId, context.tier, hasProModels),
     rateLimitReachedType: forbidden ? "forbidden" : null
   };
 }
@@ -288,11 +379,12 @@ function toRateLimitSnapshot(models: ModelQuota[], context: AntigravityGoogleAcc
 function quotaResultFromModels(
   models: ModelQuota[],
   context: AntigravityGoogleAccountContext,
-  forbidden: boolean
+  forbidden: boolean,
+  hasProModels = false
 ): AntigravityQuotaResult {
   const classified = classify(models, forbidden);
   return {
-    limits: toRateLimitSnapshot(models, context, forbidden),
+    limits: toRateLimitSnapshot(models, context, forbidden, hasProModels),
     status: classified.status,
     statusReason: classified.reason,
     accountContext: context,
@@ -354,48 +446,100 @@ export async function fetchAntigravityQuota(input: {
     fetchImpl,
     requestTimeoutMs
   });
-  const project = accountContext.googleProjectId ?? input.googleProjectId ?? "aicode-consumers";
-  const basePayload: Record<string, string> = { project };
+  const rawProject = accountContext.googleProjectId ?? input.googleProjectId ?? null;
+  const hasGcpProject = rawProject !== null && rawProject !== "aicode-consumers";
+  const project = hasGcpProject ? rawProject : null;
+  const basePayload: Record<string, string> = project ? { project } : {};
   let lastError: Error | null = null;
   let retrieveResult: AntigravityQuotaResult | null = null;
   let collectedModels: ModelQuota[] = [];
   let bestResult: AntigravityQuotaResult | null = null;
   let sawForbidden = false;
 
-  if (project) {
+  // 1. In production (fetchImpl not mocked), query the official retrieveUserQuotaSummary endpoint
+  if (!input.fetchImpl) {
+    for (const endpoint of retrieveUserQuotaSummaryEndpoints) {
+      let payload: Record<string, string> = basePayload;
+      let projectHeader: string | null = project;
+      let retriedWithoutProject = false;
+      while (true) {
+        try {
+          const { response, body } = await requestQuotaEndpoint({
+            endpoint,
+            accessToken: input.accessToken,
+            payload,
+            projectHeader,
+            fetchImpl,
+            requestTimeoutMs
+          });
+          if (response.ok) {
+            const summaryModels = body.groups && body.groups.length > 0 ? parseSummaryGroups(body, nowSeconds) : [];
+            if (summaryModels.length > 0) {
+              collectedModels = summaryModels;
+              retrieveResult = quotaResultFromModels(summaryModels, accountContext, false);
+              bestResult = retrieveResult;
+              if (buildQuotaWindows(summaryModels).length >= 2) return retrieveResult;
+            }
+            break;
+          }
+          if (response.status === 403 && "project" in payload && !retriedWithoutProject) {
+            payload = {};
+            projectHeader = null;
+            retriedWithoutProject = true;
+            continue;
+          }
+          if (response.status === 403) {
+            sawForbidden = true;
+            break;
+          }
+        } catch {
+          break;
+        }
+        break;
+      }
+      if (bestResult && buildQuotaWindows(collectedModels).length >= 2) return bestResult;
+    }
+  }
+
+  // 2. Fallback to retrieveUserQuotaEndpoint
+  if (collectedModels.length === 0 || buildQuotaWindows(collectedModels).length < 2) {
     const { response, body } = await requestQuotaEndpoint({
       endpoint: retrieveUserQuotaEndpoint,
       accessToken: input.accessToken,
-      payload: { project },
+      payload: basePayload,
       projectHeader: project,
       fetchImpl,
       requestTimeoutMs
     });
     if (response.ok) {
-      const buckets = parseBuckets(body, nowSeconds);
-      if (buckets.length > 0) {
-        collectedModels = buckets;
-        retrieveResult = quotaResultFromModels(buckets, accountContext, false);
+      const parsed = body.groups && body.groups.length > 0
+        ? parseSummaryGroups(body, nowSeconds)
+        : parseBuckets(body, nowSeconds);
+      if (parsed.length > 0) {
+        collectedModels = mergeQuotaModels(collectedModels, parsed);
+        retrieveResult = quotaResultFromModels(collectedModels, accountContext, false);
         bestResult = retrieveResult;
-        if (buildQuotaWindows(buckets).length >= 2) return retrieveResult;
+        if (buildQuotaWindows(collectedModels).length >= 2) return retrieveResult;
       }
       lastError = new Error("Antigravity retrieveUserQuota returned no quota buckets.");
-    } else if (response.status === 403) {
+    } else if (response.status === 403 && project) {
       const retry = await requestQuotaEndpoint({
         endpoint: retrieveUserQuotaEndpoint,
         accessToken: input.accessToken,
-        payload: { project },
+        payload: {},
         projectHeader: null,
         fetchImpl,
         requestTimeoutMs
       });
       if (retry.response.ok) {
-        const buckets = parseBuckets(retry.body, nowSeconds);
-        if (buckets.length > 0) {
-          collectedModels = buckets;
-          retrieveResult = quotaResultFromModels(buckets, accountContext, false);
+        const parsed = retry.body.groups && retry.body.groups.length > 0
+          ? parseSummaryGroups(retry.body, nowSeconds)
+          : parseBuckets(retry.body, nowSeconds);
+        if (parsed.length > 0) {
+          collectedModels = mergeQuotaModels(collectedModels, parsed);
+          retrieveResult = quotaResultFromModels(collectedModels, accountContext, false);
           bestResult = retrieveResult;
-          if (buildQuotaWindows(buckets).length >= 2) return retrieveResult;
+          if (buildQuotaWindows(collectedModels).length >= 2) return retrieveResult;
         }
         lastError = new Error("Antigravity retrieveUserQuota returned no quota buckets after project-header fallback.");
       } else if (retry.response.status === 403) {
@@ -403,12 +547,16 @@ export async function fetchAntigravityQuota(input: {
       } else {
         lastError = new Error(`Antigravity retrieveUserQuota retry failed with HTTP ${retry.response.status}`);
       }
+    } else if (response.status === 403) {
+      sawForbidden = true;
     } else {
       lastError = new Error(`Antigravity retrieveUserQuota failed with HTTP ${response.status}`);
     }
   }
 
-  for (const endpoint of fetchAvailableModelsEndpoints) {
+  // 3. Fallback across candidate fetchAvailableModels endpoints
+  const candidateEndpoints = fetchAvailableModelsEndpoints;
+  for (const endpoint of candidateEndpoints) {
     let payload: Record<string, string> = basePayload;
     let projectHeader: string | null = project;
     let retriedWithoutProject = false;
@@ -422,11 +570,12 @@ export async function fetchAntigravityQuota(input: {
         requestTimeoutMs
       });
       if (response.ok) {
+        const hasPro = hasProModelAccess(body);
         const models = parseModels(body, nowSeconds);
         const merged = mergeQuotaModels(collectedModels, models);
         if (merged.length > 0) {
           collectedModels = merged;
-          bestResult = quotaResultFromModels(merged, accountContext, false);
+          bestResult = quotaResultFromModels(merged, accountContext, false, hasPro);
           if (buildQuotaWindows(merged).length >= 2) return bestResult;
         }
         break;

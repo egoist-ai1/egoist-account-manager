@@ -99,4 +99,10 @@ describe("processManager", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it.runIf(process.platform === "win32")("resolves codex path to a non-WindowsApps executable on Windows", () => {
+    const resolved = ensureExecutableCodexPath("C:\\Program Files\\WindowsApps\\OpenAI.Codex_test\\app\\resources\\codex.exe");
+    expect(resolved).not.toContain("WindowsApps");
+  });
 });
+

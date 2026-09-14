@@ -16,9 +16,9 @@ const googleUserInfoUrls = [
   "https://www.googleapis.com/oauth2/v2/userinfo"
 ] as const;
 const codeAssistContextEndpoints = [
+  "https://cloudcode-pa.googleapis.com",
   "https://daily-cloudcode-pa.googleapis.com",
   "https://autopush-cloudcode-pa.sandbox.googleapis.com",
-  "https://cloudcode-pa.googleapis.com",
   "https://daily-cloudcode-pa.sandbox.googleapis.com"
 ] as const;
 const callbackPath = "/oauth-callback";
@@ -203,11 +203,13 @@ export function buildAntigravityGoogleAuthUrl(input: {
   redirectUri: string;
   state: string;
   codeChallenge: string;
+  prompt?: string;
+  loginHint?: string;
 }): string {
   const params = new URLSearchParams({
     access_type: "offline",
     scope: ANTIGRAVITY_GOOGLE_OAUTH_SCOPES.join(" "),
-    prompt: "consent",
+    prompt: input.prompt ?? "select_account consent",
     response_type: "code",
     client_id: input.clientId,
     redirect_uri: input.redirectUri,
@@ -215,6 +217,9 @@ export function buildAntigravityGoogleAuthUrl(input: {
     code_challenge_method: "S256",
     state: input.state
   });
+  if (input.loginHint) {
+    params.set("login_hint", input.loginHint);
+  }
   return `${googleAuthUrl}?${params.toString()}`;
 }
 
@@ -396,6 +401,8 @@ export function parseAntigravityGoogleOAuthCallbackUrl(callbackUrl: string): Ant
 export async function createAntigravityGoogleOAuthAuthorization(input: {
   env?: AntigravityGoogleOAuthEnv;
   timeoutMs?: number;
+  prompt?: string;
+  loginHint?: string;
 }): Promise<AntigravityGoogleOAuthAuthorization> {
   const client = resolveAntigravityOAuthClient(input.env);
   const pkce = createAntigravityPkce();
@@ -405,7 +412,9 @@ export async function createAntigravityGoogleOAuthAuthorization(input: {
     clientId: client.clientId,
     redirectUri: callbackServer.redirectUri,
     state: expectedState,
-    codeChallenge: pkce.challenge
+    codeChallenge: pkce.challenge,
+    prompt: input.prompt,
+    loginHint: input.loginHint
   });
 
   return {
@@ -656,10 +665,7 @@ function selectedTier(body: LoadCodeAssistResponse): LoadCodeAssistTier | null {
   if (currentClass !== "unknown") return body.currentTier ?? null;
   const defaultTier = defaultAllowedTier(body);
   if (defaultTier && classifyTierLabel(tierLabel(defaultTier)) !== "unknown") return defaultTier;
-  const ineligible = Array.isArray(body.ineligibleTiers)
-    ? body.ineligibleTiers.find((tier) => classifyTierLabel(tierLabel(tier)) !== "unknown") ?? null
-    : null;
-  return ineligible;
+  return null;
 }
 
 function extractTier(body: LoadCodeAssistResponse): "free" | "standard" | "paid" | "unknown" {
@@ -896,6 +902,8 @@ export async function runAntigravityGoogleOAuthFlow(input: {
   requestTimeoutMs?: number;
   resolveAccountContext?: boolean;
   onStep?: (step: AntigravityGoogleOAuthStep) => void;
+  prompt?: string;
+  loginHint?: string;
 }): Promise<AntigravityGoogleOAuthResult> {
   const client = resolveAntigravityOAuthClient(input.env);
   const pkce = createAntigravityPkce();
@@ -907,7 +915,9 @@ export async function runAntigravityGoogleOAuthFlow(input: {
       clientId: client.clientId,
       redirectUri: callbackServer.redirectUri,
       state: expectedState,
-      codeChallenge: pkce.challenge
+      codeChallenge: pkce.challenge,
+      prompt: input.prompt,
+      loginHint: input.loginHint
     });
     await input.openExternal(authUrl);
     input.onStep?.("browser_opened");

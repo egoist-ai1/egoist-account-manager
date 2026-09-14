@@ -134,7 +134,7 @@ describe("antigravityQuotaService", () => {
     });
 
     expect(result.forbidden).toBe(true);
-    expect(result.status).toBe("error");
+    expect(result.status).toBe("active");
     expect(result.limits.rateLimitReachedType).toBe("forbidden");
     expect(quotaCalls).toBe(2);
   });
@@ -467,5 +467,81 @@ describe("antigravityQuotaService", () => {
 
     expect(result.limits.primary).toMatchObject({ usedPercent: 50, windowDurationMins: 300 });
     expect(result.limits.secondary).toMatchObject({ usedPercent: 10, windowDurationMins: 10080 });
+  });
+
+  it("parses native retrieveUserQuotaSummary with both 5-hour and weekly windows across model groups", async () => {
+    const fetchImpl = async (url: string | URL | Request) => {
+      const target = String(url);
+      if (target.includes("loadCodeAssist")) {
+        return new Response(JSON.stringify({
+          cloudaicompanionProject: "project-1",
+          currentTier: { id: "free-tier", name: "Antigravity" }
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (target.includes("retrieveUserQuota")) {
+        return new Response(JSON.stringify({
+          groups: [
+            {
+              displayName: "Gemini Models",
+              buckets: [
+                {
+                  bucketId: "gemini-weekly",
+                  displayName: "Weekly Limit Remaining",
+                  window: "weekly",
+                  resetTime: "2026-06-05T17:00:00Z",
+                  remainingFraction: 0.79
+                },
+                {
+                  bucketId: "gemini-5h",
+                  displayName: "Five Hour Limit Remaining",
+                  window: "5h",
+                  resetTime: "2026-05-29T22:00:00Z",
+                  remainingFraction: 0.72
+                }
+              ]
+            },
+            {
+              displayName: "Claude and GPT models",
+              buckets: [
+                {
+                  bucketId: "3p-weekly",
+                  displayName: "Weekly Limit Remaining",
+                  window: "weekly",
+                  resetTime: "2026-06-05T18:00:00Z",
+                  remainingFraction: 1.0
+                },
+                {
+                  bucketId: "3p-5h",
+                  displayName: "Five Hour Limit Remaining",
+                  window: "5h",
+                  resetTime: "2026-05-29T23:00:00Z",
+                  remainingFraction: 1.0
+                }
+              ]
+            }
+          ]
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      throw new Error(`unexpected request ${target}`);
+    };
+
+    const result = await fetchAntigravityQuota({
+      accessToken: "access-secret-value",
+      fetchImpl: fetchImpl as typeof fetch,
+      now: () => Date.parse("2026-05-29T17:00:00Z") / 1000
+    });
+
+    expect(result.limits.primary).toMatchObject({
+      usedPercent: 28,
+      windowDurationMins: 300,
+      resetsAt: Date.parse("2026-05-29T22:00:00Z") / 1000
+    });
+    expect(result.limits.secondary).toMatchObject({
+      usedPercent: 21,
+      windowDurationMins: 10080,
+      resetsAt: Date.parse("2026-06-05T17:00:00Z") / 1000
+    });
+    expect(result.limits.limitName).toBe("5 часов / неделя");
+    expect(result.status).toBe("active");
   });
 });

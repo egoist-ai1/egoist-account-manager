@@ -6,7 +6,12 @@ $ErrorActionPreference = "Stop"
 $projectRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $allowedRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot "release\win-unpacked"))
 if (-not $ExecutablePath) {
-  $ExecutablePath = Join-Path $allowedRoot "Egoist Account Manager.exe"
+  $egoExe = Join-Path $allowedRoot "Account Manager EGO.exe"
+  if (Test-Path -LiteralPath $egoExe) {
+    $ExecutablePath = $egoExe
+  } else {
+    $ExecutablePath = Join-Path $allowedRoot "Egoist Account Manager.exe"
+  }
 }
 $resolvedExecutable = [IO.Path]::GetFullPath($ExecutablePath)
 if (-not $resolvedExecutable.StartsWith($allowedRoot, [StringComparison]::OrdinalIgnoreCase)) {
@@ -57,8 +62,9 @@ try {
   do {
     Start-Sleep -Milliseconds 500
     $targetProcesses = @(Get-TargetProcesses)
+    $expectedExeName = [IO.Path]::GetFileName($resolvedExecutable)
     $main = $targetProcesses | Where-Object {
-      $_.Name -eq "Egoist Account Manager.exe" -and $_.CommandLine -notmatch "--type="
+      ($_.Name -eq $expectedExeName -or $_.Name -eq "Account Manager EGO.exe" -or $_.Name -eq "Egoist Account Manager.exe") -and $_.CommandLine -notmatch "--type="
     } | Select-Object -First 1
     if ($main -and (Test-Path -LiteralPath $mainLogPath -PathType Leaf)) {
       $mainLog = Get-Content -Raw -LiteralPath $mainLogPath

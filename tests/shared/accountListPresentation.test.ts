@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { accountPlanPriority, selectAccountListQuota, sortAccountList } from "../../src/shared/accountListPresentation";
+import {
+  accountPlanPriority,
+  formatRemainingCountdown,
+  formatResetTimeShort,
+  selectAccountListQuota,
+  sortAccountList
+} from "../../src/shared/accountListPresentation";
 import type { ManagedAccount } from "../../src/shared/types";
 
 const now = 1_900_000_000;
@@ -122,4 +128,34 @@ describe("account list presentation", () => {
     ]);
     expect(sortAccountList([sameLabelB, sameLabelA], "smart", now).map((item) => item.id)).toEqual(["id-a", "id-b"]);
   });
+
+  it("formats live remaining countdown precisely and cleanly", () => {
+    expect(formatRemainingCountdown(null, now)).toBeNull();
+    expect(formatRemainingCountdown(now - 10, now)).toBe("сейчас");
+    expect(formatRemainingCountdown(now - 10, now, true)).toBe("now");
+    expect(formatRemainingCountdown(now + 45, now)).toBe("< 1м");
+    expect(formatRemainingCountdown(now + 45, now, true)).toBe("< 1m");
+    expect(formatRemainingCountdown(now + 125, now)).toBe("2м");
+    expect(formatRemainingCountdown(now + 125, now, true)).toBe("2m");
+    expect(formatRemainingCountdown(now + 3600 + 120 + 15, now)).toBe("1ч 2м");
+    expect(formatRemainingCountdown(now + 3600 + 120 + 15, now, true)).toBe("1h 2m");
+    expect(formatRemainingCountdown(now + 86400 * 2 + 3600 * 5, now)).toBe("2д 5ч");
+    expect(formatRemainingCountdown(now + 86400 * 2 + 3600 * 5, now, true)).toBe("2d 5h");
+  });
+
+  it("formats short reset time for same-day and multi-day timestamps", () => {
+    expect(formatResetTimeShort(null, "ru")).toBe("нет данных");
+    expect(formatResetTimeShort(null, "en")).toBe("no data");
+
+    // Same day: 2 hours later
+    const sameDay = now + 7200;
+    const sameDayStr = formatResetTimeShort(sameDay, "ru", now);
+    expect(sameDayStr).toMatch(/^\d{2}:\d{2}$/);
+
+    // Future day: 5 days later
+    const futureDay = now + 5 * 86400;
+    const futureDayStr = formatResetTimeShort(futureDay, "ru", now);
+    expect(futureDayStr.length).toBeGreaterThan(5);
+  });
 });
+

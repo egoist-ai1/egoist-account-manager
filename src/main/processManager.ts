@@ -176,6 +176,14 @@ function findDesktopFromRunningProcesses(): string | null {
 
 export function ensureExecutableCodexPath(rawPath: string | null): string | null {
   if (!rawPath) return null;
+  if (!fs.existsSync(rawPath)) {
+    const fresh = findFromOpenAICodexBinDirs();
+    if (fresh && fs.existsSync(fresh)) {
+      rawPath = fresh;
+    } else {
+      return null;
+    }
+  }
   if (process.platform !== "win32") return rawPath;
 
   // When installed via Windows Store / Appx, codex.exe is located inside

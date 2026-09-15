@@ -53,6 +53,9 @@ interface PendingCall {
 
 export function spawnCodexProcess(rawCodexPath: string, args: string[], env: NodeJS.ProcessEnv): ChildProcessWithoutNullStreams {
   const codexPath = ensureExecutableCodexPath(rawCodexPath) ?? rawCodexPath;
+  if (!fs.existsSync(codexPath)) {
+    throw new Error(`Codex binary was not found at "${rawCodexPath}". Please launch or reinstall Codex Desktop.`);
+  }
   const extension = path.extname(codexPath).toLowerCase();
   if (process.platform === "win32" && (extension === ".cmd" || extension === ".bat")) {
     return spawn("cmd.exe", ["/d", "/c", "call", codexPath, ...args], {

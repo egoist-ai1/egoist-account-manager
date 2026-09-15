@@ -571,7 +571,7 @@ function canReadCurrentWindowsCredentialStore(pathInput: AntigravityPathInput): 
 
 export class AccountManager extends EventEmitter {
   private readonly pendingLogins = new Map<string, PendingLogin>();
-  private readonly codexPath: string | null;
+  private codexPath: string | null;
   private readonly refreshBackoff = new RefreshBackoff({ baseDelayMs: 60_000, maxDelayMs: 30 * 60_000 });
   private readonly switchInFlight = new Map<ManagedAccount["platform"], { accountId: string; promise: Promise<ManagedAccount> }>();
   private readonly codexProfileVault: CodexProfileVaultService;
@@ -3875,7 +3875,14 @@ export class AccountManager extends EventEmitter {
   }
 
   getCodexPath(): string | null {
-    return this.codexPath ?? resolveCodexPath();
+    if (this.codexPath && fs.existsSync(this.codexPath)) {
+      return this.codexPath;
+    }
+    const fresh = resolveCodexPath();
+    if (fresh && fs.existsSync(fresh)) {
+      this.codexPath = fresh;
+    }
+    return this.codexPath ?? fresh;
   }
 
   async warmupAccountQuotaTimer(accountId: string): Promise<QuotaWarmupAccountResult> {
@@ -3938,11 +3945,18 @@ export class AccountManager extends EventEmitter {
   }
 
   private requireCodexPath(): string {
-    const candidate = this.codexPath ?? resolveCodexPath();
+    let candidate = this.codexPath;
+    if (!candidate || !fs.existsSync(candidate)) {
+      candidate = resolveCodexPath();
+      if (candidate && fs.existsSync(candidate)) {
+        this.codexPath = candidate;
+      }
+    }
     const executable = ensureExecutableCodexPath(candidate);
-    if (!executable) {
+    if (!executable || !fs.existsSync(executable)) {
       throw new Error("Codex CLI was not found. Install or launch Codex Desktop, then try again.");
     }
+    this.codexPath = executable;
     return executable;
   }
 

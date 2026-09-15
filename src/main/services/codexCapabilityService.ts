@@ -8,6 +8,7 @@ import {
   type CodexCommandResult,
   type CodexInitializeResponse
 } from "../codexRpc.js";
+import { resolveCodexPath } from "../processManager.js";
 import {
   CODEX_LOGIN_METHODS,
   unavailableCodexCapabilityReport,
@@ -150,7 +151,9 @@ export class CodexCapabilityService {
 
   private async probe(): Promise<CodexCapabilityReport> {
     const generatedAt = Math.floor((this.options.now?.() ?? Date.now()) / 1000);
-    const codexPath = this.options.codexPath;
+    const codexPath = (this.options.codexPath && fs.existsSync(this.options.codexPath))
+      ? this.options.codexPath
+      : resolveCodexPath();
     if (!codexPath) return unavailableCodexCapabilityReport("Codex CLI was not found.", generatedAt);
 
     const run = this.options.runCommand ?? runCodexCommand;

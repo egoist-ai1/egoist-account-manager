@@ -131,14 +131,6 @@ if (getRes.ok) {
 const uploadUrlTemplate = release.upload_url; // e.g. "https://uploads.github.com/repos/.../releases/12345/assets{?name,label}"
 const baseUrl = uploadUrlTemplate.replace(/\{\?name,label\}$/, '');
 
-// Delete existing assets if they match
-if (release.assets && release.assets.length > 0) {
-  for (const asset of release.assets) {
-    console.log(`   Removing stale asset: ${asset.name} (ID: ${asset.id})...`);
-    await fetchGithub(asset.url, { method: 'DELETE' });
-  }
-}
-
 const filesToUpload = [
   { name: `Account-Manager-EGO-Setup-${version}.exe`, path: `release/Account-Manager-EGO-Setup-${version}.exe`, contentType: 'application/octet-stream' },
   { name: `Account-Manager-EGO-${version}.exe`, path: `release/Account-Manager-EGO-${version}.exe`, contentType: 'application/octet-stream' },
@@ -146,31 +138,49 @@ const filesToUpload = [
 ];
 
 console.log('\n3. Uploading release assets to GitHub...');
+const existingAssets = release.assets || [];
+
 for (const file of filesToUpload) {
   const filePath = path.resolve(file.path);
   const stat = fs.statSync(filePath);
-  console.log(`   Uploading ${file.name} (${(stat.size / 1024 / 1024).toFixed(2)} MB)...`);
+  const matchingAsset = existingAssets.find(a => a.name === file.name);
 
-  const fileBuffer = fs.readFileSync(filePath);
+  if (matchingAsset) {
+    if (matchingAsset.state === 'uploaded' && matchingAsset.size === stat.size) {
+      console.log(`   OK: ${file.name} already uploaded and verified (${(stat.size / 1024 / 1024).toFixed(2)} MB), skipping.`);
+      continue;
+    }
+    console.log(`   Removing stale/incomplete asset: ${matchingAsset.name} (ID: ${matchingAsset.id})...`);
+    await fetchGithub(matchingAsset.url, { method: 'DELETE' });
+  }
+
+  console.log(`   Uploading ${file.name} (${(stat.size / 1024 / 1024).toFixed(2)} MB)...`);
   const uploadUrl = `${baseUrl}?name=${encodeURIComponent(file.name)}`;
 
-  const uploadRes = await fetch(uploadUrl, {
-    method: 'POST',
-    headers: {
-      'Authorization': `token ${token}`,
-      'User-Agent': 'Egoist-Release-Tool',
-      'Content-Type': file.contentType,
-      'Content-Length': stat.size.toString()
-    },
-    body: fileBuffer,
-    duplex: 'half'
-  });
+  // Use curl.exe for robust streaming binary upload without Node fetch timeout
+  const curlCmd = [
+    'curl.exe',
+    '--retry', '3',
+    '--retry-delay', '3',
+    '-s', '-S',
+    '-X', 'POST',
+    '-H', `"Authorization: token ${token}"`,
+    '-H', `"User-Agent: Egoist-Release-Tool"`,
+    '-H', `"Content-Type: ${file.contentType}"`,
+    '--data-binary', `@"${filePath}"`,
+    `"${uploadUrl}"`
+  ].join(' ');
 
-  if (!uploadRes.ok) {
-    throw new Error(`Failed to upload ${file.name}: ${uploadRes.status} ${uploadRes.statusText}\n${await uploadRes.text()}`);
+  try {
+    const curlOutput = execSync(curlCmd, { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+    const uploaded = JSON.parse(curlOutput);
+    if (!uploaded.browser_download_url) {
+      throw new Error(`Upload failed: ${curlOutput}`);
+    }
+    console.log(`   OK: Uploaded ${file.name} (Download URL: ${uploaded.browser_download_url})`);
+  } catch (err) {
+    throw new Error(`Failed to upload ${file.name}: ${err.message}`);
   }
-  const uploaded = await uploadRes.json();
-  console.log(`   OK: Uploaded ${file.name} (Download URL: ${uploaded.browser_download_url})`);
 }
 
 console.log('\n======================================================');

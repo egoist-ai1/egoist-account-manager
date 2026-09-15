@@ -1,4 +1,4 @@
-export const appVersion = "3.1.7";
+export const appVersion = "3.1.8";
 
 export interface ReleaseNoteEntry {
   title: string;
@@ -6,6 +6,10 @@ export interface ReleaseNoteEntry {
 }
 
 export const releaseNotes: ReleaseNoteEntry[] = [
+  {
+    title: "Egoist Account Manager 3.1.8",
+    body: "Критическое обновление стабильности и синхронизации: добавлено динамическое самовосстановление пути к исполняемому файлу Codex при фоновых обновлениях и миграциях папок, предотвращающее сбои spawn ENOENT. Полностью переработан механизм переключения: реализовано принудительное завершение всех дочерних процессов и служб Codex (taskkill /F), устранившее зависания при переключении аккаунтов. Интеграция с Google Antigravity переведена на прямой боевой опрос Google Quota API и live telemetry RPC без симуляции 100% лимитов и с точным учетом скользящих окон 5h и 7d. Устранены циклические блокировки интерфейса и зафиксирована оптимальная геометрия окна 1578×895."
+  },
   {
     title: "Egoist Account Manager 3.1.7",
     body: "Реализован надежный обход дополнительной SMS-верификации Antigravity IDE: вход в Google-аккаунты теперь выполняется в доверенном системном браузере без SMS-гейта. При переключении аккаунта менеджер штатно останавливает процессы Antigravity IDE, очищает зависшие замки сессии (lockfile, DevToolsActivePort, SingletonLock), проактивно обновляет Google Access Token и атомарно прописывает авторизацию в state.vscdb и Windows Credential Manager с гарантированным перезапуском среды со свежими токенами. В Overview добавлена кнопка быстрого добавления Google аккаунта и исправлены кнопки переключения."

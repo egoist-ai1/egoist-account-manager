@@ -5,7 +5,12 @@ import { execSync } from 'node:child_process';
 const root = path.resolve(import.meta.dirname, '..');
 process.chdir(root);
 
-console.log('=== Publishing Account Manager EGO v3.1.7 to GitHub Releases ===\n');
+const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const version = pkg.version;
+const tag = `v${version}`;
+const releaseName = `${pkg.productName} ${version}`;
+
+console.log(`=== Publishing ${releaseName} to GitHub Releases ===\n`);
 
 // 1. Obtain token via git credential
 function getGitToken() {
@@ -26,48 +31,49 @@ const token = getGitToken();
 console.log('1. GitHub token retrieved successfully (length: ' + token.length + ')');
 
 const repo = 'egoist-ai1/egoist-account-manager';
-const tag = 'v3.1.7';
-const releaseName = 'Account Manager EGO 3.1.7';
 
-const releaseBody = `# Account Manager EGO 3.1.7
+// Load checksums if present
+let checksumsText = '';
+try {
+  checksumsText = fs.readFileSync(`release/SHA256SUMS-${version}.txt`, 'utf8').trim();
+} catch {}
 
-Крупное обновление локального Windows-менеджера и центра балансировки квот. В этой версии полностью активирована и интегрирована поддержка **Google Antigravity IDE** в дополнение к **OpenAI Codex**, внедрён нативный инсталлятор на C# WPF со стилем **Lagom** и реализована чистая установка на любое устройство с нуля (**Zero Dependencies**).
+const releaseBody = `# Account Manager EGO ${version}
+
+Критическое обновление стабильности, динамического самовосстановления путей и боевого мониторинга квот. В этой версии устранены зависания при переключении профилей, внедрено динамическое автоисправление путей исполняемых файлов Codex, реализован прямой опрос Google Quota API для Antigravity и отполирован пользовательский интерфейс.
 
 ---
 
-## Что нового в версии 3.1.7
+## Что нового в версии ${version}
 
-### 1. Полноценная интеграция с Google Antigravity IDE
-- **Вход через доверенный системный браузер (OAuth 2.0 PKCE)**: авторизация выполняется в основном браузере системы без попадания под SMS-челленджи и антифрод-фильтры Google (\`VALIDATION_REQUIRED\`).
-- **Атомарная инжекция авторизации**: токены и профиль автоматически записываются в \`state.vscdb\` (Protobuf \`antigravityUnifiedStateSync.oauthToken\` + JSON) и в Windows Credential Manager (\`gemini:antigravity\`).
-- **Двухфазный безопасный перезапуск IDE (\`quiesceAntigravity\`)**: корректное закрытие дерева процессов Antigravity перед сменой аккаунта с выгрузкой старых токенов из оперативной памяти.
-- **Очистка сессионных замков**: автоматическое удаление зависших файлов блокировок (\`SingletonLock\`, \`lockfile\`, \`DevToolsActivePort\`), предотвращающее зависания мастера «Setting Up Your Account».
-- **Мониторинг квот Gemini**: поддержка скользящих 5-часовых и недельных окон квот моделей Gemini 3.8 Pro и Flash.
+### 1. Динамическое самовосстановление путей Codex (Self-Healing Paths)
+- **Устранение ошибок \`spawn ENOENT\`**: при фоновых автоматических обновлениях Codex Desktop и смене пути директории \`codex-gui-*\` менеджер автоматически на лету находит актуальный исполняемый файл (\`ensureExecutableCodexPath\`, \`requireCodexPath\`).
+- **Синхронизация RPC и сервиса возможностей**: проверка доступности Codex RPC адаптирована к изменениям бинарников на диске без необходимости ручного перезапуска или перенастройки менеджера.
 
-### 2. Фирменный автономный установщик (Zero Dependencies)
-- **Нативный интерфейс C# WPF**: современный интерфейс установщика со скандинавской темной темой **Lagom** и переменной типографикой **Unbounded**.
-- **Чистая установка с нуля**: приложение полностью упаковано с нативными бинарниками SQLite (\`better-sqlite3\`), средой Electron и ресурсами — на целевом компьютере **не требуются** Node.js, Git, Python или пакетные менеджеры.
-- **Интеграция с Windows**: создание ярлыков на Рабочем столе и в меню «Пуск», регистрация официального деинсталлятора в «Установка и удаление программ» Windows.
-- **Портативная редакция (Portable)**: доступен однофайловый дистрибутив для работы без установки с любого внешнего накопителя.
+### 2. Безупречное завершение процессов и служб при переключении
+- **Гарантированная выгрузка дерева процессов**: реализована принудительная остановка зависших фоновых процессов и служб-компаньонов Codex (\`taskkill.exe /F /PID\` с PowerShell-фоллбэком).
+- **Ликвидация блокировок базы и файлов сессий**: менеджер больше не зависает в ожидании ручного выхода из приложения, переключение выполняется чисто и автономно.
 
-### 3. Пользовательский интерфейс и UX (Overview & Standby Pool)
-- **Standby Pool**: резервный пул профилей на главном экране Overview для переключения в 1 клик при исчерпании лимитов.
-- **Прямой вход**: кнопка «Войти через Google» вынесена непосредственно на главный командный пульт.
-- **Live Tray**: отображение критического остатка квоты и таймеров сброса прямо в системном трее Windows с полупрозрачной HUD-панелью при наведении.
-- **Устранение ложных предупреждений**: удалены устаревшие предупреждения о тестовом режиме коннектора.
+### 3. Боевой мониторинг квот Google Antigravity (Live Quota & Telemetry)
+- **Прямой опрос Google Cloud Quota API**: исключена любая симуляция или фиктивные 100% — отображаются реальные боевые лимиты и остатки квот моделей Gemini 3.8 Pro и Flash.
+- **Поддержка точных скользящих окон**: парсинг 5-часовых и 7-дневных интервалов с вычислением точного времени сброса лимитов.
+- **Интеграция с Live Telemetry RPC Antigravity**: безопасное получение телеметрии и информации о текущем активном пользователе.
 
-### 4. Надёжность и безопасность
-- **Windows DPAPI Vault**: 100% локальное шифрование авторизационных данных аппаратными средствами Windows.
-- **Safe Rollback**: транзакционный откат на предыдущую сессию в случае ошибки запуска.
-- **380 тестов**: 100% успешное прохождение полного набора из 74 тестовых сьютов Vitest.
+### 4. Оптимизация интерфейса и производительности
+- **Устранение циклических подвисаний**: отвязана синхронизация сессий от регулярного запроса списка аккаунтов, предотвращая микрофризы окна при частом обращении.
+- **Троттлинг опроса фоновых сессий**: снижение нагрузки на процессор и диск до нуля.
+- **Фиксированная эргономика**: окно зафиксировано в идеальном разрешении 1578×895 без обрезки элементов и паразитного скроллинга, разблокирована 4-стадийная сетка аудита переключений.
+
+### 5. Безопасность и верификация
+- **100% тестов пройдены**: 392 теста в 78 тестовых сьютах Vitest успешно завершены.
+- **DPAPI Vault**: локальное аппаратное шифрование всех учетных записей Windows.
 
 ---
 
 ## Контрольные суммы (SHA-256)
 
 \`\`\`text
-41b8d69f80afdf14a73859d7c023b07555bf1734a26091eb30d6ba8dd4866bea  Account-Manager-EGO-Setup-3.1.7.exe
-74960b79d7907eeb5ad80dea801da6b1628de3552747089837c922c7e068a76f  Account-Manager-EGO-3.1.7.exe
+${checksumsText}
 \`\`\`
 `;
 
@@ -134,9 +140,9 @@ if (release.assets && release.assets.length > 0) {
 }
 
 const filesToUpload = [
-  { name: 'Account-Manager-EGO-Setup-3.1.7.exe', path: 'release/Account-Manager-EGO-Setup-3.1.7.exe', contentType: 'application/octet-stream' },
-  { name: 'Account-Manager-EGO-3.1.7.exe', path: 'release/Account-Manager-EGO-3.1.7.exe', contentType: 'application/octet-stream' },
-  { name: 'SHA256SUMS-3.1.7.txt', path: 'release/SHA256SUMS-3.1.7.txt', contentType: 'text/plain' }
+  { name: `Account-Manager-EGO-Setup-${version}.exe`, path: `release/Account-Manager-EGO-Setup-${version}.exe`, contentType: 'application/octet-stream' },
+  { name: `Account-Manager-EGO-${version}.exe`, path: `release/Account-Manager-EGO-${version}.exe`, contentType: 'application/octet-stream' },
+  { name: `SHA256SUMS-${version}.txt`, path: `release/SHA256SUMS-${version}.txt`, contentType: 'text/plain' }
 ];
 
 console.log('\n3. Uploading release assets to GitHub...');
@@ -168,6 +174,6 @@ for (const file of filesToUpload) {
 }
 
 console.log('\n======================================================');
-console.log('SUCCESS! Account Manager EGO 3.1.7 published to GitHub');
+console.log(`SUCCESS! ${pkg.productName} ${version} published to GitHub`);
 console.log(`Release URL: ${release.html_url}`);
 console.log('======================================================\n');

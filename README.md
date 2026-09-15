@@ -5,10 +5,10 @@
   <p><em>100% локальное шифрование через Windows DPAPI · Атомарный Safe Rollback · Обход SMS-верификации · Нативный инсталлятор</em></p>
 
   <p>
-    <a href="https://github.com/egoist-ai1/egoist-account-manager/releases/latest"><img alt="Версия 3.1.7" src="https://img.shields.io/badge/Release-v3.1.7-7c3aed?style=for-the-badge&logo=github&logoColor=white" /></a>
+    <a href="https://github.com/egoist-ai1/egoist-account-manager/releases/latest"><img alt="Версия 3.1.8" src="https://img.shields.io/badge/Release-v3.1.8-7c3aed?style=for-the-badge&logo=github&logoColor=white" /></a>
     <img alt="Windows 10/11" src="https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-090a0f?style=for-the-badge&logo=windows11&logoColor=white" />
     <img alt="Zero Dependencies" src="https://img.shields.io/badge/Setup-Zero--Dependencies-10b981?style=for-the-badge&logo=checkmarx&logoColor=white" />
-    <img alt="Тесты" src="https://img.shields.io/badge/Tests-380%20Passed-22c55e?style=for-the-badge" />
+    <img alt="Тесты" src="https://img.shields.io/badge/Tests-392%20Passed-22c55e?style=for-the-badge" />
     <a href="LICENSE"><img alt="Лицензия MIT" src="https://img.shields.io/badge/License-MIT-3b82f6?style=for-the-badge" /></a>
   </p>
 
@@ -61,12 +61,12 @@
 
 | Версия | Назначение | Исполняемый файл | Размер | SHA-256 |
 | :--- | :--- | :--- | :--- | :--- |
-| **Setup (Инсталлятор)** | Установка в систему с ярлыками и деинсталлятором | `Account-Manager-EGO-Setup-3.1.7.exe` | ~106 МБ | `41b8d69f80afdf14a73859d7c023b07555bf1734a26091eb30d6ba8dd4866bea` |
-| **Portable** | Запуск без установки (с флешки или из любой папки) | `Account-Manager-EGO-3.1.7.exe` | ~102 МБ | `74960b79d7907eeb5ad80dea801da6b1628de3552747089837c922c7e068a76f` |
+| **Setup (Инсталлятор)** | Установка в систему с ярлыками и деинсталлятором | `Account-Manager-EGO-Setup-3.1.8.exe` | ~106 МБ | `5d243310839b4384dd7d630742834856488b8348cac75938d774d2404fb4d1a7` |
+| **Portable** | Запуск без установки (с флешки или из любой папки) | `Account-Manager-EGO-3.1.8.exe` | ~91 МБ | `6e4213ad30888018b7acca7fe222e599f877ad4cf903cbcead08442d3df84ede` |
 
 ### Быстрый старт на новом устройстве
 
-1. Скачайте [`Account-Manager-EGO-Setup-3.1.7.exe`](https://github.com/egoist-ai1/egoist-account-manager/releases/latest).
+1. Скачайте [`Account-Manager-EGO-Setup-3.1.8.exe`](https://github.com/egoist-ai1/egoist-account-manager/releases/latest).
 2. Запустите файл установки. Откроется нативный инсталлятор на C# WPF со стилем Lagom.
 3. Выберите папку установки (по умолчанию `%LOCALAPPDATA%\Programs\Account Manager EGO`) и параметры ярлыков.
 4. Нажмите **«Установить»** — инсталлятор выполнит распаковку с проверкой целостности, создаст ярлыки в меню «Пуск» / на Рабочем столе и зарегистрирует приложение в Windows.

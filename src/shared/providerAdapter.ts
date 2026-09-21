@@ -270,7 +270,7 @@ export function buildProviderQuotaState(account: ManagedAccount): ProviderQuotaS
       remaining: used === null ? null : 100 - used,
       used,
       resetAt: account.primaryResetsAt ?? null,
-      windowType: "unknown",
+      windowType: classifyWindow(account.primaryWindowDurationMins),
       confidence: used === null ? "unknown" : "inferred",
       source: used === null ? "unknown" : "local_status",
       lastCheckedAt: account.antigravity?.lastQuotaRefreshAt ?? null,

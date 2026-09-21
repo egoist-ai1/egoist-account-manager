@@ -16,10 +16,10 @@ const googleUserInfoUrls = [
   "https://www.googleapis.com/oauth2/v2/userinfo"
 ] as const;
 const codeAssistContextEndpoints = [
-  "https://cloudcode-pa.googleapis.com",
   "https://daily-cloudcode-pa.googleapis.com",
   "https://autopush-cloudcode-pa.sandbox.googleapis.com",
-  "https://daily-cloudcode-pa.sandbox.googleapis.com"
+  "https://daily-cloudcode-pa.sandbox.googleapis.com",
+  "https://cloudcode-pa.googleapis.com"
 ] as const;
 const callbackPath = "/oauth-callback";
 const callbackPorts = [0, 36742, 36743, 36744, 36745, 36746] as const;

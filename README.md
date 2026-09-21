@@ -5,10 +5,10 @@
   <p><em>100% локальное шифрование через Windows DPAPI · Атомарный Safe Rollback · Обход SMS-верификации · Нативный инсталлятор</em></p>
 
   <p>
-    <a href="https://github.com/egoist-ai1/egoist-account-manager/releases/latest"><img alt="Версия 3.1.8" src="https://img.shields.io/badge/Release-v3.1.8-7c3aed?style=for-the-badge&logo=github&logoColor=white" /></a>
+    <a href="https://github.com/egoist-ai1/egoist-account-manager/releases/latest"><img alt="Версия 3.1.9" src="https://img.shields.io/badge/Release-v3.1.9-7c3aed?style=for-the-badge&logo=github&logoColor=white" /></a>
     <img alt="Windows 10/11" src="https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-090a0f?style=for-the-badge&logo=windows11&logoColor=white" />
     <img alt="Zero Dependencies" src="https://img.shields.io/badge/Setup-Zero--Dependencies-10b981?style=for-the-badge&logo=checkmarx&logoColor=white" />
-    <img alt="Тесты" src="https://img.shields.io/badge/Tests-392%20Passed-22c55e?style=for-the-badge" />
+    <img alt="Тесты" src="https://img.shields.io/badge/Tests-393%20Passed-22c55e?style=for-the-badge" />
     <a href="LICENSE"><img alt="Лицензия MIT" src="https://img.shields.io/badge/License-MIT-3b82f6?style=for-the-badge" /></a>
   </p>
 

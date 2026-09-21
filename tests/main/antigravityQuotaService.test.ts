@@ -544,4 +544,94 @@ describe("antigravityQuotaService", () => {
     expect(result.limits.limitName).toBe("5 часов / неделя");
     expect(result.status).toBe("active");
   });
+
+  it("prioritizes daily-cloudcode-pa endpoint and correctly handles 100% used 5h quota", async () => {
+    const requestedUrls: string[] = [];
+    const fetchImpl = async (url: string | URL | Request) => {
+      const target = String(url);
+      requestedUrls.push(target);
+      if (target.includes("loadCodeAssist")) {
+        return new Response(JSON.stringify({
+          cloudaicompanionProject: "aicode-consumers",
+          currentTier: { id: "paid-tier", name: "Google AI Pro" }
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (target.startsWith("https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")) {
+        return new Response(JSON.stringify({
+          groups: [
+            {
+              displayName: "Gemini Models",
+              buckets: [
+                {
+                  bucketId: "gemini-weekly",
+                  displayName: "Weekly Limit Remaining",
+                  window: "weekly",
+                  resetTime: "2026-09-28T15:49:41Z",
+                  remainingFraction: 0.82367986
+                },
+                {
+                  bucketId: "gemini-5h",
+                  displayName: "Five Hour Limit Remaining",
+                  window: "5h",
+                  resetTime: "2026-09-21T20:49:41Z",
+                  remainingFraction: 0
+                }
+              ]
+            }
+          ]
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (target.startsWith("https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")) {
+        return new Response(JSON.stringify({
+          groups: [
+            {
+              displayName: "Gemini Models",
+              buckets: [
+                {
+                  bucketId: "gemini-weekly",
+                  displayName: "Weekly Limit Remaining",
+                  window: "weekly",
+                  resetTime: "2026-09-28T18:23:41Z",
+                  remainingFraction: 1.0
+                },
+                {
+                  bucketId: "gemini-5h",
+                  displayName: "Five Hour Limit Remaining",
+                  window: "5h",
+                  resetTime: "2026-09-21T23:23:41Z",
+                  remainingFraction: 1.0
+                }
+              ]
+            }
+          ]
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      throw new Error(`unexpected request ${target}`);
+    };
+
+    const result = await fetchAntigravityQuota({
+      accessToken: "access-secret-value",
+      fetchImpl: fetchImpl as typeof fetch,
+      now: () => Date.parse("2026-09-21T18:20:00Z") / 1000
+    });
+
+    // Verify daily-cloudcode-pa was called first
+    expect(requestedUrls[0]).toContain("daily-cloudcode-pa.googleapis.com");
+    expect(requestedUrls.some((u) => u.startsWith("https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"))).toBe(false);
+
+    // Verify 5h limit is 100% used (0% remaining)
+    expect(result.limits.primary).toMatchObject({
+      usedPercent: 100,
+      windowDurationMins: 300,
+      resetsAt: Date.parse("2026-09-21T20:49:41Z") / 1000
+    });
+    // Verify weekly limit is 18% used (82% remaining)
+    expect(result.limits.secondary).toMatchObject({
+      usedPercent: 18,
+      windowDurationMins: 10080,
+      resetsAt: Date.parse("2026-09-28T15:49:41Z") / 1000
+    });
+    expect(result.status).toBe("limited");
+    expect(result.statusReason).toContain("Gemini Models: Five Hour Limit Remaining");
+  });
 });

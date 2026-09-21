@@ -2,11 +2,13 @@ import type { ManagedAccount, PlanType, RateLimitSnapshot } from "../../shared/t
 import { fetchAntigravityGoogleAccountContext, type AntigravityGoogleAccountContext } from "./antigravityGoogleAuthService.js";
 
 const retrieveUserQuotaSummaryEndpoints = [
-  "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
-  "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+  "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+  "https://autopush-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary",
+  "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary",
+  "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
 ] as const;
 
-const retrieveUserQuotaEndpoint = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
+const retrieveUserQuotaEndpoint = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
 
 const fetchAvailableModelsEndpoints = [
   "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",

@@ -1,4 +1,4 @@
-export const appVersion = "3.1.8";
+export const appVersion = "3.1.9";
 
 export interface ReleaseNoteEntry {
   title: string;
@@ -6,6 +6,10 @@ export interface ReleaseNoteEntry {
 }
 
 export const releaseNotes: ReleaseNoteEntry[] = [
+  {
+    title: "Egoist Account Manager 3.1.9",
+    body: "Исправлено отображение реальных лимитов Google Antigravity: приоритет отдан боевому сервису daily-cloudcode-pa.googleapis.com (используемому Antigravity Language Server), исключен сброс квот в фиктивные 100% из нецелевых эндпоинтов. Обеспечено точное считывание исчерпанных 5-часовых и недельных скользящих окон, корректная классификация статуса limited и синхронизация таймеров сброса."
+  },
   {
     title: "Egoist Account Manager 3.1.8",
     body: "Критическое обновление стабильности и синхронизации: добавлено динамическое самовосстановление пути к исполняемому файлу Codex при фоновых обновлениях и миграциях папок, предотвращающее сбои spawn ENOENT. Полностью переработан механизм переключения: реализовано принудительное завершение всех дочерних процессов и служб Codex (taskkill /F), устранившее зависания при переключении аккаунтов. Интеграция с Google Antigravity переведена на прямой боевой опрос Google Quota API и live telemetry RPC без симуляции 100% лимитов и с точным учетом скользящих окон 5h и 7d. Устранены циклические блокировки интерфейса и зафиксирована оптимальная геометрия окна 1578×895."

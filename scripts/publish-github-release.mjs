@@ -134,6 +134,10 @@ const existingAssets = release.assets || [];
 
 for (const file of filesToUpload) {
   const filePath = path.resolve(file.path);
+  if (!fs.existsSync(filePath)) {
+    console.log(`   Skipping non-existent ${file.name}`);
+    continue;
+  }
   const stat = fs.statSync(filePath);
   const matchingAsset = existingAssets.find(a => a.name === file.name);
 

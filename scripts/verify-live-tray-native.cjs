@@ -2,11 +2,15 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { app, nativeImage } = require("electron");
 
+const outputDir = process.env.CAM_TRAY_TEST_OUTPUT || path.join(process.cwd(), "test-results", "live-tray-native");
+const userDataDir = process.env.CAM_USER_DATA_DIR || path.join(outputDir, "electron-user-data");
+fs.mkdirSync(userDataDir, { recursive: true });
+app.setPath("userData", userDataDir);
+
 const samples = ["0", "1", "9", "10", "25", "64", "66", "99", "100", "—", "~", "!"];
 
 app.whenReady().then(async () => {
   const { LIVE_TRAY_REPRESENTATIONS, renderLiveTrayBitmap } = await import("../dist/shared/liveTray.js");
-  const outputDir = path.join(process.cwd(), "test-results", "live-tray-native");
   fs.mkdirSync(outputDir, { recursive: true });
   const results = samples.map((label) => {
     const numeric = /^\d+$/.test(label) ? Number(label) : null;

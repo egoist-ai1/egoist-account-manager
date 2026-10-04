@@ -78,17 +78,29 @@ export class UpdaterService {
     const controller = new AbortController();
     let timer: NodeJS.Timeout | null = null;
     try {
-      const response = await Promise.race([
-        this.fetchRelease(latestReleaseApiUrl, {
-          method: "GET",
-          headers: {
-            Accept: "application/vnd.github+json",
-            "X-GitHub-Api-Version": githubApiVersion,
-            "User-Agent": "Egoist-Account-Manager"
-          },
-          redirect: "error",
-          signal: controller.signal
-        }),
+      const release = await Promise.race([
+        (async () => {
+          const response = await this.fetchRelease(latestReleaseApiUrl, {
+            method: "GET",
+            headers: {
+              Accept: "application/vnd.github+json",
+              "X-GitHub-Api-Version": githubApiVersion,
+              "User-Agent": "Egoist-Account-Manager"
+            },
+            redirect: "error",
+            signal: controller.signal
+          });
+          if (!response.ok) throw new Error(`GitHub Releases ответил HTTP ${response.status}`);
+          const declaredSize = Number.parseInt(response.headers.get("content-length") ?? "0", 10);
+          if (Number.isFinite(declaredSize) && declaredSize > maximumReleaseResponseBytes) {
+            throw new Error("Ответ GitHub Releases превышает безопасный размер");
+          }
+          const body = await response.text();
+          if (Buffer.byteLength(body, "utf8") > maximumReleaseResponseBytes) {
+            throw new Error("Ответ GitHub Releases превышает безопасный размер");
+          }
+          return JSON.parse(body) as GithubRelease;
+        })(),
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => {
             controller.abort();
@@ -98,16 +110,6 @@ export class UpdaterService {
           }, 20_000);
         })
       ]);
-      if (!response.ok) throw new Error(`GitHub Releases ответил HTTP ${response.status}`);
-      const declaredSize = Number.parseInt(response.headers.get("content-length") ?? "0", 10);
-      if (Number.isFinite(declaredSize) && declaredSize > maximumReleaseResponseBytes) {
-        throw new Error("Ответ GitHub Releases превышает безопасный размер");
-      }
-      const body = await response.text();
-      if (Buffer.byteLength(body, "utf8") > maximumReleaseResponseBytes) {
-        throw new Error("Ответ GitHub Releases превышает безопасный размер");
-      }
-      const release = JSON.parse(body) as GithubRelease;
       if (release.draft === true || release.prerelease === true) {
         throw new Error("GitHub вернул не стабильный релиз");
       }

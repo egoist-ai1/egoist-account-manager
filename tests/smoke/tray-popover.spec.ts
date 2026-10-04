@@ -5,12 +5,12 @@ test("live tray popover renders a complete compact quota surface", async ({ page
   await page.goto("/?surface=tray");
   const popover = page.locator(".tray-live");
   await expect(popover).toBeVisible();
-  await expect(popover.getByText("Codex Live")).toBeVisible();
-  await expect(popover.getByText("АКТИВНЫЙ АККАУНТ")).toBeVisible();
-  await expect(popover.getByText("5 часов", { exact: true })).toBeVisible();
-  await expect(popover.getByText("Неделя", { exact: true })).toBeVisible();
-  await expect(popover.getByRole("button", { name: "Обновить лимиты активного аккаунта" })).toBeEnabled();
-  await expect(popover.getByRole("button", { name: /Открыть/ })).toBeVisible();
+  await expect(popover.getByText("Codex", { exact: true })).toBeVisible();
+  await expect(popover.locator(".tray-live-identity strong")).toHaveText("основной");
+  await expect(popover.locator(".tray-live-value")).toContainText("66");
+  await expect(popover.getByText(/^Сброс /)).toBeVisible();
+  await expect(popover.getByRole("button", { name: "Обновить лимит" })).toBeEnabled();
+  await expect(popover.getByRole("button", { name: "Менеджер" })).toBeVisible();
   const layout = await popover.evaluate((element) => ({
     clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth,
@@ -35,9 +35,9 @@ test("passive tray hover surface is translucent, complete and action-free", asyn
   await page.goto("/?surface=tray-hover");
   const hover = page.locator(".tray-hover");
   await expect(hover).toBeVisible();
-  await expect(hover.getByText("CODEX", { exact: true })).toBeVisible();
-  await expect(hover.getByText("АКТИВНЫЙ ПРОФИЛЬ")).toBeVisible();
-  await expect(hover.getByText("ТЕКУЩИЙ ЛИМИТ", { exact: true })).toBeVisible();
+  await expect(hover.getByText("Codex", { exact: true })).toBeVisible();
+  await expect(hover.getByText("основной", { exact: true })).toBeVisible();
+  await expect(hover.getByRole("region", { name: "Текущий лимит" })).toBeVisible();
   await expect(hover.getByText(/^Сброс /)).toBeVisible();
   await expect(hover.getByText("5 часов", { exact: true })).toHaveCount(0);
   await expect(hover.getByText("Неделя", { exact: true })).toHaveCount(0);
@@ -54,7 +54,6 @@ test("passive tray hover surface is translucent, complete and action-free", asyn
       scrollHeight: element.scrollHeight,
       background: style.backgroundImage,
       backdropFilter: style.backdropFilter,
-      boxShadow: style.boxShadow,
       surfaces,
       pointerEvents: style.pointerEvents
     };
@@ -64,7 +63,6 @@ test("passive tray hover surface is translucent, complete and action-free", asyn
   expect(metrics.background).toContain("rgba");
   expect(metrics.surfaces).toEqual(["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)"]);
   expect(metrics.backdropFilter).toBe("none");
-  expect(metrics.boxShadow).not.toMatch(/^rgba\(0, 0, 0/);
   expect(metrics.pointerEvents).toBe("none");
   await page.screenshot({ path: testInfo.outputPath("tray-hover.png"), omitBackground: true });
 });

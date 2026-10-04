@@ -24,6 +24,17 @@ afterEach(() => {
 });
 
 describe("CodexProfileVaultService", () => {
+  it.each([
+    {},
+    { OPENAI_API_KEY: "   " },
+    { tokens: {} },
+    { tokens: { access_token: "   ", id_token: "" } },
+    { tokens: { access_token: {}, id_token: [] } },
+    { tokens: { access_token: 123, id_token: true } }
+  ])("does not infer authenticated mode from unusable credentials: %j", (auth) => {
+    expect(inspectCodexAuthJson(JSON.stringify(auth)).inferredAuthMode).toBeNull();
+  });
+
   it("hydrates only on demand, backfills verified rotation and removes plaintext", () => {
     const appDataDir = tempDir();
     const store = new AccountStore(appDataDir);
@@ -147,6 +158,42 @@ describe("CodexProfileVaultService", () => {
         "outside the application profiles directory"
       );
       expect(fs.existsSync(getAuthFilePath(outside))).toBe(false);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("quarantines truncated plaintext and continues sealing other profiles on startup", () => {
+    const appDataDir = tempDir();
+    const store = new AccountStore(appDataDir);
+    const vault = new Vault(appDataDir);
+    const service = new CodexProfileVaultService(appDataDir, store, vault);
+    const malformed = '{"tokens":{"access_token":"truncated';
+    const authJson = JSON.stringify({ tokens: { account_id: "stable", access_token: "valid" } });
+    try {
+      for (const id of ["malformed", "healthy"]) {
+        const profileDir = getProfileDir(appDataDir, id);
+        fs.mkdirSync(profileDir, { recursive: true });
+        fs.writeFileSync(getAuthFilePath(profileDir), id === "malformed" ? malformed : authJson, "utf8");
+        store.upsert({
+          id,
+          label: id,
+          email: `${id}@example.com`,
+          planType: "plus",
+          profileDir,
+          encryptedAuthJson: vault.encryptUtf8(authJson),
+          authFingerprint: inspectCodexAuthJson(authJson).authFingerprint
+        });
+      }
+
+      expect(service.secureExistingProfiles()).toEqual({ sealed: 1, drifted: 1 });
+      for (const id of ["malformed", "healthy"]) {
+        expect(fs.existsSync(getAuthFilePath(getProfileDir(appDataDir, id)))).toBe(false);
+        expect(vault.decryptUtf8(store.get(id)!.encryptedAuthJson)).toBe(authJson);
+      }
+      expect(store.get("malformed")?.credentialState).toBe("drifted");
+      expect(vault.decryptUtf8(store.getAuthDriftCandidate("malformed")!.encryptedAuthJson)).toBe(malformed);
+      expect(store.getAuthDriftCandidate("healthy")).toBeNull();
     } finally {
       store.close();
     }

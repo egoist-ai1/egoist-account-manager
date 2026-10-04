@@ -107,4 +107,23 @@ describe("UpdaterService GitHub release discovery", () => {
     await expect(service.checkForUpdates()).resolves.toMatchObject({ status: "not_configured" });
     expect(fetchRelease).not.toHaveBeenCalled();
   });
+  it("times out a stalled response body and permits a later retry", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | null = null;
+    let calls = 0;
+    const { service } = createService({ fetchRelease: async (_url?: unknown, init?: RequestInit) => {
+      calls += 1;
+      signal = init?.signal as AbortSignal;
+      return calls === 1
+        ? { ...response({}), text: vi.fn(() => new Promise<string>(() => undefined)) }
+        : response({ tag_name: "v3.2.0" });
+    } });
+    const pending = service.checkForUpdates();
+    await vi.advanceTimersByTimeAsync(20_001);
+    await expect(pending).resolves.toMatchObject({ status: "error" });
+    expect((signal as AbortSignal | null)?.aborted).toBe(true);
+    await expect(service.checkForUpdates()).resolves.toMatchObject({ status: "available" });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
 });

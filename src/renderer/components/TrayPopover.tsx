@@ -137,7 +137,7 @@ export function TrayPopover({ api }: { api: AppApi }) {
 
       <div className="tray-live-hero">
         <div className="tray-live-identity">
-          <strong title={active?.email || active?.label}>{snapshot.accountLabel}</strong>
+          <strong title={settings?.privacyMode ? undefined : active?.email || active?.label}>{snapshot.accountLabel}</strong>
           <span className="tray-plan-badge">
             {active ? planLabel(active.planType, platform) : (isEnglish ? "Select profile" : "Выберите аккаунт")}
           </span>

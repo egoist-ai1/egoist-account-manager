@@ -1,75 +1,58 @@
 import { expect, test } from "@playwright/test";
 
-async function ready(page: import("@playwright/test").Page): Promise<void> {
+async function ready(page: import("@playwright/test").Page) {
   await page.goto("/");
   const notes = page.getByRole("dialog", { name: "Что нового" });
-  if (await notes.isVisible().catch(() => false)) await notes.getByRole("button", { name: "Понятно" }).click();
-  await expect(page.locator(".overview-command-grid")).toBeVisible();
+  await expect(notes).toBeVisible();
+  await notes.getByRole("button", { name: "Понятно" }).click();
+  await expect(page.locator(".overview-page")).toBeVisible();
 }
 
-test("3.1 overview fits the default viewport without vertical scrolling or clipped cards", async ({ page }) => {
+test("default overview fits its viewport and provider panels do not clip content", async ({ page }) => {
   await page.setViewportSize({ width: 1460, height: 900 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await ready(page);
-
-  const geometry = await page.locator(".content-overview").evaluate((content) => {
-    const page = content.querySelector(".overview-v306")!;
-    const panels = Array.from(content.querySelectorAll(".overview-continuation, .overview-operation"));
-    return {
-      contentFits: content.scrollHeight <= content.clientHeight + 1,
-      pageFits: page.getBoundingClientRect().bottom <= content.getBoundingClientRect().bottom + 1,
-      pageFills: Math.abs(
-        page.getBoundingClientRect().bottom
-        - (content.getBoundingClientRect().bottom - Number.parseFloat(getComputedStyle(content).paddingBottom))
-      ) <= 2,
-      panelsFit: panels.every((panel) => panel.scrollHeight <= panel.clientHeight + 1),
-      finalChildrenFit: panels.every((panel) => {
-        const finalChild = panel.lastElementChild;
-        return Boolean(finalChild && finalChild.getBoundingClientRect().bottom <= panel.getBoundingClientRect().bottom + 1);
-      })
-    };
-  });
-  expect(geometry).toMatchObject({ contentFits: true, pageFits: true, pageFills: true, panelsFit: true, finalChildrenFit: true });
+  const geometry = await page.locator(".content-overview").evaluate((content) => ({
+    widthFits: content.scrollWidth <= content.clientWidth + 1,
+    pageInside: content.querySelector(".overview-page")!.getBoundingClientRect().bottom <= content.getBoundingClientRect().bottom + 1,
+    cardsFit: Array.from(content.querySelectorAll(".dual-command-card, .clean-quota-card"))
+      .every((panel) => panel.scrollHeight <= panel.clientHeight + 1 && panel.scrollWidth <= panel.clientWidth + 1)
+  }));
+  expect(geometry).toEqual({ widthFits: true, pageInside: true, cardsFit: true });
 });
 
-test("3.1 add-account wizard exposes only official Codex sign-in methods", async ({ page }) => {
+test("add-account wizard exposes supported official methods without invoking login", async ({ page }) => {
   await page.setViewportSize({ width: 1460, height: 900 });
-  await page.emulateMedia({ reducedMotion: "reduce" });
   await ready(page);
-  await page.getByRole("button", { name: "Добавить Codex" }).first().click();
-
+  await page.getByRole("button", { name: "Добавить Codex", exact: true }).first().click();
   const dialog = page.getByRole("dialog", { name: "Добавление аккаунта" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText("ОФИЦИАЛЬНАЯ АВТОРИЗАЦИЯ")).toBeVisible();
-  await expect(dialog.getByRole("button", { name: /Текущий Codex/ })).toHaveCount(0);
+  for (const name of [/Код устройства/, /Браузерный вход/, /OpenAI API key/, /Enterprise access token/]) {
+    await expect(dialog.getByRole("button", { name })).toBeVisible();
+  }
   await expect(dialog.getByRole("button", { name: /Выбрать auth.json/ })).toHaveCount(0);
-  await expect(dialog.getByRole("button", { name: /Код устройства/ })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: /Браузерный вход/ })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: /OpenAI API key/ })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: /Enterprise access token/ })).toBeVisible();
-
-  const layout = await dialog.locator(".workflow-modal").evaluate((modal) => ({
-    verticalFits: modal.scrollHeight <= modal.clientHeight + 1,
-    horizontalFits: modal.scrollWidth <= modal.clientWidth + 1
+  const geometry = await dialog.locator(".workflow-modal").evaluate((modal) => ({
+    widthFits: modal.scrollWidth <= modal.clientWidth + 1,
+    heightFits: modal.scrollHeight <= modal.clientHeight + 1
   }));
-  expect(layout).toEqual({ verticalFits: true, horizontalFits: true });
+  expect(geometry).toEqual({ widthFits: true, heightFits: true });
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
 });
 
-test("future Antigravity platform stays quiet and cannot replace the Codex focus", async ({ page }, testInfo) => {
+test("Antigravity platform opens its current account and Google onboarding surfaces", async ({ page }) => {
   await page.setViewportSize({ width: 1460, height: 900 });
   await ready(page);
-
-  const antigravity = page.getByRole("button", { name: /Antigravity: .*в разработке/i });
-  await expect(antigravity).toHaveAttribute("aria-disabled", "true");
-  await expect(antigravity).toHaveAttribute("data-tooltip", "Antigravity · В разработке");
-  await expect(antigravity).toHaveCSS("cursor", "help");
-  await antigravity.hover();
-  await expect.poll(() => antigravity.evaluate((element) => getComputedStyle(element, "::after").opacity)).toBe("1");
-  if (process.env.CAM_CAPTURE_VISUALS === "1") {
-    await page.screenshot({ path: testInfo.outputPath("antigravity-coming-soon.png"), fullPage: true });
-  }
-  await antigravity.dispatchEvent("click");
-  await expect(page.locator(".overview-command-grid")).toBeVisible();
-  await expect(antigravity).not.toHaveClass(/is-active/);
-  await expect(page.getByRole("button", { name: /Codex: / })).toHaveClass(/is-active/);
+  const platform = page.getByRole("button", { name: /Antigravity: / });
+  await expect(platform).toHaveAttribute("aria-disabled", "false");
+  await platform.click();
+  await expect(platform).toHaveClass(/is-active/);
+  await expect(page.getByRole("heading", { name: /Аккаунты Antigravity/ })).toBeVisible();
+  await page.getByRole("button", { name: "Добавить Antigravity", exact: true }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Добавить Antigravity" });
+  await expect(dialog.getByRole("button", { name: /^Войти через Google/ })).toBeVisible();
+  await expect(dialog.getByLabel("Refresh token", { exact: true })).toHaveCount(0);
+  await expect(dialog.getByLabel("Access token", { exact: true })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
 });

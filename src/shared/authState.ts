@@ -36,6 +36,6 @@ export function classifyAuthValidationError(error: unknown): Exclude<AuthState, 
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
   if (/\brevoked\b|invalid_grant|invalid refresh/.test(message)) return "revoked";
   if (/\bexpired\b|\b401\b|\b403\b|unauthorized/.test(message)) return "expired";
-  if (/not authenticated|not logged into a chatgpt(?:-compatible)? account|belongs to a different chatgpt account|login required|reauth|required.*auth|sign.?in/.test(message)) return "needs_reauth";
+  if (/not authenticated|not logged into a chatgpt(?:-compatible)? account|belongs to a different (?:chatgpt )?account|login required|reauth|required.*auth|sign.?in/.test(message)) return "needs_reauth";
   return "validation_failed";
 }

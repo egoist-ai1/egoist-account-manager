@@ -189,6 +189,81 @@ afterEach(() => {
 });
 
 describe.skipIf(process.platform !== "win32")("AccountManager Codex auth modes", () => {
+  it.each([
+    ["empty auth", "{}", "invalid"],
+    ["empty tokens", '{"tokens":{}}', "invalid"],
+    ["foreign provider without email", '{"tokens":{"account_id":"foreign","access_token":"foreign-access"}}', "unmanaged"],
+    ["API key replacing ChatGPT", '{"OPENAI_API_KEY":"sk-foreign"}', "unmanaged"],
+    ["foreign workspace", '{"tokens":{"account_id":"known","access_token":"workspace-access","organization_id":"foreign-workspace"}}', "unmanaged"]
+  ])("preserves encrypted auth on %s", (_label, incoming, status) => {
+    const appDir = tempDir();
+    const globalHome = path.join(appDir, "global-codex");
+    const store = new AccountStore(appDir);
+    const vault = new Vault(appDir);
+    const original = chatGptAuth("known", "known@example.com", "stable");
+    const account = addChatGptAccount(store, vault, appDir, "known", "known@example.com", "known", original);
+    store.setActive(account.id);
+    fs.mkdirSync(globalHome, { recursive: true });
+    fs.writeFileSync(getAuthFilePath(globalHome), incoming);
+    const manager = new AccountManager(store, vault, appDir, null, { codexHome: globalHome });
+    try {
+      expect(manager.syncActiveCodexSession().status).toBe(status);
+      expect(vault.decryptUtf8(store.get(account.id)!.encryptedAuthJson)).toBe(original);
+      expect(fs.readFileSync(getAuthFilePath(globalHome), "utf8")).toBe(incoming);
+    } finally { store.close(); }
+  });
+
+  it("rejects an empty current-session import without creating an account", async () => {
+    const appDir = tempDir();
+    const globalHome = path.join(appDir, "global-codex");
+    fs.mkdirSync(globalHome, { recursive: true });
+    fs.writeFileSync(getAuthFilePath(globalHome), "{}");
+    const store = new AccountStore(appDir);
+    const manager = new AccountManager(store, new Vault(appDir), appDir, null, { codexHome: globalHome });
+    try {
+      expect(await manager.importCurrentCodexSession()).toMatchObject({ imported: false, account: null });
+      expect(store.list()).toEqual([]);
+    } finally { await manager.shutdown(); store.close(); }
+  });
+
+  it("returns the newly active account when importing an existing current session", async () => {
+    const appDir = tempDir();
+    const globalHome = path.join(appDir, "global-codex");
+    const store = new AccountStore(appDir);
+    const vault = new Vault(appDir);
+    const auth = chatGptAuth("known", "known@example.com", "stable");
+    const account = addChatGptAccount(store, vault, appDir, "known", "known@example.com", "known", auth);
+    fs.mkdirSync(globalHome, { recursive: true });
+    fs.writeFileSync(getAuthFilePath(globalHome), auth);
+    const manager = new AccountManager(store, vault, appDir, null, { codexHome: globalHome });
+    try {
+      expect(await manager.importCurrentCodexSession()).toMatchObject({ imported: true, account: { id: account.id, isActive: true } });
+    } finally { await manager.shutdown(); store.close(); }
+  });
+
+  it("cleans isolated plaintext after both active-global and fallback app-server failures", async () => {
+    const appDir = tempDir();
+    const globalHome = path.join(appDir, "global-codex");
+    const store = new AccountStore(appDir);
+    const vault = new Vault(appDir);
+    const original = chatGptAuth("known", "known@example.com", "stable");
+    const account = addChatGptAccount(store, vault, appDir, "known", "known@example.com", "known", original);
+    store.setActive(account.id);
+    for (const home of [globalHome, account.profileDir]) {
+      fs.mkdirSync(home, { recursive: true });
+      fs.writeFileSync(path.join(home, ".force-incompatible"), "1");
+    }
+    fs.writeFileSync(getAuthFilePath(globalHome), original);
+    const manager = new AccountManager(store, vault, appDir, installFakeCodex(appDir), { codexHome: globalHome });
+    try {
+      const result = await manager.refreshAccount(account.id);
+      expect(result.lastRefreshError).toBeTruthy();
+      expect(fs.existsSync(getAuthFilePath(account.profileDir))).toBe(false);
+      expect(vault.decryptUtf8(store.get(account.id)!.encryptedAuthJson)).toBe(original);
+      expect(fs.readFileSync(getAuthFilePath(globalHome), "utf8")).toBe(original);
+    } finally { await manager.shutdown(); store.close(); }
+  });
+
   it("captures active token rotation locally without starting or restarting Codex", () => {
     const appDataDir = tempDir();
     const globalCodexHome = path.join(appDataDir, "global-codex");
@@ -453,7 +528,7 @@ describe.skipIf(process.platform !== "win32")("AccountManager Codex auth modes",
     }
   });
 
-  it("backfills a rotated active credential before switching API-key profiles", async () => {
+  it("preserves a saved API key when the global key belongs to an unmanaged profile", async () => {
     const appDataDir = tempDir();
     const globalCodexHome = path.join(appDataDir, "global-codex-home");
     const store = new AccountStore(appDataDir);
@@ -472,7 +547,7 @@ describe.skipIf(process.platform !== "win32")("AccountManager Codex auth modes",
       await manager.switchAccount(second.account!.id);
 
       expect(store.get(second.account!.id)?.isActive).toBe(true);
-      expect(vault.decryptUtf8(store.get(first.account!.id)!.encryptedAuthJson)).toBe(rotated);
+      expect(vault.decryptUtf8(store.get(first.account!.id)!.encryptedAuthJson)).toContain("sk-first-original");
       expect(fs.readFileSync(getAuthFilePath(globalCodexHome), "utf8")).toContain("sk-second-target");
       expect(manager.listSwitchTransactions()[0]).toMatchObject({
         targetAccountId: second.account!.id,
@@ -824,7 +899,7 @@ describe.skipIf(process.platform !== "win32")("AccountManager Codex auth modes",
     }
   });
 
-  it("refreshes the active account through global CODEX_HOME without forcing token rotation", async () => {
+  it("preserves global and saved API credentials when polling changed session metadata", async () => {
     const appDataDir = tempDir();
     const globalCodexHome = path.join(appDataDir, "global-codex-home");
     const store = new AccountStore(appDataDir);
@@ -834,6 +909,7 @@ describe.skipIf(process.platform !== "win32")("AccountManager Codex auth modes",
     });
     try {
       const login = await manager.startLogin({ type: "apiKey", credential: "sk-before-global-refresh" });
+      const savedBefore = vault.decryptUtf8(store.get(login.account!.id)!.encryptedAuthJson);
       store.setActive(login.account!.id);
       fs.mkdirSync(globalCodexHome, { recursive: true });
       const original = JSON.stringify({
@@ -849,9 +925,9 @@ describe.skipIf(process.platform !== "win32")("AccountManager Codex auth modes",
       await manager.refreshAccount(login.account!.id);
 
       expect(fs.readFileSync(getAuthFilePath(globalCodexHome), "utf8")).toBe(original);
-      expect(vault.decryptUtf8(store.get(login.account!.id)!.encryptedAuthJson)).toBe(original);
+      expect(vault.decryptUtf8(store.get(login.account!.id)!.encryptedAuthJson)).toBe(savedBefore);
       expect(store.get(login.account!.id)?.authFingerprint).toBe(
-        inspectCodexAuthJson(original).authFingerprint
+        inspectCodexAuthJson(savedBefore).authFingerprint
       );
       expect(fs.existsSync(getAuthFilePath(store.get(login.account!.id)!.profileDir))).toBe(false);
     } finally {

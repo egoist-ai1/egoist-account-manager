@@ -15,13 +15,75 @@ namespace AccountManagerEGO.Installer
 {
     public class ModernInstallerApp : Application
     {
-        [STAThread]
-        public static void Main(string[] args)
+        public static int CheckRunning(string installDir)
         {
-            string exchangeDir = args.Length > 0 ? args[0] : System.IO.Path.GetTempPath();
-            ModernInstallerApp app = new ModernInstallerApp();
-            InstallerWindow window = new InstallerWindow(exchangeDir);
-            app.Run(window);
+            string target = System.IO.Path.GetFullPath(System.IO.Path.Combine(installDir, "Account Manager EGO.exe"));
+            foreach (Process process in Process.GetProcessesByName("Account Manager EGO"))
+            {
+                using (process)
+                {
+                    try
+                    {
+                        if (process.HasExited) continue;
+                        if (string.Equals(System.IO.Path.GetFullPath(process.MainModule.FileName), target, StringComparison.OrdinalIgnoreCase)) return 2;
+                    }
+                    catch (Exception) { return 3; }
+                }
+            }
+            return 0;
+        }
+
+        [STAThread]
+        public static int Main(string[] args)
+        {
+            if (args.Length == 2 && args[0] == "--check-running")
+            {
+                try { return CheckRunning(args[1]); }
+                catch (Exception) { return 3; }
+            }
+            int installerPid;
+            if (args.Length != 2 || !int.TryParse(args[1], out installerPid)) return 1;
+            string exchangeDir = args[0];
+            try
+            {
+                ModernInstallerApp app = new ModernInstallerApp();
+                app.DispatcherUnhandledException += (sender, error) =>
+                {
+                    WriteUiError(exchangeDir);
+                    error.Handled = true;
+                    app.Shutdown(1);
+                };
+                File.WriteAllText(System.IO.Path.Combine(exchangeDir, "ui_heartbeat.flag"), "1");
+                DispatcherTimer heartbeat = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+                InstallerWindow window = new InstallerWindow(exchangeDir);
+                Process installerProcess = Process.GetProcessById(installerPid);
+                heartbeat.Tick += (sender, error) =>
+                {
+                    if (installerProcess.HasExited)
+                    {
+                        heartbeat.Stop();
+                        if (!window.IsComplete)
+                        {
+                            Forms.MessageBox.Show("Установщик завершился до окончания установки. Повторите установку.", "Account Manager EGO", Forms.MessageBoxButtons.OK, Forms.MessageBoxIcon.Error);
+                            app.Shutdown(1);
+                        }
+                        return;
+                    }
+                    File.WriteAllText(System.IO.Path.Combine(exchangeDir, "ui_heartbeat.flag"), "1");
+                };
+                heartbeat.Start();
+                int result = app.Run(window);
+                installerProcess.Dispose();
+                heartbeat.Stop();
+                return result;
+            }
+            catch (Exception) { WriteUiError(exchangeDir); return 1; }
+        }
+
+        private static void WriteUiError(string exchangeDir)
+        {
+            try { File.WriteAllText(System.IO.Path.Combine(exchangeDir, "ui_error.flag"), "1"); }
+            catch (Exception) { }
         }
     }
 
@@ -97,6 +159,7 @@ namespace AccountManagerEGO.Installer
 
     public class InstallerWindow : Window
     {
+        public bool IsComplete { get; private set; }
         private string _exchangeDir;
         private Grid _mainContainer;
         private Grid _configView;
@@ -169,7 +232,6 @@ namespace AccountManagerEGO.Installer
 
             var logo = GetHermesLogoSource();
             if (logo != null) Icon = logo;
-            SuppressBackgroundInstallerWindows();
 
             BuildUI();
         }
@@ -717,48 +779,11 @@ namespace AccountManagerEGO.Installer
 
         private void ShowCompleteView()
         {
+            IsComplete = true;
             if (_shimmerTimer != null) _shimmerTimer.Stop();
             if (_pollTimer != null) _pollTimer.Stop();
             _mainContainer.Children.Clear();
             _mainContainer.Children.Add(_completeView);
-        }
-
-        private static void KillConflictingProcesses()
-        {
-            string[] targets = new string[]
-            {
-                "Account Manager EGO",
-                "codex-account-manager"
-            };
-
-            foreach (var name in targets)
-            {
-                try
-                {
-                    foreach (var proc in Process.GetProcessesByName(name))
-                    {
-                        try
-                        {
-                            proc.Kill();
-                            proc.WaitForExit(1000);
-                        }
-                        catch { }
-                    }
-                }
-                catch { }
-
-                try
-                {
-                    ProcessStartInfo psi = new ProcessStartInfo("taskkill.exe", string.Format("/F /T /IM \"{0}.exe\"", name))
-                    {
-                        CreateNoWindow = true,
-                        UseShellExecute = false
-                    };
-                    Process p = Process.Start(psi);
-                    if (p != null) p.WaitForExit(1000);
-                }
-                catch { }
-            }
         }
 
         private void StartInstallation()
@@ -773,16 +798,29 @@ namespace AccountManagerEGO.Installer
             _runAfter = _toggleRunAfter.IsChecked;
             _desktopShortcut = _toggleDesktopShortcut.IsChecked;
 
-            KillConflictingProcesses();
+            try
+            {
+                _chosenDir = System.IO.Path.GetFullPath(_chosenDir);
+                if (ModernInstallerApp.CheckRunning(_chosenDir) != 0)
+                {
+                    Forms.MessageBox.Show("Закройте Account Manager EGO перед установкой. Codex можно оставить открытым.", "Account Manager EGO", Forms.MessageBoxButtons.OK, Forms.MessageBoxIcon.Warning);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Forms.MessageBox.Show("Не удалось проверить папку установки: " + ex.Message, "Account Manager EGO", Forms.MessageBoxButtons.OK, Forms.MessageBoxIcon.Error);
+                return;
+            }
 
             try
             {
                 Directory.CreateDirectory(_exchangeDir);
-                var utf8NoBom = new System.Text.UTF8Encoding(false);
-                File.WriteAllText(System.IO.Path.Combine(_exchangeDir, "install_dir.txt"), _chosenDir, utf8NoBom);
-                File.WriteAllText(System.IO.Path.Combine(_exchangeDir, "desktop_shortcut.txt"), _desktopShortcut ? "1" : "0", utf8NoBom);
-                File.WriteAllText(System.IO.Path.Combine(_exchangeDir, "run_after.txt"), _runAfter ? "1" : "0", utf8NoBom);
-                File.WriteAllText(System.IO.Path.Combine(_exchangeDir, "start_install.flag"), DateTime.UtcNow.Ticks.ToString(), utf8NoBom);
+                var exchangeEncoding = System.Text.Encoding.Unicode;
+                File.WriteAllText(System.IO.Path.Combine(_exchangeDir, "install_dir.txt"), _chosenDir, exchangeEncoding);
+                File.WriteAllText(System.IO.Path.Combine(_exchangeDir, "desktop_shortcut.txt"), _desktopShortcut ? "1" : "0", exchangeEncoding);
+                File.WriteAllText(System.IO.Path.Combine(_exchangeDir, "run_after.txt"), _runAfter ? "1" : "0", exchangeEncoding);
+                File.WriteAllText(System.IO.Path.Combine(_exchangeDir, "start_install.flag"), DateTime.UtcNow.Ticks.ToString(), exchangeEncoding);
             }
             catch (Exception ex)
             {
@@ -796,7 +834,6 @@ namespace AccountManagerEGO.Installer
             _pollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
             _pollTimer.Tick += (s, e) =>
             {
-                SuppressBackgroundInstallerWindows();
                 try
                 {
                     if (File.Exists(statusPath))
@@ -813,6 +850,14 @@ namespace AccountManagerEGO.Installer
                                     _targetProgress = pct;
                                 }
                                 string msg = parts[1];
+                                if (msg.StartsWith("ERROR:"))
+                                {
+                                    _pollTimer.Stop();
+                                    if (_shimmerTimer != null) _shimmerTimer.Stop();
+                                    Forms.MessageBox.Show(msg.Substring(6), "Account Manager EGO", Forms.MessageBoxButtons.OK, Forms.MessageBoxIcon.Error);
+                                    CloseInstaller();
+                                    return;
+                                }
                                 if (msg == "DONE")
                                 {
                                     _targetProgress = 100.0;
@@ -860,21 +905,12 @@ namespace AccountManagerEGO.Installer
                         Process.Start(new ProcessStartInfo
                         {
                             FileName = exePath,
-                            UseShellExecute = true,
-                            Verb = "runas"
+                            UseShellExecute = true
                         });
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        try
-                        {
-                            Process.Start(new ProcessStartInfo
-                            {
-                                FileName = exePath,
-                                UseShellExecute = true
-                            });
-                        }
-                        catch { }
+                        Forms.MessageBox.Show("Не удалось запустить приложение: " + ex.Message, "Account Manager EGO", Forms.MessageBoxButtons.OK, Forms.MessageBoxIcon.Error);
                     }
                 }
             }
@@ -891,50 +927,6 @@ namespace AccountManagerEGO.Installer
             catch { }
             Close();
         }
-        [DllImport("user32.dll")]
-        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-        [DllImport("user32.dll")]
-        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
-
-        [DllImport("user32.dll")]
-        private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-
-        [DllImport("user32.dll")]
-        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-
-        private static void SuppressBackgroundInstallerWindows()
-        {
-            try
-            {
-                int myPid = Process.GetCurrentProcess().Id;
-                EnumWindows((hWnd, lParam) =>
-                {
-                    try
-                    {
-                        uint pid;
-                        GetWindowThreadProcessId(hWnd, out pid);
-                        if (pid != myPid && pid > 0)
-                        {
-                            using (var p = Process.GetProcessById((int)pid))
-                            {
-                                string name = p.ProcessName.ToLowerInvariant();
-                                if (name.Contains("egoistshield") || name.Contains("setup") || name.Contains("nsis"))
-                                {
-                                    ShowWindow(hWnd, 0);
-                                    SetWindowPos(hWnd, IntPtr.Zero, -32000, -32000, 0, 0, 0x0080);
-                                }
-                            }
-                        }
-                    }
-                    catch { }
-                    return true;
-                }, IntPtr.Zero);
-            }
-            catch { }
-        }
-
         private static ImageSource _cachedHermesLogo;
         private static ImageSource GetHermesLogoSource()
         {

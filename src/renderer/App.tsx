@@ -897,7 +897,7 @@ function accountLimitDisplay(account: ManagedAccount): {
       secondaryLabel: windowLabel(sDur, "неделя"),
       secondaryUsedPercent: sUsed,
       secondaryResetsAt: sReset,
-      secondaryUnavailableReason: sUsed == null ? "Не ограничен" : undefined
+      secondaryUnavailableReason: sUsed == null ? "Нет данных" : undefined
     };
   }
 
@@ -924,7 +924,7 @@ function accountLimitDisplay(account: ManagedAccount): {
     secondaryLabel: "неделя",
     secondaryUsedPercent: account.weeklyUsedPercent,
     secondaryResetsAt: account.weeklyResetsAt,
-    secondaryUnavailableReason: !hasWeekly ? "Не ограничен" : undefined
+    secondaryUnavailableReason: !hasWeekly ? "Нет данных" : undefined
   };
 }
 
@@ -1456,6 +1456,21 @@ function passwordStrength(value: string): { label: string; className: string } {
   return { label: "Сильный пароль", className: "strong" };
 }
 
+function useModalEscape(open: boolean, label: string, onClose: () => void): void {
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
+      if (dialogs.item(dialogs.length - 1)?.getAttribute("aria-label") !== label) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      onClose();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [open, label, onClose]);
+}
 function AddAccountWizard({
   state,
   busy,
@@ -1500,6 +1515,7 @@ function AddAccountWizard({
             : "idle"
     );
   }, [state.phase, state.result?.userCode, state.result?.deviceCodeCopied, state.result?.loginPageOpened]);
+  useModalEscape(state.open, "Добавление аккаунта", onClose);
   if (!state.open) return null;
   const url = state.result?.authUrl ?? state.result?.verificationUrl ?? "";
   const methodAvailable = (id: CodexLoginMethodId) =>
@@ -1835,6 +1851,7 @@ function AntigravityImportModal({
   onOpenDocs: () => void;
   onImportCurrentSession: () => void;
 }) {
+  useModalEscape(true, "Добавить Antigravity", onClose);
   const sources: Array<[AntigravityExternalImportSource, string, LucideIcon]> = [
     ["plugin", "Плагин", KeyRound],
     ["local_db", "Локальная БД", Database],
@@ -2026,7 +2043,7 @@ function App() {
   const [diagnostics, setDiagnostics] = useState<AppDiagnostics | null>(null);
   const [settingsData, setSettingsData] = useState<AppSettings | null>(null);
   const [antigravityProfileStatus, setAntigravityProfileStatus] = useState<AntigravityProfileStatus | null>(null);
-  const [antigravityGodMode, setAntigravityGodModeState] = useState<boolean>(true);
+  const [antigravityGodMode, setAntigravityGodModeState] = useState<boolean>(false);
   const [hygieneBusy, setHygieneBusy] = useState<boolean>(false);
   const [workspaceBinding, setWorkspaceBinding] = useState<WorkspaceBinding | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
@@ -2312,16 +2329,7 @@ function App() {
       setDiagnostics(nextDiagnostics);
       setSettingsData(nextSettings);
       setAntigravityProfileStatus(nextAntigravityProfileStatus);
-      if (!nextGodMode.enabled) {
-        try {
-          const autoRes = await cam.setAntigravityGodMode(true);
-          setAntigravityGodModeState(autoRes.enabled);
-        } catch {
-          setAntigravityGodModeState(false);
-        }
-      } else {
-        setAntigravityGodModeState(nextGodMode.enabled);
-      }
+      setAntigravityGodModeState(nextGodMode.enabled);
       setWorkspaceBinding(nextBinding);
       setSwitchTransactions(nextSwitchTransactions);
       setSwitchHistory(nextSwitchHistory);

@@ -22,6 +22,7 @@ describe("auth state model", () => {
     expect(classifyAuthValidationError(new Error("Codex profile is not logged into a ChatGPT account"))).toBe("needs_reauth");
     expect(classifyAuthValidationError(new Error("Codex profile is not authenticated"))).toBe("needs_reauth");
     expect(classifyAuthValidationError(new Error("Codex profile belongs to a different ChatGPT account"))).toBe("needs_reauth");
+    expect(classifyAuthValidationError(new Error("Codex profile belongs to a different account"))).toBe("needs_reauth");
     expect(classifyAuthValidationError(new Error("network timeout"))).toBe("validation_failed");
   });
 

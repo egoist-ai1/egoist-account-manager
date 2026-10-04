@@ -48,7 +48,7 @@ export function cleanAntigravitySessionCache(
   ];
 
   if (paths.secondaryStateDbPath) {
-    const secondaryUserDir = path.dirname(path.dirname(paths.secondaryStateDbPath));
+    const secondaryUserDir = path.dirname(path.dirname(path.dirname(paths.secondaryStateDbPath)));
     targets.push(
       path.join(secondaryUserDir, "lockfile"),
       path.join(secondaryUserDir, "DevToolsActivePort"),
@@ -86,25 +86,68 @@ function quotePowerShellSingle(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-export function buildAntigravityWindowsRestartScript(exePath: string): string {
+function antigravityExecutableCandidates(input: AntigravityRestartInput): string[] {
+  const localAppData = input.env?.LOCALAPPDATA ?? process.env.LOCALAPPDATA;
+  return [
+    ...(input.exePath ? [input.exePath] : []),
+    ...(localAppData ? [
+      path.join(localAppData, "Programs", "antigravity", "Antigravity.exe"),
+      path.join(localAppData, "Programs", "Antigravity IDE", "Antigravity IDE.exe")
+    ] : [])
+  ];
+}
+
+function buildAntigravityWindowsStopScript(exePaths: string[]): string {
+  if (exePaths.length === 0) throw new Error("Cannot identify the Antigravity installation safely.");
   return `
 $ErrorActionPreference = 'Stop'
-$exePath = ${quotePowerShellSingle(exePath)}
-Get-Process -Name 'Antigravity','Antigravity IDE','language_server' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 350
-Start-Process -FilePath $exePath
+$targetExePaths = @(${exePaths.map(quotePowerShellSingle).join(", ")})
+$allProcesses = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+$ambiguous = @($allProcesses | Where-Object { $_.Name -in @('Antigravity.exe', 'Antigravity IDE.exe') -and -not $_.ExecutablePath })
+if ($ambiguous.Count -gt 0) { throw 'Cannot verify the executable path of an Antigravity process.' }
+$ownedProcesses = @{}
+$allProcesses | Where-Object { $_.ExecutablePath -and $targetExePaths -contains $_.ExecutablePath } | ForEach-Object { $ownedProcesses[$_.ProcessId] = $_ }
+do {
+  $added = $false
+  foreach ($candidate in $allProcesses) {
+    if ($ownedProcesses.ContainsKey($candidate.ParentProcessId) -and -not $ownedProcesses.ContainsKey($candidate.ProcessId)) {
+      $ownedProcesses[$candidate.ProcessId] = $candidate
+      $added = $true
+    }
+  }
+} while ($added)
+foreach ($ownedProcess in @($ownedProcesses.Values)) {
+  $currentProcess = Get-CimInstance Win32_Process -Filter ("ProcessId = " + $ownedProcess.ProcessId) -ErrorAction Stop
+  if ($currentProcess -and $currentProcess.CreationDate -eq $ownedProcess.CreationDate) {
+    Stop-Process -Id $ownedProcess.ProcessId -Force -ErrorAction Stop
+  }
+}
 `;
+}
+
+export function buildAntigravityWindowsRestartScript(exePath: string): string {
+  return `${buildAntigravityWindowsStopScript([exePath])}
+$exePath = ${quotePowerShellSingle(exePath)}
+Start-Sleep -Milliseconds 350
+Start-Process -FilePath $exePath -WindowStyle Hidden
+`;
+}
+
+function inspectAntigravityRunning(): boolean {
+  const result = spawnSync("tasklist.exe", ["/FO", "CSV", "/NH"], {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 3_000
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(result.stderr?.trim() || "Antigravity process detection failed.");
+  return /^"Antigravity(?: IDE)?\.exe",/im.test(result.stdout ?? "");
 }
 
 export function isAntigravityRunning(input: AntigravityRestartInput = {}): boolean {
   if ((input.platform ?? process.platform) !== "win32") return false;
   try {
-    const result = spawnSync("tasklist.exe", ["/FI", "IMAGENAME eq Antigravity.exe", "/FO", "CSV", "/NH"], {
-      encoding: "utf8",
-      windowsHide: true,
-      timeout: 3_000
-    });
-    return Boolean(result.stdout && result.stdout.toLowerCase().includes("antigravity.exe"));
+    return inspectAntigravityRunning();
   } catch {
     return false;
   }
@@ -132,7 +175,15 @@ export function quiesceAntigravity(input: AntigravityRestartInput & { timeoutMs?
     };
   }
 
-  const running = isAntigravityRunning(input);
+  let running: boolean;
+  try {
+    running = inspectAntigravityRunning();
+  } catch (error) {
+    return {
+      supported: true, attempted: false, wasRunning: false, quiesced: false,
+      reason: error instanceof Error ? error.message : String(error)
+    };
+  }
   if (!running) {
     return {
       supported: true,
@@ -144,23 +195,26 @@ export function quiesceAntigravity(input: AntigravityRestartInput & { timeoutMs?
   }
 
   try {
-    spawnSync("powershell.exe", [
+    const result = spawnSync("powershell.exe", [
       "-NoProfile",
       "-NonInteractive",
       "-ExecutionPolicy",
       "Bypass",
       "-Command",
-      "Get-Process -Name 'Antigravity','Antigravity IDE','language_server' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue"
+      buildAntigravityWindowsStopScript(antigravityExecutableCandidates(input))
     ], {
+      encoding: "utf8",
       windowsHide: true,
       timeout: input.timeoutMs ?? 5_000
     });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(result.stderr?.trim() || "Antigravity process stop failed.");
 
     const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
     const timeout = Date.now() + (input.timeoutMs ?? 3_000);
     while (Date.now() < timeout) {
       Atomics.wait(sleepBuf, 0, 0, 150);
-      if (!isAntigravityRunning(input)) {
+      if (!inspectAntigravityRunning()) {
         return {
           supported: true,
           attempted: true,
@@ -171,7 +225,7 @@ export function quiesceAntigravity(input: AntigravityRestartInput & { timeoutMs?
       }
     }
 
-    const stillRunning = isAntigravityRunning(input);
+    const stillRunning = inspectAntigravityRunning();
     return {
       supported: true,
       attempted: true,
@@ -225,7 +279,13 @@ export function launchAntigravity(input: AntigravityRestartInput = {}): Antigrav
   }
 
   if (input.forceRelaunch && isAntigravityRunning(input)) {
-    quiesceAntigravity(input);
+    const stopped = quiesceAntigravity(input);
+    if (!stopped.quiesced) {
+      return {
+        supported: stopped.supported, attempted: stopped.attempted, restarted: false,
+        exePath: resolveAntigravityExecutablePath(input), reason: stopped.reason
+      };
+    }
   }
 
   const exePath = resolveAntigravityExecutablePath(input);

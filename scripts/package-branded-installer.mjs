@@ -1,7 +1,9 @@
-﻿import fs from 'node:fs/promises';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
+import { verifyInstallerPayload, verifyExecutableMetadata } from './installer-payload.mjs';
+import { finalizeReleaseArtifacts } from './finalize-release-artifacts.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 process.chdir(root);
@@ -43,14 +45,26 @@ if (cscResult.status !== 0) {
 }
 console.log(`   OK: Compiled ${modernInstallerExe} (${(await fs.stat(modernInstallerExe)).size} bytes)`);
 
-// Check unpacked payload
+// A previous unpacked release must never be relabeled as the current version.
 const payloadDir = path.resolve('release/win-unpacked');
 try {
-  await fs.access(path.join(payloadDir, 'Account Manager EGO.exe'));
-} catch {
-  console.log('2. Payload directory release/win-unpacked missing. Generating via electron-builder --dir...');
-  spawnSync('pnpm', ['run', 'build:dir'], { stdio: 'inherit' });
+  await verifyInstallerPayload(root, payloadDir, pkg);
+} catch (error) {
+  throw new Error('Installer payload verification failed. Run a successful build:dir before packaging.\n' + error.message, { cause: error });
 }
+
+const executableMetadataResult = spawnSync('powershell.exe', [
+  '-NoProfile', '-NonInteractive', '-Command',
+  '$ErrorActionPreference = "Stop"; $version = (Get-Item -LiteralPath $env:CAM_PAYLOAD_EXE).VersionInfo; [ordered]@{productName=$version.ProductName;fileVersion=$version.FileVersion;productVersion=$version.ProductVersion} | ConvertTo-Json -Compress'
+], {
+  encoding: 'utf8',
+  timeout: 15000,
+  env: { ...process.env, CAM_PAYLOAD_EXE: path.join(payloadDir, `${pkg.productName}.exe`) }
+});
+if (executableMetadataResult.status !== 0) {
+  throw new Error('Unable to verify payload executable metadata: ' + (executableMetadataResult.error?.message || executableMetadataResult.stderr));
+}
+verifyExecutableMetadata(JSON.parse(executableMetadataResult.stdout.replace(/^\uFEFF/, '').trim()), pkg);
 
 console.log('2. Configuring NSIS engine...');
 const makensis = process.env.MAKENSIS || path.join(process.env.LOCALAPPDATA, 'electron-builder/Cache/nsis-3.0.4.1/nsis-3.0.4.1-1mx3n/Bin/makensis.exe');
@@ -120,3 +134,7 @@ if (portableSize > 0) {
 await fs.writeFile(`release/SHA256SUMS-${pkg.version}.txt`, checksumLines.join('\n') + '\n', 'utf8');
 await fs.writeFile(`SHA256SUMS-${pkg.version}.txt`, checksumLines.join('\n') + '\n', 'utf8');
 console.log(`\nChecksums updated in release/SHA256SUMS-${pkg.version}.txt\n`);
+
+// The branded installer replaces electron-builder's setup; refresh all update metadata.
+await finalizeReleaseArtifacts(root);
+console.log('Final blockmap, latest.yml and complete checksum manifest verified.');

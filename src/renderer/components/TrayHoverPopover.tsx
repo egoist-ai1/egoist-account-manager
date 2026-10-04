@@ -118,7 +118,7 @@ export function TrayHoverPopover({ api }: { api: AppApi }) {
 
       <section className="tray-hover-hero">
         <div className="tray-hover-identity">
-          <span className="tray-account-name" title={active?.email || active?.label}>
+          <span className="tray-account-name" title={settings?.privacyMode ? undefined : active?.email || active?.label}>
             {snapshot.accountLabel}
           </span>
           <span className="tray-plan-badge">

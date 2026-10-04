@@ -94,18 +94,6 @@ interface QuotaWindow {
   windowDurationMins: number | null;
 }
 
-async function fetchWithHardTimeout(fetchPromise: Promise<Response>, timeoutMs: number, label: string): Promise<Response> {
-  let timeout: NodeJS.Timeout | null = null;
-  const timeoutPromise = new Promise<Response>((_resolve, reject) => {
-    timeout = setTimeout(() => reject(new Error(`${label} timed out after ${Math.ceil(timeoutMs / 1000)} seconds`)), timeoutMs);
-  });
-  try {
-    return await Promise.race([fetchPromise, timeoutPromise]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
-}
-
 async function readJson<T>(response: Response): Promise<T> {
   const text = await response.text();
   return (text ? JSON.parse(text) : {}) as T;
@@ -170,6 +158,7 @@ function inferWindowDurationMins(resetAt: number | null, nowSeconds: number): nu
 }
 
 function parseRemainingFraction(value: unknown): number | null {
+  if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) return null;
   const fraction = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(fraction)) return null;
   return Math.max(0, Math.min(1, fraction));
@@ -450,17 +439,30 @@ async function requestQuotaEndpoint(input: {
   fetchImpl: typeof fetch;
   requestTimeoutMs: number;
 }): Promise<{ response: Response; body: QuotaApiResponse }> {
-  const response = await fetchWithHardTimeout(
-    input.fetchImpl(input.endpoint, {
-      method: "POST",
-      headers: quotaHeadersWithProject(input.accessToken, input.projectHeader),
-      body: JSON.stringify(input.payload)
-    }),
-    input.requestTimeoutMs,
-    "Antigravity quota request"
-  );
-  const body = await readJson<QuotaApiResponse>(response).catch(() => ({} as QuotaApiResponse));
-  return { response, body };
+  const controller = new AbortController();
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await input.fetchImpl(input.endpoint, {
+          method: "POST",
+          headers: quotaHeadersWithProject(input.accessToken, input.projectHeader),
+          body: JSON.stringify(input.payload),
+          signal: controller.signal
+        });
+        const body = await readJson<QuotaApiResponse>(response).catch(() => ({} as QuotaApiResponse));
+        return { response, body };
+      })(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error(`Antigravity quota request timed out after ${Math.ceil(input.requestTimeoutMs / 1000)} seconds`));
+        }, input.requestTimeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export async function fetchAntigravityQuota(input: {

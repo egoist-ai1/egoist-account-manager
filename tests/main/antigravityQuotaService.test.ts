@@ -1,7 +1,46 @@
-import { describe, expect, it } from "vitest";
-import { fetchAntigravityQuota } from "../../src/main/services/antigravityQuotaService";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchAntigravityQuota, parseSummaryGroups } from "../../src/main/services/antigravityQuotaService";
+
+afterEach(() => vi.useRealTimers());
 
 describe("antigravityQuotaService", () => {
+  it.each([null, undefined, "", "  ", false, true, {}, [], "invalid", Infinity, NaN].map(value => [value]))(
+    "does not invent exhausted quota for an unavailable fraction %j",
+    (remainingFraction) => {
+      expect(parseSummaryGroups({ groups: [{ buckets: [{ remainingFraction }] }] }, 0)).toEqual([]);
+    }
+  );
+  it.each([0, "0", 0.25, "0.25"])("preserves valid zero and numeric fractions %j", (remainingFraction) => {
+    const [model] = parseSummaryGroups({ groups: [{ buckets: [{ remainingFraction }] }] }, 0);
+    expect(model.usedPercent).toBe(Math.round((1 - Number(remainingFraction)) * 100));
+  });
+  it.each(["headers", "body"])("aborts a stalled quota %s and continues to the next endpoint", async (phase) => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      signals.push(init?.signal as AbortSignal);
+      if (signals.length === 1) {
+        if (phase === "headers") return new Promise<Response>(() => undefined);
+        return { text: () => new Promise<string>(() => undefined) } as Response;
+      }
+      return new Response(JSON.stringify({ groups: [{ buckets: [
+        { bucketId: "5h", window: "5h", remainingFraction: 0.5 },
+        { bucketId: "week", window: "weekly", remainingFraction: 0.75 }
+      ] }] }));
+    });
+    const pending = fetchAntigravityQuota({
+      accessToken: "fixture-token",
+      accountContext: { googleProjectId: null, tier: "unknown", tierId: null, source: "unavailable", errorReason: null },
+      fetchImpl: fetchImpl as typeof fetch,
+      requestTimeoutMs: 100
+    });
+    await vi.advanceTimersByTimeAsync(101);
+    await expect(pending).resolves.toMatchObject({ status: "active", limits: { primary: { usedPercent: 50 } } });
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it("prefers Cockpit-style retrieveUserQuota buckets when a Code Assist project is available", async () => {
     const calls: Array<{ url: string; body: string; userProject: string | null }> = [];
     const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {

@@ -530,7 +530,7 @@ function getAccountIdentity(account: unknown, expectedAuthMode: CodexAuthMode = 
 
 function isCodexProfileLoginError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /codex profile is not authenticated|codex profile is not logged into a chatgpt(?:-compatible)? account|codex profile belongs to a different chatgpt account|login required|reauth(?:entication)? required|sign.?in required/i.test(message);
+  return /codex profile is not authenticated|codex profile is not logged into a chatgpt(?:-compatible)? account|codex profile belongs to a different (?:chatgpt )?account|login required|reauth(?:entication)? required|sign.?in required/i.test(message);
 }
 
 function matchesCodexAccountIdentity(identity: CodexAccountIdentity, account: ManagedAccount): boolean {
@@ -538,6 +538,16 @@ function matchesCodexAccountIdentity(identity: CodexAccountIdentity, account: Ma
   if (identity.authMode === "apiKey") return false;
   if (!identity.email || account.email.startsWith("codex:")) return true;
   return identity.email.trim().toLowerCase() === account.email.trim().toLowerCase();
+}
+
+function matchesCodexAuthMaterial(metadata: ReturnType<typeof inspectCodexAuthJson>, account: ManagedAccount): boolean {
+  if (!metadata.inferredAuthMode) return false;
+  if ((account.authMode === "apiKey") !== (metadata.inferredAuthMode === "apiKey") && account.authMode !== null) return false;
+  if (metadata.authFingerprint === account.authFingerprint) return true;
+  if (metadata.inferredAuthMode === "apiKey") return false;
+  if (account.workspaceAccountId !== metadata.workspaceAccountId) return false;
+  if (account.providerAccountId) return account.providerAccountId === metadata.providerAccountId;
+  return Boolean(metadata.email && metadata.email.trim().toLowerCase() === account.email.trim().toLowerCase());
 }
 
 function withCodexPlan(snapshot: RateLimitSnapshot, identityPlanType: PlanType): RateLimitSnapshot {
@@ -663,35 +673,29 @@ export class AccountManager extends EventEmitter {
     try {
       authJson = readStableAuthJson(authPath);
       metadata = inspectCodexAuthJson(authJson);
+      if (!metadata.inferredAuthMode) throw new Error("Codex auth.json has no usable credentials");
     } catch (error) {
       this.emitLog(`Active Codex session snapshot is invalid; encrypted profiles were left unchanged: ${error instanceof Error ? error.message : String(error)}`);
       return { status: "invalid", accountId: null };
     }
 
     const accounts = this.store.list().filter((account) => account.platform === "codex");
-    const exact = accounts.filter((account) => account.authFingerprint === metadata.authFingerprint);
-    const provider = metadata.providerAccountId
-      ? accounts.filter((account) =>
-        account.providerAccountId === metadata.providerAccountId
-        && account.workspaceAccountId === metadata.workspaceAccountId
-      )
+    const compatible = accounts.filter((account) =>
+      (account.authMode === null || (account.authMode === "apiKey") === (metadata.inferredAuthMode === "apiKey"))
+      && (!metadata.providerAccountId || !account.providerAccountId || account.providerAccountId === metadata.providerAccountId)
+      && account.workspaceAccountId === metadata.workspaceAccountId
+    );
+    const exact = compatible.filter((account) => account.authFingerprint === metadata.authFingerprint);
+    const provider = metadata.inferredAuthMode !== "apiKey" && metadata.providerAccountId
+      ? compatible.filter((account) => account.providerAccountId === metadata.providerAccountId)
       : [];
-    const emailMatches = metadata.email
-      ? accounts.filter((account) =>
-        account.authMode !== "apiKey"
-        && account.email.trim().toLowerCase() === metadata.email!.trim().toLowerCase()
-      )
+    const emailMatches = metadata.inferredAuthMode !== "apiKey" && metadata.email
+      ? compatible.filter((account) => account.email.trim().toLowerCase() === metadata.email!.trim().toLowerCase())
       : [];
     const activeAccount = accounts.find((account) => account.isActive);
-    const matched = exact.length === 1
-      ? exact[0]
-      : provider.length === 1
-        ? provider[0]
-        : emailMatches.length === 1
-          ? emailMatches[0]
-          : activeAccount && (!metadata.email || activeAccount.email.trim().toLowerCase() === metadata.email.trim().toLowerCase())
-            ? activeAccount
-            : null;
+    const matched = exact.length === 1 ? exact[0]
+      : provider.length === 1 ? provider[0]
+        : emailMatches.length === 1 ? emailMatches[0] : null;
     if (!matched) {
       if (activeAccount) {
         this.store.clearActive("codex");
@@ -743,6 +747,10 @@ export class AccountManager extends EventEmitter {
       return { status: "busy", accountId: null };
     }
 
+    return this.operationLock.runExclusive("provider:antigravity", () => this.syncActiveAntigravitySessionUnlocked());
+  }
+
+  private async syncActiveAntigravitySessionUnlocked(): Promise<ActiveAntigravitySessionSyncResult> {
     const accounts = this.store.list().filter((account) => account.platform === "antigravity");
     const activeAccount = accounts.find((account) => account.isActive);
 
@@ -856,7 +864,8 @@ export class AccountManager extends EventEmitter {
             const needsTokenUpdate = (credAccessToken && credAccessToken !== currentAccessToken)
               || (credRefreshToken && credRefreshToken !== currentRefreshToken);
 
-            if (needsTokenUpdate && vaultRecord.googleOAuth) {
+            if (needsTokenUpdate && vaultRecord.googleOAuth
+              && credRefreshToken === vaultRecord.googleOAuth.refreshToken) {
               let expiresAt: number | null = null;
               if (parsedCred?.token?.expiry) {
                 const parsedMs = Date.parse(parsedCred.token.expiry);
@@ -930,15 +939,6 @@ export class AccountManager extends EventEmitter {
   private repairStaleAntigravityDisplayState(): void {
     for (const account of this.store.list()) {
       if (account.platform !== "antigravity") continue;
-      if (account.email.toLowerCase() === "rodion.gorbachyov1@gmail.com") {
-        if (!account.label || account.label.includes("\uFFFD") || account.label.trim() === "") {
-          this.store.updateMeta(account.id, { label: "Родион Горбачев" });
-        }
-        if (account.planType === "free" || account.planType === "unknown") {
-          this.store.setPlanAndStatus(account.id, "google-ai-pro", account.status, account.statusReason);
-        }
-        continue;
-      }
       if (account.label && account.label.includes("\uFFFD")) {
         const clean = account.email.split("@")[0] || account.email;
         this.store.updateMeta(account.id, { label: clean });
@@ -958,8 +958,6 @@ export class AccountManager extends EventEmitter {
         this.store.setPlanAndStatus(account.id, "standard", account.status, null);
       }
     }
-    // Dynamically detect and synchronize whichever account is currently active in Antigravity IDE
-    void this.syncActiveAntigravitySession();
   }
 
   async shutdown(): Promise<void> {
@@ -1151,6 +1149,7 @@ export class AccountManager extends EventEmitter {
     }
     const usesActiveGlobalSession = account.isActive && fs.existsSync(getAuthJsonPath(this.getGlobalCodexHome()));
     const codexHome = usesActiveGlobalSession ? this.getGlobalCodexHome() : account.profileDir;
+    let ownsHydratedProfile = !usesActiveGlobalSession;
     if (!usesActiveGlobalSession) {
       // A desktop sign-out must not destroy or downgrade the manager-owned
       // last-known-good profile. Poll its isolated CODEX_HOME instead; an
@@ -1170,7 +1169,8 @@ export class AccountManager extends EventEmitter {
       try {
         accountResponse = await client.readAccount(false);
         identity = getAccountIdentity(accountResponse.account, account.authMode ?? "chatgpt");
-        if (!matchesCodexAccountIdentity(identity, account)) {
+        if (!matchesCodexAccountIdentity(identity, account)
+          || !matchesCodexAuthMaterial(inspectCodexAuthJson(readStableAuthJson(getAuthFilePath(codexHome))), account)) {
           throw new Error("Codex profile belongs to a different account");
         }
       } catch (error) {
@@ -1178,10 +1178,12 @@ export class AccountManager extends EventEmitter {
           // The active global session drifted or threw. Fall back to isolated profileDir hydrated from vault.
           await client.stop();
           this.ensureProfileAuth(account);
+          ownsHydratedProfile = true;
           client = new CodexRpcClient(account.profileDir, this.requireCodexPath());
           accountResponse = await client.readAccount(false);
           identity = getAccountIdentity(accountResponse.account, account.authMode ?? "chatgpt");
-          if (!matchesCodexAccountIdentity(identity, account)) {
+          if (!matchesCodexAccountIdentity(identity, account)
+            || !matchesCodexAuthMaterial(inspectCodexAuthJson(readStableAuthJson(getAuthFilePath(account.profileDir))), account)) {
             throw new Error("Codex profile belongs to a different account");
           }
           effectiveUsesActiveGlobalSession = false;
@@ -1194,7 +1196,8 @@ export class AccountManager extends EventEmitter {
           client = new CodexRpcClient(account.profileDir, this.requireCodexPath());
           accountResponse = await client.readAccount(false);
           identity = getAccountIdentity(accountResponse.account, account.authMode ?? "chatgpt");
-          if (!matchesCodexAccountIdentity(identity, account)) {
+          if (!matchesCodexAccountIdentity(identity, account)
+            || !matchesCodexAuthMaterial(inspectCodexAuthJson(readStableAuthJson(getAuthFilePath(account.profileDir))), account)) {
             throw new Error("Codex profile belongs to a different account");
           }
         }
@@ -1255,11 +1258,17 @@ export class AccountManager extends EventEmitter {
       // Never seal an auth.json that failed identity verification. A failed
       // app-server refresh can rewrite the file; persisting it would destroy
       // the last-known-good encrypted profile.
-      if (!usesActiveGlobalSession) this.codexProfileVault.removePlaintext(account.profileDir);
+      if (ownsHydratedProfile) this.codexProfileVault.removePlaintext(account.profileDir);
     }
   }
 
   async validateAuth(accountId: string): Promise<AuthValidationState> {
+    const account = this.store.get(accountId);
+    if (!account) throw new Error("Account not found");
+    return this.operationLock.runExclusive(`provider:${account.platform}`, () => this.validateAuthUnlocked(accountId));
+  }
+
+  private async validateAuthUnlocked(accountId: string): Promise<AuthValidationState> {
     const account = this.store.get(accountId);
     if (!account) throw new Error("Account not found");
     if (account.platform === "antigravity") {
@@ -1333,7 +1342,8 @@ export class AccountManager extends EventEmitter {
         readAccount: async (refreshToken) => {
           const response = await client.readAccount(refreshToken);
           const identity = getAccountIdentity(response.account, account.authMode ?? "chatgpt");
-          if (!matchesCodexAccountIdentity(identity, account)) {
+          if (!matchesCodexAccountIdentity(identity, account)
+            || !matchesCodexAuthMaterial(inspectCodexAuthJson(readStableAuthJson(getAuthFilePath(account.profileDir))), account)) {
             throw new Error("Codex profile belongs to a different account");
           }
           return response;
@@ -2148,6 +2158,7 @@ export class AccountManager extends EventEmitter {
       }
     }
 
+    if (matched && !matchesCodexAuthMaterial(metadata, matched)) matched = null;
     if (!matched) {
       if (recordedActive) this.store.clearActive("codex");
       this.emitLog("The current Codex authorization is not a managed profile; it will be preserved only as the switch rollback bundle.");
@@ -2627,15 +2638,15 @@ export class AccountManager extends EventEmitter {
     }
     const authJson = readStableAuthJson(authPath);
     const metadata = inspectCodexAuthJson(authJson);
-    if (!metadata.authFingerprint) {
+    if (!metadata.inferredAuthMode) {
       return { imported: false, account: null, reason: "Файл auth.json не содержит действительной авторизации" };
     }
 
     const existing = this.store.list().find((a) => a.platform === "codex" && a.authFingerprint === metadata.authFingerprint);
     if (existing) {
-      this.store.setActive(existing.id);
+      const active = this.store.setActive(existing.id);
       this.emit("accounts-updated");
-      return { imported: true, account: existing, reason: "Аккаунт уже добавлен и выбран как активный." };
+      return { imported: true, account: active, reason: "Аккаунт уже добавлен и выбран как активный." };
     }
 
     const profileId = crypto.randomUUID();
@@ -3358,6 +3369,7 @@ export class AccountManager extends EventEmitter {
     if (!fs.existsSync(authPath)) throw new Error("The active Codex session has no auth.json");
     const authJson = readStableAuthJson(authPath);
     const metadata = inspectCodexAuthJson(authJson);
+    if (!matchesCodexAuthMaterial(metadata, account)) throw new Error("Codex profile belongs to a different account");
     if (account.providerAccountId && account.providerAccountId !== metadata.providerAccountId) {
       this.store.storeAuthDriftCandidate({
         accountId: account.id,
@@ -3400,12 +3412,13 @@ export class AccountManager extends EventEmitter {
     const globalClient = new CodexRpcClient(globalCodexHome, this.requireCodexPath());
     try {
       const globalIdentity = getAccountIdentity(
-        (await globalClient.readAccount(true)).account,
+        (await globalClient.readAccount(false)).account,
         account.authMode ?? "chatgpt"
       );
       if (!matchesCodexAccountIdentity(globalIdentity, account)) return false;
 
       const authJson = readStableAuthJson(globalAuthPath);
+      if (!matchesCodexAuthMaterial(inspectCodexAuthJson(authJson), account)) return false;
       const profileAuthPath = getAuthFilePath(account.profileDir);
       const existingAuthJson = fs.existsSync(profileAuthPath) ? readStableAuthJson(profileAuthPath) : null;
       if (existingAuthJson !== authJson) backupFile(profileAuthPath);
@@ -3459,7 +3472,7 @@ export class AccountManager extends EventEmitter {
           };
           const credAccessToken = parsedCred?.token?.access_token?.trim();
           const credRefreshToken = parsedCred?.token?.refresh_token?.trim();
-          if (credAccessToken) {
+          if (credAccessToken && credRefreshToken === googleOAuth.refreshToken) {
             let credExpiresAt: number | null = null;
             if (parsedCred?.token?.expiry) {
               const ms = Date.parse(parsedCred.token.expiry);

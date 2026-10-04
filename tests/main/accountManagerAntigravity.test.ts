@@ -61,6 +61,17 @@ afterEach(() => {
 });
 
 describe("AccountManager Antigravity credentials", () => {
+  it("does not trigger session detection when accounts are read repeatedly", () => {
+    const appDir = tempDir();
+    const store = new AccountStore(appDir);
+    const detector = vi.fn(async () => null);
+    const manager = new AccountManager(store, new Vault(appDir), appDir, null, { detectAntigravityLiveSession: detector });
+    try {
+      for (let i = 0; i < 100; i += 1) expect(manager.list()).toEqual([]);
+      expect(detector).not.toHaveBeenCalled();
+    } finally { store.close(); }
+  });
+
   it("imports an authorized local Antigravity IDE profile as metadata without token fields", async () => {
     const appDir = tempDir();
     const antigravityAppData = tempDir();
@@ -254,11 +265,12 @@ describe("AccountManager Antigravity credentials", () => {
     createAntigravityProfile(antigravityAppData);
     const store = new AccountStore(appDir);
     const vault = new Vault(appDir);
+    const pendingQuota = vi.fn(async () => new Promise<never>(() => undefined));
     const manager = new AccountManager(store, vault, appDir, "codex", {
-      fetchAntigravityQuota: async () => new Promise(() => undefined)
+      fetchAntigravityQuota: pendingQuota
     });
 
-    const started = Date.now();
+    try {
     const result = await manager.importAntigravityGoogleOAuth({
       clientId: "client-id",
       redirectUri: "http://localhost:36742/oauth-callback",
@@ -288,12 +300,12 @@ describe("AccountManager Antigravity credentials", () => {
       home: path.dirname(antigravityAppData)
     });
 
-    expect(Date.now() - started).toBeLessThan(1000);
+    expect(pendingQuota).toHaveBeenCalled();
     expect(result.imported).toBe(true);
     expect(result.account?.email).toBe("pending-ag@example.com");
     expect(result.account?.primaryUsedPercent).toBeNull();
 
-    store.close();
+    } finally { store.close(); }
   });
 
   it("uses Antigravity Hub detection without creating legacy state.vscdb during Google OAuth import", async () => {

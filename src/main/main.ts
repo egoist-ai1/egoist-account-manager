@@ -340,7 +340,7 @@ function createWindow(): BrowserWindow {
   window.on("moved", debouncedSave);
 
   const showFallbackTimer = setTimeout(() => {
-    if (!window.isDestroyed() && !window.isVisible()) {
+    if (process.env.CAM_BACKGROUND_PROBE !== "1" && !window.isDestroyed() && !window.isVisible()) {
       window.show();
       window.focus();
     }
@@ -348,8 +348,10 @@ function createWindow(): BrowserWindow {
 
   window.once("ready-to-show", () => {
     clearTimeout(showFallbackTimer);
-    window.show();
-    window.focus();
+    if (process.env.CAM_BACKGROUND_PROBE !== "1") {
+      window.show();
+      window.focus();
+    }
     saveWindowState(window);
   });
   window.on("close", (event) => {
@@ -1362,7 +1364,7 @@ function updateTrayMenu(): void {
         },
         { type: "separator" },
         {
-          label: bestCodex ? (isEnglish ? `Smart Switch: ${bestCodex.label}` : `Умный выбор: ${bestCodex.label}`) : (isEnglish ? "Smart switch unavailable" : "Умный выбор недоступен"),
+          label: bestCodex ? (isEnglish ? `Smart Switch: ${privacyMode ? "Codex profile" : bestCodex.label}` : `Умный выбор: ${privacyMode ? "профиль Codex" : bestCodex.label}`) : (isEnglish ? "Smart switch unavailable" : "Умный выбор недоступен"),
           enabled: Boolean(bestCodex && !bestCodex.isActive),
           click: () => {
             if (bestCodex) void manager?.switchAccount(bestCodex.id).finally(() => updateTrayMenu());
@@ -1430,7 +1432,7 @@ function updateTrayMenu(): void {
         },
         { type: "separator" },
         {
-          label: bestAg ? (isEnglish ? `Smart Switch: ${bestAg.label}` : `Умный выбор: ${bestAg.label}`) : (isEnglish ? "Smart switch unavailable" : "Умный выбор недоступен"),
+          label: bestAg ? (isEnglish ? `Smart Switch: ${privacyMode ? "Antigravity profile" : bestAg.label}` : `Умный выбор: ${privacyMode ? "профиль Antigravity" : bestAg.label}`) : (isEnglish ? "Smart switch unavailable" : "Умный выбор недоступен"),
           enabled: Boolean(bestAg && !bestAg.isActive),
           click: () => {
             if (bestAg) void manager?.switchAccount(bestAg.id).finally(() => updateTrayMenu());
@@ -1549,28 +1551,28 @@ function startTrayRefresh(intervalMs: AppSettings["trayRefreshIntervalMs"] = cur
 
 async function refreshActiveTrayAccount(reason: "timer" | "resume" | "manual"): Promise<void> {
   if (!manager || trayRefreshInFlight || autoRefreshInFlight) return;
-  const active = manager.list().find((account) => account.isActive);
-  if (!active) {
-    updateTrayMenu();
-    return;
-  }
-  const ageSeconds = active.lastRefreshAt ? Math.max(0, Math.floor(Date.now() / 1000) - active.lastRefreshAt) : Number.POSITIVE_INFINITY;
   const minimumAgeSeconds = Math.max(15, Math.floor(currentTrayRefreshIntervalMs / 1000) - 5);
-  if (reason !== "manual" && ageSeconds < minimumAgeSeconds) {
+  const due = manager.list().filter((account) => account.isActive && (
+    reason === "manual" || !account.lastRefreshAt
+    || Math.floor(Date.now() / 1000) - account.lastRefreshAt >= minimumAgeSeconds
+  ));
+  if (!due.length) {
     updateTrayMenu();
     return;
   }
   trayRefreshInFlight = true;
   try {
-    await manager.refreshAccount(active.id);
-    const refreshed = manager.list();
-    publishQuotaAlerts(refreshed);
+    for (const active of due) {
+      try {
+        await manager.refreshAccount(active.id);
+        log(`Live tray ${active.platform} quota refreshed: ${reason}`);
+      } catch (error) {
+        log(`Live tray ${active.platform} quota refresh failed: ${reason}`, error);
+      }
+    }
+    publishQuotaAlerts(manager.list());
     broadcastAccountsUpdated();
     updateTrayMenu();
-    log(`Live tray active quota refreshed: ${reason}`);
-  } catch (error) {
-    updateTrayMenu();
-    log(`Live tray active quota refresh failed: ${reason}`, error);
   } finally {
     trayRefreshInFlight = false;
   }

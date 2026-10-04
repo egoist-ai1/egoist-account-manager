@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; font-src 'self'; connect-src 'none'; base-uri 'none'">
+<title>Account Manager EGO 3.1.10 — обратная связь</title>
+<style>
+@font-face{font-family:Unbounded;src:url('../../../assets/Unbounded.ttf') format('truetype');font-display:swap}
+*{box-sizing:border-box}body{margin:0;background:#050507;color:#fff;font:15px/1.6 'Segoe UI',sans-serif}main{max-width:1060px;margin:auto;padding:44px 24px 80px}h1,h2,.label{font-family:Unbounded,'Segoe UI',sans-serif}h1{font-size:28px;line-height:1.4;margin:8px 0 20px}h2{font-size:15px;margin:0}p{margin:12px 0}a{color:#c084fc}.muted{color:#c9c6d0}.eyebrow{color:#c084fc;font-size:12px;letter-spacing:.08em}.intro{max-width:850px}.toolbar,.actions{display:flex;align-items:center;flex-wrap:wrap;gap:12px}.toolbar{margin:28px 0 18px;justify-content:space-between}article,.general{border:1px solid #34303e;border-radius:14px;padding:24px;margin:16px 0;background:#101015}article header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}article pre{font:14px/1.7 'Segoe UI',sans-serif;white-space:pre-wrap;word-break:break-word;color:#ddd9e4;margin:18px 0}.meaning{font-size:13px;color:#c9c6d0;padding-top:12px;border-top:1px solid #34303e}label.comment{display:block;margin-top:16px;font-weight:600}textarea{display:block;width:100%;min-height:84px;resize:vertical;background:#050507;border:1px solid #64586e;border-radius:8px;color:#fff;padding:12px;font:inherit;margin-top:8px}button{font:inherit;background:#17131e;border:1px solid #64586e;border-radius:8px;padding:9px 14px;color:#fff;cursor:pointer}button:hover{border-color:#c084fc;background:#241b30}button:active{background:#352544}button[aria-pressed=true]{border-color:#c084fc;background:#492469}button:disabled{opacity:.5;cursor:wait}.primary{background:#7c3aed;border-color:#8b5cf6;font-weight:600}.reset{padding:6px 4px;border:0;background:transparent;color:#c9c6d0;font-size:13px}button:focus-visible,textarea:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid #fff;outline-offset:3px}.actions{margin-top:18px}#status{min-height:28px;color:#c084fc}.hidden{display:none!important}#summary{font-size:13px;color:#c9c6d0}details{margin-top:18px;color:#c9c6d0;font-size:12px;overflow-wrap:anywhere}summary{cursor:pointer}.bottom{padding-top:12px}.general h2{margin-bottom:8px}@media(max-width:620px){main{padding:24px 16px 50px}h1{font-size:22px}article,.general{padding:18px}article header{display:block}article header a{display:inline-block;margin-top:12px}.choices{gap:8px}.choices button{flex:1 1 100%}}
+</style></head><body><main>
+<div class="eyebrow label">ACCOUNT MANAGER EGO · 3.1.10</div>
+<h1>Обратная связь по результату</h1>
+<div class="intro"><p>Выберите, какие разделы принять, какие доработать и что пояснить. По умолчанию ни один ответ не выбран. Комментарии можно оставить независимо от выбора.</p>
+<p class="muted">«Да / подтверждаю» принимает описание результата и показанный статус проверки. Ответы на этой странице не запускают авторизацию, переключение профилей, переустановку или публикацию. Порученная работа продолжается отдельно.</p>
+<p><a href="../3.1.10.md">Открыть release notes 3.1.10</a></p></div>
+<div class="toolbar"><span id="summary" aria-live="polite"></span><label><input id="only-unreviewed" type="checkbox"> Только без выбора</label></div>
+<section id="items" aria-label="Разделы для обсуждения"></section>
+<section class="general"><h2>Общий комментарий</h2><label class="comment" for="general-comment">Ваши замечания ко всему результату</label><textarea id="general-comment" placeholder="Что ещё нужно учесть?"></textarea></section>
+<div class="actions bottom"><button class="primary" id="apply" type="button">Применить</button><button id="export" type="button">Сохранить JSON</button><button id="import" type="button">Загрузить JSON</button><input id="import-file" class="hidden" type="file" accept="application/json,.json" aria-label="Файл с ответами"></div>
+<p class="muted">Standalone-режим: «Применить» готовит и скачивает JSON с выбранными ответами. Приложите этот файл в текущий чат для обсуждения и проверки. Страница не отправляет сообщения и не записывает изменения в проект.</p>
+<p id="status" role="status" aria-live="polite"></p>
+<details><summary>Версия снимка и источник</summary><p id="provenance"></p></details>
+</main>
+<script id="review-snapshot" type="application/json">{"schemaVersion":1,"artifactId":"account-manager-ego-release-3.1.10-review","projectPath":"C:\\Users\\Egoist\\Desktop\\Проекты\\Приложения\\Egoist Account Manager","releaseVersion":"3.1.10","notesFile":"C:\\Users\\Egoist\\Desktop\\Проекты\\Приложения\\Egoist Account Manager\\docs\\releases\\3.1.10.md","notesSha256":"a0afc3fe28e28e82a2dd34bd095087b4a9bc35bc913321adbfa41a78b5e3005d","items":[{"id":"release-3.1.10-codex","name":"Codex: идентичность и авторизация","version":"3.1.10:97e026f5cedd2619","section":"codex","sourceFile":"C:\\Users\\Egoist\\Desktop\\Проекты\\Приложения\\Egoist Account Manager\\docs\\releases\\3.1.10.md","sourceAnchor":"codex","content":"## Codex: идентичность и сохранение авторизации\n\n- Сопоставление профиля учитывает учётную запись провайдера, workspace и fingerprint авторизации. Совпадения одного email недостаточно для подмены другого workspace.\n- Для профилей API key проверяется fingerprint ключа. Другой ключ не присваивается существующему профилю только из-за совпадения режима авторизации.\n- Пассивное чтение состояния и квот не запрашивает принудительное обновление токена. Обновление зашифрованного vault допускается после проверки идентичности.\n- Блокировки операций и очистка временного состояния защищают синхронизацию, чтение квот и переключение от пересечения. Ошибка проверки профиля не закрепляет чужую авторизацию в vault.","approveAction":"Принять описание этого результата и указанного статуса проверки. Это не запускает авторизацию, переключение аккаунтов, установку или публикацию."},{"id":"release-3.1.10-antigravity","name":"Antigravity: синхронизация и квоты","version":"3.1.10:b72c963607b78058","section":"antigravity","sourceFile":"C:\\Users\\Egoist\\Desktop\\Проекты\\Приложения\\Egoist Account Manager\\docs\\releases\\3.1.10.md","sourceAnchor":"antigravity","content":"## Antigravity: синхронизация и достоверные квоты\n\n- Устранён цикл, при котором построение списка профилей повторно запускало синхронизацию и чтение квот.\n- Токен из глобального состояния IDE используется только для соответствующего аккаунта. Глобальный токен другого аккаунта не перезаписывает выбранный профиль.\n- Неизвестные, пустые и null-значения квоты остаются неизвестными и не обозначаются как безлимитные в карточках аккаунтов. Значение `remainingFraction: 0` сохраняет смысл реального нулевого остатка.\n- Ограничение времени охватывает запрос и чтение тела ответа; зависшие запросы отменяются, а обработка следующих источников может продолжаться.\n- God Mode не включается автоматически при открытии, синхронизации или переключении профиля.\n- Окна добавления Codex и Antigravity закрываются по Escape через существующий обработчик закрытия; закрывается только верхний диалог.","approveAction":"Принять описание этого результата и указанного статуса проверки. Это не запускает авторизацию, переключение аккаунтов, установку или публикацию."},{"id":"release-3.1.10-processes","name":"Antigravity: процессы и очистка","version":"3.1.10:3b94227838651e28","section":"processes","sourceFile":"C:\\Users\\Egoist\\Desktop\\Проекты\\Приложения\\Egoist Account Manager\\docs\\releases\\3.1.10.md","sourceAnchor":"processes","content":"## Antigravity: точная работа с процессами\n\n- Распознаются `Antigravity.exe` и `Antigravity IDE.exe`.\n- Завершение ограничено точным путём установленного приложения и его дочерними процессами. Общая команда остановки всех процессов с именем `language_server` удалена.\n- Перед остановкой проверяется принадлежность PID исходному процессу. Ошибка проверки или остановки не считается успешным освобождением профиля.\n- Повторный запуск после неудачной остановки не продолжается. Исправлен путь очистки служебных lock-файлов второго профиля.","approveAction":"Принять описание этого результата и указанного статуса проверки. Это не запускает авторизацию, переключение аккаунтов, установку или публикацию."},{"id":"release-3.1.10-tray","name":"Tray и режим приватности","version":"3.1.10:6af85e3157845708","section":"tray","sourceFile":"C:\\Users\\Egoist\\Desktop\\Проекты\\Приложения\\Egoist Account Manager\\docs\\releases\\3.1.10.md","sourceAnchor":"tray","content":"## Tray и режим приватности\n\n- Фоновое обновление tray учитывает активные профили обеих платформ, с отдельной проверкой возраста данных.\n- Режим приватности скрывает идентификаторы также в подсказках popover и пунктах умного выбора системного меню.\n- Ошибки обновления отображаются отдельно от состояния авторизации; отсутствие квоты не превращается в подтверждённый полный или исчерпанный остаток.","approveAction":"Принять описание этого результата и указанного статуса проверки. Это не запускает авторизацию, переключение аккаунтов, установку или публикацию."},{"id":"release-3.1.10-delivery","name":"Установщик и доставка релиза","version":"3.1.10:de041f3f5d068e21","section":"delivery","sourceFile":"C:\\Users\\Egoist\\Desktop\\Проекты\\Приложения\\Egoist Account Manager\\docs\\releases\\3.1.10.md","sourceAnchor":"delivery","content":"## Установка, обновления и публикация\n\n- Подготовка и публикация проверены 21 standalone test на синтетическом payload и mock API.\n- Установщик работает в области текущего пользователя. Подготовка и перезапуск приложения не требуют принудительного запуска от имени администратора.\n- Подготовка установщика проверяет актуальность payload, корректно обрабатывает ошибки и ограничивает ожидание вспомогательного окна.\n- Проверка GitHub Releases ограничивает время получения заголовков и тела ответа. После сетевого зависания можно выполнить новую проверку.\n- Publisher сначала создаёт draft, проверяет установщик, portable, SHA256SUMS, `latest.yml` и blockmap, затем сверяет SHA-256 digest загруженных assets.\n- Публикация привязана к точному Git HEAD. Уже опубликованный релиз не перезаписывается; окончательная публикация нового draft выполняется после проверки полного набора assets.\n- Release notes берутся из файла текущей версии. Token используется внутри Node HTTP headers, без передачи через строку команды curl и без вывода в журнал.\n\n- После branded-сборки финализатор проверяет соответствие payload текущей версии и build output, создаёт отдельный gzip blockmap без изменения установщика, пересчитывает SHA-512/size для `latest.yml` и SHA-256 для четырёх payload/metadata файлов.","approveAction":"Принять описание этого результата и указанного статуса проверки. Это не запускает авторизацию, переключение аккаунтов, установку или публикацию."},{"id":"release-3.1.10-dependencies","name":"Обновление зависимостей","version":"3.1.10:4522cdad3e42cac9","section":"dependencies","sourceFile":"C:\\Users\\Egoist\\Desktop\\Проекты\\Приложения\\Egoist Account Manager\\docs\\releases\\3.1.10.md","sourceAnchor":"dependencies","content":"## Зависимости\n\n- Electron обновлён до 41.10.7, Vitest до 4.1.11, typescript-eslint до 8.71.0; package manager — pnpm 11.28.0.\n- Обновлены связанные зависимости сборки и приложения. Проведён полный dependency audit: на момент проверки известных уязвимостей не обнаружено.","approveAction":"Принять описание этого результата и указанного статуса проверки. Это не запускает авторизацию, переключение аккаунтов, установку или публикацию."},{"id":"release-3.1.10-verification","name":"Проверки и статус поставки","version":"3.1.10:823b1cfe36096867","section":"verification","sourceFile":"C:\\Users\\Egoist\\Desktop\\Проекты\\Приложения\\Egoist Account Manager\\docs\\releases\\3.1.10.md","sourceAnchor":"verification","content":"## Статус проверки и поставки\n\n| Проверка | Статус текущей версии |\n| --- | --- |\n| Проверки исправленных сценариев | Исправленные сценарии защищены regression tests. |\n| TypeScript / ESLint | Оба проверочных этапа пройдены. |\n| Полный unit / integration suite | 451 тест, 80 наборов — пройдены. |\n| UI smoke | 18 пройдены, 1 явно пропущен: inspector отключён release fuses. |\n| Final installer / portable / package startup | Payload совпадает с 84 файлами dist; portable — со всеми 126 файлами. Изолированные startup, установка и удаление пройдены. |\n| Локальная переустановка | Выполнена: установленная 3.1.10.0 и renderer прошли изолированный startup. Хеши auth.json, config.toml и accounts.sqlite сохранены. |\n| GitHub Release | Все 5 assets проверены локально. Публикация через draft проверяет Git HEAD и remote SHA-256; актуальный статус виден на странице GitHub Release. |\n\nПроверки используют синтетические данные и полностью изолированные каталоги. Переключение рабочих аккаунтов, изменение текущей авторизации Codex и запуск внешних IDE не выполнялись. Запуск packaged Electron проверен отдельным hidden startup gate, поскольку release fuses отключают inspector. Изменения не дают гарантии отсутствия любых ошибок в сетевых сервисах и на других машинах.\n\nОкончательные имена артефактов: `Account-Manager-EGO-Setup-3.1.10.exe`, `Account-Manager-EGO-3.1.10.exe`, `Account-Manager-EGO-Setup-3.1.10.exe.blockmap`, `latest.yml`, `SHA256SUMS-3.1.10.txt`. Их контрольные суммы формируются после сборки окончательных файлов.","approveAction":"Принять описание этого результата и указанного статуса проверки. Это не запускает авторизацию, переключение аккаунтов, установку или публикацию."}],"snapshotFile":"C:\\Users\\Egoist\\Desktop\\Проекты\\Приложения\\Egoist Account Manager\\docs\\releases\\3.1.10-review\\Реестр.json","snapshotSha256":"61f25b51cc1f1cf3244a72032e05a79b00652ff98751633d94b23bc2ff585106"}</script>
+<script id="shared-review-helper">(function (global) {
+"use strict";
+const decisions=new Set(["approve","reject","question","unreviewed"]);
+const enc=new TextEncoder();
+function to64(bytes){let s="";for(let i=0;i<bytes.length;i+=8192)s+=String.fromCharCode(...bytes.subarray(i,i+8192));return btoa(s)}
+function from64(s){return Uint8Array.from(atob(s),c=>c.charCodeAt(0))}
+async function pack(value){const stream=new Blob([JSON.stringify(value)]).stream().pipeThrough(new CompressionStream("gzip"));return to64(new Uint8Array(await new Response(stream).arrayBuffer()))}
+async function unpack(value){const stream=new Blob([from64(value)]).stream().pipeThrough(new DecompressionStream("gzip"));return JSON.parse(await new Response(stream).text())}
+function uuid(){return global.crypto?.randomUUID?.()||"review-"+Date.now()+"-"+Math.random().toString(36).slice(2)}
+function create(options){
+ const items=options.items, byId=new Map(items.map((p,i)=>[p.id,{...p,index:i}]));
+ const artifactId=options.artifactId,snapshot=options.snapshotSha256;
+ const key="codex-review-v1:"+artifactId+":"+snapshot;
+ let state={responses:Object.create(null),generalComment:"",updatedAt:0,lastFingerprint:null,lastBatchId:null,pendingFingerprint:null,pendingBatchId:null,pendingCreatedAt:null};
+ let timer,warning="",cached=null,applying=false;
+ function signature(){return JSON.stringify([items.map(p=>{const r=state.responses[p.id];return r?[p.id,r.decision,r.comment]:null}).filter(Boolean),state.generalComment])}
+ function validateEnvelope(e){
+  if(e?.schemaVersion!==1||e.artifactId!==artifactId||e.snapshotSha256!==snapshot)throw Error("Ответы относятся к другой версии проекта. Сохраните файл для повторного анализа в чате.");
+  if(!Array.isArray(e.responses))throw Error("В файле нет списка ответов.");
+  const responses=Object.create(null);
+  for(const r of e.responses){
+   const p=byId.get(r.id);
+   if(!p||!decisions.has(r.decision)||typeof r.comment!=="string"||responses[r.id])throw Error("Неверный ID, повтор или формат ответа.");
+   if(r.name!==p.name||r.version!==(p.version??null))throw Error("Имя или версия выбранного объекта изменилась.");
+   responses[r.id]={decision:r.decision,comment:r.comment};
+  }
+  if(typeof e.generalComment!=="string")throw Error("Неверный общий комментарий.");
+  return {responses,generalComment:e.generalComment};
+ }
+ function summary(){
+  const counts={approve:0,reject:0,question:0,comments:0};
+  for(const r of Object.values(state.responses)){if(r.decision!=="unreviewed")counts[r.decision]++;if(r.comment.trim())counts.comments++}
+  return {...counts,total:Object.keys(state.responses).length,hasChanges:!!(Object.keys(state.responses).length||state.generalComment.trim()),warning,applying};
+ }
+ function envelope(){
+  const fingerprint=signature();
+  if(cached?.fingerprint===fingerprint)return cached.envelope;
+  const e={schemaVersion:1,artifactId,snapshotSha256:snapshot,batchId:state.pendingFingerprint===fingerprint?state.pendingBatchId:uuid(),createdAt:state.pendingFingerprint===fingerprint?state.pendingCreatedAt:new Date().toISOString(),projectPath:options.projectPath,snapshotFile:options.snapshotFile,responses:items.filter(p=>state.responses[p.id]).map(p=>({id:p.id,name:p.name,version:p.version??null,...state.responses[p.id]})),generalComment:state.generalComment};
+  cached={fingerprint,envelope:e};return e;
+ }
+ function notify(){options.onChange?.(summary())}
+ function persistLocal(){
+  try{global.localStorage?.setItem(key,JSON.stringify(state))}
+  catch{warning="Браузер не разрешает локальное сохранение. Сохраните ответы в JSON или нажмите «Применить»."}
+ }
+ async function persistHost(){
+  if(options.allowHost===false||typeof global.openai?.setWidgetState!=="function")return;
+  try{
+   const bits=new Uint8Array(Math.ceil(items.length/4)),comments={};
+   items.forEach((p,i)=>{const r=state.responses[p.id];if(!r)return;const n={unreviewed:0,approve:1,reject:2,question:3}[r.decision];bits[i>>2]|=n<<((i%4)*2);if(r.comment)comments[i]=r.comment});
+   const packed=await pack({bits:to64(bits),comments,generalComment:state.generalComment,updatedAt:state.updatedAt,lastBatchId:state.lastBatchId,submittedCurrent:state.lastFingerprint===signature(),pendingCurrent:state.pendingFingerprint===signature(),pendingBatchId:state.pendingBatchId,pendingCreatedAt:state.pendingCreatedAt});
+   const modelContent={artifactId,snapshotSha256:snapshot,counts:summary()};
+   let privateContent={schemaVersion:1,artifactId,snapshotSha256:snapshot,format:"gzip-bitset-v1",data:packed};
+   if(enc.encode(JSON.stringify({modelContent,privateContent})).length>15500){privateContent=null;warning="Комментарии превышают размер состояния встроенного просмотра. Полные ответы остаются здесь; сохраните JSON перед закрытием.";notify()}
+   await global.openai.setWidgetState({modelContent,privateContent});
+  }catch{warning="Встроенное сохранение недоступно. Полные ответы можно сохранить в JSON.";notify()}
+ }
+ function changed(){state.updatedAt=Date.now();cached=null;persistLocal();notify();clearTimeout(timer);timer=setTimeout(persistHost,200)}
+ function set(id,decision,comment){
+  if(!byId.has(id)||!decisions.has(decision)||typeof comment!=="string")throw Error("Неверный ответ.");
+  if(decision==="unreviewed"&&!comment)delete state.responses[id];else state.responses[id]={decision,comment};
+  changed();
+ }
+ function restoreEnvelope(e){
+  const validated=validateEnvelope(e);
+  if(typeof e.batchId!=="string"||!e.batchId.trim()||typeof e.createdAt!=="string"||!Number.isFinite(Date.parse(e.createdAt)))throw Error("В файле нет корректного ID или времени пакета.");
+  state.responses=validated.responses;state.generalComment=validated.generalComment;state.lastFingerprint=null;state.lastBatchId=null;
+  state.pendingFingerprint=signature();state.pendingBatchId=e.batchId;state.pendingCreatedAt=e.createdAt;
+  changed();options.onRestore?.();
+ }
+ async function restoreHost(widget){
+  const p=widget?.privateContent;
+  if(p?.format!=="gzip-bitset-v1"||p.artifactId!==artifactId||p.snapshotSha256!==snapshot)return;
+  try{
+   const saved=await unpack(p.data);
+   if(saved.updatedAt<=state.updatedAt)return;
+   const bits=from64(saved.bits);if(bits.length!==Math.ceil(items.length/4))throw Error("state length");
+   const responses=Object.create(null);
+   items.forEach((it,i)=>{const decision=["unreviewed","approve","reject","question"][(bits[i>>2]>>((i%4)*2))&3],comment=saved.comments[i]||"";if(typeof comment!=="string")throw Error("comment");if(decision!=="unreviewed"||comment)responses[it.id]={decision,comment}});
+   state={responses,generalComment:saved.generalComment||"",updatedAt:saved.updatedAt,lastFingerprint:null,lastBatchId:saved.lastBatchId||null};
+   state.lastFingerprint=saved.submittedCurrent?signature():null;state.pendingFingerprint=saved.pendingCurrent?signature():null;state.pendingBatchId=saved.pendingBatchId||null;state.pendingCreatedAt=saved.pendingCreatedAt||null;cached=null;notify();options.onRestore?.();
+  }catch{warning="Сохранённое состояние не удалось восстановить. Можно загрузить JSON с ответами.";notify()}
+ }
+ try{
+  const raw=global.localStorage?.getItem(key);
+  if(raw){const saved=JSON.parse(raw);const valid=validateEnvelope({schemaVersion:1,artifactId,snapshotSha256:snapshot,responses:Object.entries(saved.responses).map(([id,r])=>({id,name:byId.get(id)?.name,version:byId.get(id)?.version??null,...r})),generalComment:saved.generalComment});state={...state,...saved,...valid}}
+ }catch{warning="Локальное восстановление недоступно. Можно загрузить сохранённый JSON."}
+ async function promptFor(e){
+  const data=await pack(e);
+  const instructions=options.applyInstructions||"Прочитай brain/operations/artifact-feedback.md. Сохрани ответы в проекте, сверь snapshot и точные объекты. Примени мои решения в границах описанных действий и действующих разрешений. Разбери вопросы и комментарии, пересмотри весь результат и создай новый полный отчёт. Неотмеченные объекты не получают новых разрешений.";
+  return "Применить мои ответы к проекту "+options.projectPath+". Это мои явные решения. "+instructions+" Данные: gzip JSON, base64. Декодируй инструментом, не угадывай.\nCODEX_REVIEW_FEEDBACK_GZIP_BASE64="+data;
+ }
+ async function apply(){
+  if(applying)return {mode:"busy"};
+  if(!summary().hasChanges)throw Error("Сначала отметьте объект или добавьте комментарий.");
+  const fingerprint=signature();
+  if(fingerprint===state.lastFingerprint)return {mode:"already",batchId:state.lastBatchId};
+  applying=true;notify();
+  try{
+   const e=envelope(),prompt=await promptFor(e);
+   if(options.allowHost!==false&&typeof global.openai?.sendFollowUpMessage==="function"){
+    state.pendingFingerprint=fingerprint;state.pendingBatchId=e.batchId;state.pendingCreatedAt=e.createdAt;persistLocal();await persistHost();
+    await global.openai.sendFollowUpMessage({prompt,title:"Применить ответы и подготовить новый отчёт"});
+    state.lastFingerprint=fingerprint;state.lastBatchId=e.batchId;state.pendingFingerprint=null;state.pendingBatchId=null;state.pendingCreatedAt=null;persistLocal();await persistHost();
+    return {mode:"host",batchId:e.batchId,envelope:e};
+   }
+   return {mode:"export",envelope:e,prompt};
+  }finally{applying=false;notify()}
+ }
+ global.addEventListener?.("openai:set_globals",e=>{if(e.detail?.globals?.widgetState)restoreHost(e.detail.globals.widgetState)});
+ if(options.allowHost!==false)restoreHost(global.openai?.widgetState);
+ return {
+  get:id=>state.responses[id]||{decision:"unreviewed",comment:""},
+  setDecision:(id,value)=>set(id,value,state.responses[id]?.comment||""),
+  setComment:(id,value)=>set(id,state.responses[id]?.decision||"unreviewed",value),
+  setGeneralComment:value=>{if(typeof value!=="string")throw Error("Комментарий должен быть текстом.");state.generalComment=value;changed()},
+  getGeneralComment:()=>state.generalComment,summary,envelope,restoreEnvelope,apply,promptFor
+ };
+}
+const api={create,pack,unpack};global.CodexReviewFeedback=api;
+if(typeof module!=="undefined"&&module.exports)module.exports=api;
+})(typeof window!=="undefined"?window:globalThis);
+
+</script>
+<script>
+'use strict';
+const snapshot = JSON.parse(document.getElementById('review-snapshot').textContent);
+const itemElements = new Map();
+const status = document.getElementById('status');
+let review;
+function redraw() {
+  let unresolved = 0;
+  for (const item of snapshot.items) {
+    const value = review.get(item.id);
+    const ui = itemElements.get(item.id);
+    for (const button of ui.buttons) button.setAttribute('aria-pressed', String(button.dataset.decision === value.decision));
+    if (ui.comment.value !== value.comment) ui.comment.value = value.comment;
+    const neutral = value.decision === 'unreviewed';
+    unresolved += Number(neutral);
+    ui.card.classList.toggle('hidden', document.getElementById('only-unreviewed').checked && !neutral);
+  }
+  document.getElementById('general-comment').value = review.getGeneralComment();
+  const counts = review.summary();
+  document.getElementById('summary').textContent = 'Без выбора: ' + unresolved + ' из ' + snapshot.items.length + ' · Принято: ' + counts.approve + ' · Доработать: ' + counts.reject + ' · Вопросы: ' + counts.question;
+  document.getElementById('apply').disabled = counts.applying;
+  if (counts.warning) status.textContent = counts.warning;
+}
+review = window.CodexReviewFeedback.create({
+  artifactId: snapshot.artifactId, snapshotSha256: snapshot.snapshotSha256,
+  projectPath: snapshot.projectPath, snapshotFile: snapshot.snapshotFile, items: snapshot.items,
+  allowHost: false, onChange: redraw, onRestore: redraw,
+  applyInstructions: 'Сохрани мои ответы отдельно в указанном проекте и проверь точные snapshot, IDs и версии. Да означает принять описание результата, Нет означает доработать раздел с учётом комментария, Поясни означает ответить на вопрос. Не выполняй авторизацию, переключение аккаунтов, переустановку или публикацию по этому batch. Неотмеченные объекты остаются нейтральными.'
+});
+for (const item of snapshot.items) {
+  const card = document.createElement('article'); card.dataset.itemId = item.id;
+  const header = document.createElement('header');
+  const title = document.createElement('h2'); title.textContent = item.name; header.append(title);
+  const link = document.createElement('a'); link.href = '../3.1.10.md#' + item.sourceAnchor; link.textContent = 'Раздел release notes'; header.append(link); card.append(header);
+  const text = document.createElement('pre'); text.textContent = item.content; card.append(text);
+  const meaning = document.createElement('p'); meaning.className = 'meaning'; meaning.textContent = item.approveAction; card.append(meaning);
+  const choices = document.createElement('div'); choices.className = 'actions choices'; choices.setAttribute('role','group'); choices.setAttribute('aria-label','Ваш выбор: '+item.name);
+  const buttons = [];
+  for (const [decision, label] of [['approve','✓ Да / подтверждаю'],['reject','✕ Нет'],['question','? Поясни']]) {
+    const button = document.createElement('button'); button.type = 'button'; button.dataset.decision = decision; button.textContent = label; button.setAttribute('aria-pressed','false');
+    button.addEventListener('click', () => review.setDecision(item.id, decision)); choices.append(button); buttons.push(button);
+  }
+  card.append(choices);
+  const reset = document.createElement('button'); reset.className = 'reset'; reset.type = 'button'; reset.textContent = 'Снять выбор'; reset.addEventListener('click', () => review.setDecision(item.id,'unreviewed')); card.append(reset);
+  const label = document.createElement('label'); label.className = 'comment'; label.htmlFor = item.id + '-comment'; label.textContent = 'Ваш комментарий';
+  const comment = document.createElement('textarea'); comment.id = label.htmlFor; comment.placeholder = 'Что принять, доработать или пояснить?'; comment.addEventListener('input', () => review.setComment(item.id, comment.value)); label.append(comment); card.append(label);
+  itemElements.set(item.id,{card,buttons,comment}); document.getElementById('items').append(card);
+}
+function download(envelope) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(envelope,null,2)+'\n'], {type:'application/json;charset=utf-8'}));
+  const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'account-manager-ego-3.1.10-review-' + envelope.batchId + '.json'; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+document.getElementById('general-comment').addEventListener('input', event => review.setGeneralComment(event.target.value));
+document.getElementById('only-unreviewed').addEventListener('change', redraw);
+document.getElementById('export').addEventListener('click', () => { download(review.envelope()); status.textContent = 'JSON подготовлен для сохранения. Передайте его в текущий чат; изменения проекта ещё не применены.'; });
+document.getElementById('import').addEventListener('click', () => document.getElementById('import-file').click());
+document.getElementById('import-file').addEventListener('change', async event => {
+  const file = event.target.files[0]; if (!file) return;
+  try {
+    const envelope = JSON.parse(await file.text());
+    if (envelope.projectPath !== snapshot.projectPath || envelope.snapshotFile !== snapshot.snapshotFile) throw Error('Ответы относятся к другому проекту или файлу снимка.');
+    review.restoreEnvelope(envelope); status.textContent = 'Ответы восстановлены для текущего снимка. Никакие изменения проекта не выполнены.';
+  } catch (error) { status.textContent = 'Импорт не выполнен: ' + error.message + ' Текущие ответы сохранены.'; }
+  finally { event.target.value = ''; }
+});
+document.getElementById('apply').addEventListener('click', async () => {
+  try {
+    const result = await review.apply();
+    if (result.mode === 'export') { download(result.envelope); status.textContent = 'Ответы подготовлены в JSON. Приложите файл в текущий чат для обсуждения; авторизация, установка и публикация не запускались.'; }
+    else if (result.mode === 'already') status.textContent = 'Этот пакет уже передан; новый пакет не создан.';
+  } catch (error) { status.textContent = error.message; }
+});
+document.getElementById('provenance').textContent = 'Artifact: ' + snapshot.artifactId + '\nSnapshot SHA-256: ' + snapshot.snapshotSha256 + '\nСнимок: ' + snapshot.snapshotFile + '\nRelease notes SHA-256: ' + snapshot.notesSha256;
+redraw();
+</script></body></html>

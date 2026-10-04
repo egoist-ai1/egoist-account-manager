@@ -66,7 +66,7 @@ export function inspectCodexAuthJson(authJson: string): CodexAuthMaterialMetadat
   const email = normalizeString(idTokenClaims?.email);
   const inferredAuthMode = normalizeString(parsed.OPENAI_API_KEY)
     ? "apiKey"
-    : parsed.tokens?.access_token || parsed.tokens?.id_token
+    : normalizeString(parsed.tokens?.access_token) || normalizeString(parsed.tokens?.id_token)
       ? "chatgpt"
       : null;
   return {
@@ -94,9 +94,7 @@ function readStableAuthFile(filePath: string): string {
     if (firstInfo.size !== secondInfo.size || firstInfo.mtimeMs !== secondInfo.mtimeMs || !first.equals(second)) {
       throw new Error("Codex auth cache changed during vault capture");
     }
-    const authJson = second.toString("utf8");
-    JSON.parse(authJson);
-    return authJson;
+    return second.toString("utf8");
   } finally {
     first.fill(0);
     second.fill(0);

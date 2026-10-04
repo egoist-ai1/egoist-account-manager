@@ -289,17 +289,15 @@ export function OverviewPage({
   const agSecondaryRemaining = remaining(activeAg?.secondaryUsedPercent ?? null);
   const agSecondaryLabel = isEnglish ? "Weekly limit" : "Недельный лимит";
   const agSecondaryResetAt = activeAg?.secondaryResetsAt ?? null;
-  const agSecondaryIsUnlimited = activeAg !== null && activeAg.secondaryUsedPercent === null && activeAg.secondaryResetsAt === null;
 
   // OpenAI Codex Quotas
-  const codexHas5h = activeCodex?.fiveHourUsedPercent !== null;
-  const codexHasWeekly = activeCodex?.weeklyUsedPercent !== null;
+  const codexHas5h = activeCodex?.fiveHourUsedPercent != null;
+  const codexHasWeekly = activeCodex?.weeklyUsedPercent != null;
 
   let codex5hRemaining: number | null = null;
   let codex5hResetAt: number | null = null;
   let codexWeeklyRemaining: number | null = null;
   let codexWeeklyResetAt: number | null = null;
-  let codexWeeklyIsUnlimited = false;
 
   if (codexHas5h) {
     codex5hRemaining = remaining(activeCodex?.fiveHourUsedPercent ?? null);
@@ -307,18 +305,14 @@ export function OverviewPage({
     if (codexHasWeekly) {
       codexWeeklyRemaining = remaining(activeCodex?.weeklyUsedPercent ?? null);
       codexWeeklyResetAt = activeCodex?.weeklyResetsAt ?? null;
-    } else {
-      codexWeeklyIsUnlimited = true;
     }
   } else if (codexHasWeekly) {
     codexWeeklyRemaining = remaining(activeCodex?.weeklyUsedPercent ?? null);
     codexWeeklyResetAt = activeCodex?.weeklyResetsAt ?? null;
     codex5hRemaining = null;
-    codexWeeklyIsUnlimited = false;
   } else if (activeCodex) {
     codex5hRemaining = remaining(activeCodex.primaryUsedPercent ?? null);
     codex5hResetAt = activeCodex.primaryResetsAt ?? null;
-    codexWeeklyIsUnlimited = true;
   }
 
   // Switch Recommendations
@@ -340,9 +334,13 @@ export function OverviewPage({
     : null;
 
   // Fleet Standby Statistics
-  const readyStandbyCount = accounts.filter(
-    (a) => !a.isActive && !a.archived && a.credentialState === "ready" && (remaining(a.fiveHourUsedPercent ?? a.primaryUsedPercent ?? null) ?? 100) >= 50
-  ).length;
+  const readyStandbyCount = accounts.filter((account) => {
+    if (account.isActive || account.archived || account.credentialState !== "ready") return false;
+    if (account.status === "limited" || account.status === "error" || hasCurrentQuotaRefreshFailure(account)) return false;
+    if (buildQuotaFreshness(account, { now, staleAfterSeconds: 15 * 60 }).state !== "fresh") return false;
+    const quota = selectAccountListQuota(account, now);
+    return quota.remainingPercent !== null && quota.remainingPercent >= 50;
+  }).length;
 
   const protectedProfilesCount = accounts.filter((a) => a.credentialState === "ready" && !a.archived).length;
 
@@ -355,6 +353,9 @@ export function OverviewPage({
     })
     .sort((a, b) => a.resetAt - b.resetAt);
   const earliestFleetReset = futureResets[0] ?? null;
+  const hasQuotaSnapshot = accounts.some((account) =>
+    !account.archived && selectAccountListQuota(account, now).remainingPercent !== null
+  );
 
   // Process Standby Fleets per platform (scheduleAccounts compatibility for test contracts)
   const scheduleAccounts = useMemo(() => {
@@ -460,8 +461,14 @@ export function OverviewPage({
                 </>
               ) : (
                 <>
-                  <strong>{isEnglish ? "All clear" : "Лимиты в норме"}</strong>
-                  <small>{isEnglish ? "No impending limits" : "Ограничений нет"}</small>
+                  <strong>{accounts.length === 0
+                    ? (isEnglish ? "No profiles" : "Нет профилей")
+                    : hasQuotaSnapshot
+                      ? (isEnglish ? "Reset time unknown" : "Нет даты сброса")
+                      : (isEnglish ? "No quota snapshot" : "Нет снимка")}</strong>
+                  <small>{accounts.length === 0
+                    ? (isEnglish ? "Add an account" : "Добавьте аккаунт")
+                    : (isEnglish ? "Refresh limits" : "Обновите лимиты")}</small>
                 </>
               )}
             </div>
@@ -616,26 +623,24 @@ export function OverviewPage({
                   <div className="clean-quota-header">
                     <span className="clean-quota-label">{agSecondaryLabel}</span>
                     <span className="clean-quota-state">
-                      {agSecondaryIsUnlimited ? (isEnglish ? "Unlimited" : "Не ограничен") : quotaStateLabel(agSecondaryRemaining, isEnglish)}
+                      {quotaStateLabel(agSecondaryRemaining, isEnglish)}
                     </span>
                   </div>
                   <div className="clean-quota-big-number">
-                    <span className={`clean-big-num ${agSecondaryIsUnlimited ? "is-unlimited" : quotaTone(agSecondaryRemaining)}`}>
-                      {agSecondaryIsUnlimited ? "∞" : formatRemaining(agSecondaryRemaining)}
+                    <span className={`clean-big-num ${quotaTone(agSecondaryRemaining)}`}>
+                      {formatRemaining(agSecondaryRemaining)}
                     </span>
                   </div>
                   <div className="clean-quota-progress">
                     <div
-                      className={`clean-quota-bar ${agSecondaryIsUnlimited ? "is-unlimited" : quotaTone(agSecondaryRemaining)}`}
-                      style={{ width: agSecondaryIsUnlimited ? "100%" : `${agSecondaryRemaining ?? 0}%` }}
+                      className={`clean-quota-bar ${quotaTone(agSecondaryRemaining)}`}
+                      style={{ width: `${agSecondaryRemaining ?? 0}%` }}
                     />
                   </div>
                   <div className="clean-quota-footer">
                     <Clock3 className="footer-clock-icon" size={13} />
                     <span>
-                      {agSecondaryIsUnlimited ? (
-                        isEnglish ? "Unlimited Pro quota" : "Полный безлимит Pro"
-                      ) : agSecondaryResetAt && agSecondaryResetAt > now ? (
+                      {agSecondaryResetAt && agSecondaryResetAt > now ? (
                         <>
                           {isEnglish ? "Resets in " : "Сброс через "}
                           <strong className="clean-countdown-highlight">
@@ -707,7 +712,9 @@ export function OverviewPage({
                           <span className="standby-reset-hint">
                             {item.resetAt && item.resetAt > now
                               ? formatResetTimeShort(item.resetAt, isEnglish ? "en" : "ru", now)
-                              : (isEnglish ? "Ready" : "Готов")}
+                              : item.remaining === null
+                                ? (isEnglish ? "No snapshot" : "Нет снимка")
+                                : (isEnglish ? "Reset time unknown" : "Нет даты сброса")}
                           </span>
                         </div>
 
@@ -829,26 +836,24 @@ export function OverviewPage({
                   <div className="clean-quota-header">
                     <span className="clean-quota-label">{isEnglish ? "Weekly limit" : "Недельный лимит"}</span>
                     <span className="clean-quota-state">
-                      {codexWeeklyIsUnlimited ? (isEnglish ? "Unlimited" : "Не ограничен") : quotaStateLabel(codexWeeklyRemaining, isEnglish)}
+                      {quotaStateLabel(codexWeeklyRemaining, isEnglish)}
                     </span>
                   </div>
                   <div className="clean-quota-big-number">
-                    <span className={`clean-big-num ${codexWeeklyIsUnlimited ? "is-unlimited" : quotaTone(codexWeeklyRemaining)}`}>
-                      {codexWeeklyIsUnlimited ? "∞" : formatRemaining(codexWeeklyRemaining)}
+                    <span className={`clean-big-num ${quotaTone(codexWeeklyRemaining)}`}>
+                      {formatRemaining(codexWeeklyRemaining)}
                     </span>
                   </div>
                   <div className="clean-quota-progress">
                     <div
-                      className={`clean-quota-bar ${codexWeeklyIsUnlimited ? "is-unlimited" : quotaTone(codexWeeklyRemaining)}`}
-                      style={{ width: codexWeeklyIsUnlimited ? "100%" : `${codexWeeklyRemaining ?? 0}%` }}
+                      className={`clean-quota-bar ${quotaTone(codexWeeklyRemaining)}`}
+                      style={{ width: `${codexWeeklyRemaining ?? 0}%` }}
                     />
                   </div>
                   <div className="clean-quota-footer">
                     <Clock3 className="footer-clock-icon" size={13} />
                     <span>
-                      {codexWeeklyIsUnlimited ? (
-                        isEnglish ? "Included in subscription" : "Включено в подписку"
-                      ) : codexWeeklyResetAt && codexWeeklyResetAt > now ? (
+                      {codexWeeklyResetAt && codexWeeklyResetAt > now ? (
                         <>
                           {isEnglish ? "Resets in " : "Сброс через "}
                           <strong className="clean-countdown-highlight">
@@ -907,7 +912,9 @@ export function OverviewPage({
                           <span className="standby-reset-hint">
                             {item.resetAt && item.resetAt > now
                               ? formatResetTimeShort(item.resetAt, isEnglish ? "en" : "ru", now)
-                              : (isEnglish ? "Ready" : "Готов")}
+                              : item.remaining === null
+                                ? (isEnglish ? "No snapshot" : "Нет снимка")
+                                : (isEnglish ? "Reset time unknown" : "Нет даты сброса")}
                           </span>
                         </div>
 

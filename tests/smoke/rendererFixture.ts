@@ -9,11 +9,12 @@ export interface FixtureControl {
   history: SwitchHistoryItem[];
   calls: Record<string, number>;
   failRefresh: boolean;
+  resumePrepareSwitch?: () => void;
   emitAccounts(): void;
 }
 declare global { interface Window { egoistFixture: FixtureControl; fixtureIntervals: Set<number> } }
 
-export async function installRendererFixture(page: Page, options: { count?: number; language?: "ru" | "en"; privacyMode?: boolean; notes?: boolean; unknown?: boolean; surface?: string } = {}) {
+export async function installRendererFixture(page: Page, options: { count?: number; language?: "ru" | "en"; privacyMode?: boolean; notes?: boolean; unknown?: boolean; surface?: string; deferPrepareSwitch?: boolean } = {}) {
   const now = Math.floor(Date.now() / 1000);
   const accounts: ManagedAccount[] = Array.from({ length: options.count ?? 10 }, (_, index) => ({
     id: `fixture-${index}`, platform: index % 4 === 3 ? "antigravity" : "codex", label: `Profile ${String(index + 1).padStart(3, "0")}`, email: `hidden-address+${index}@privacy.example`,
@@ -29,7 +30,7 @@ export async function installRendererFixture(page: Page, options: { count?: numb
   }));
   const settings: AppSettings = { language: options.language ?? "ru", autoRefreshIntervalMs: 0, trayRefreshIntervalMs: 0, privacyMode: options.privacyMode ?? false, confirmSwitch: true, desktopClosePolicy: "graceful-only", smartSwitchMode: "suggest", smartSwitchThresholdPercent: 10, notificationSoundEnabled: false, trayEnabled: false, autostartEnabled: false };
   await page.route("**/*", (route) => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
-  await page.addInitScript(({ accounts: initialAccounts, settings: initialSettings, version, showNotes }) => {
+  await page.addInitScript(({ accounts: initialAccounts, settings: initialSettings, version, showNotes, deferPrepareSwitch }) => {
     const events = new Map<string, Set<(value: unknown) => void>>();
     window.egoistFixture = { accounts: initialAccounts, settings: initialSettings, transactions: [], history: [], calls: {}, failRefresh: false, emitAccounts() { for (const handler of events.get("onAccountsUpdated") ?? []) handler(undefined); } };
     const state = window.egoistFixture;
@@ -57,7 +58,9 @@ export async function installRendererFixture(page: Page, options: { count?: numb
           case "getTrayPlatform": return "codex";
           case "refreshAccount": if (state.failRefresh) throw new Error("fixture offline"); return state.accounts.find((account) => account.id === args[0]);
           case "refreshAllAccounts": return state.accounts;
-          case "prepareSwitch": return { transaction: transaction(String(args[0])), canCommit: true, warnings: [] };
+          case "prepareSwitch":
+            if (deferPrepareSwitch) await new Promise<void>((resolve) => { state.resumePrepareSwitch = resolve; });
+            return { transaction: transaction(String(args[0])), canCommit: true, warnings: [] };
           case "cancelSwitch": return { ...transaction("fixture-0"), status: "aborted", phase: "aborted" };
           case "switchAccount": { const target = state.accounts.find((account) => account.id === args[0])!; state.accounts = state.accounts.map((account) => ({ ...account, isActive: account.id === target.id })); return { ...target, isActive: true, runtimeVerification: state.accounts[0].runtimeVerification }; }
           case "verifyRuntimeAccount": return state.accounts.find((account) => account.id === args[0])?.runtimeVerification;
@@ -78,6 +81,6 @@ export async function installRendererFixture(page: Page, options: { count?: numb
     } });
     window.localStorage.setItem("cam.accountSort", "name");
     if (!showNotes) window.localStorage.setItem("cam.releaseNotesSeen", version);
-  }, { accounts, settings, version: appVersion, showNotes: options.notes ?? false });
+  }, { accounts, settings, version: appVersion, showNotes: options.notes ?? false, deferPrepareSwitch: options.deferPrepareSwitch ?? false });
   await page.goto(options.surface ? `/?surface=${options.surface}` : "/");
 }

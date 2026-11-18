@@ -21,7 +21,7 @@ export interface ProfileTableProps {
   onRefresh: (id: string) => void;
   onRepair: (id: string) => void;
   onReauth: (id: string) => void;
-  onSwitch: (id: string) => void;
+  onSwitch: (id: string, trigger?: HTMLElement) => void;
   onAdd?: () => void;
   scrollPosition?: ScrollPosition;
 }
@@ -101,7 +101,7 @@ export function ProfileTable({ accounts, selectedId, now, language, privacyMode,
               {busy === `repair:${account.id}` || busy === `reauth:${account.id}` ? <Loader2 className="spin" /> : <KeyRound />}
             </button>
             <button className="icon-btn" aria-label={en ? `Details for ${label}` : `Подробности ${label}`} title={en ? "Profile details" : "Подробности профиля"} onClick={(event) => onInspect(account.id, event.currentTarget)}><MoreHorizontal /></button>
-            <button className={`profile-switch-action ${account.isActive ? "is-active" : ""}`} disabled={switchDisabled} aria-busy={busy === `switch:${account.id}`} onClick={() => onSwitch(account.id)}>
+            <button className={`profile-switch-action ${account.isActive ? "is-active" : ""}`} disabled={switchDisabled} aria-busy={busy === `switch:${account.id}`} onClick={(event) => onSwitch(account.id, event.currentTarget)}>
               {busy === `switch:${account.id}` ? <Loader2 className="spin" /> : account.isActive ? <CheckCircle2 /> : <ArrowRightLeft />}
               <span>{account.isActive ? account.runtimeVerification?.runtime === "verified" ? (en ? "Selected" : "Выбран") : (en ? "Reapply" : "Применить снова") : (en ? "Switch" : "Переключить")}</span>
             </button>

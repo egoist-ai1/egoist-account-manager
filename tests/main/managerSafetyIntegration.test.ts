@@ -56,7 +56,10 @@ function createFixture(dependencies: AccountManagerDependencies = {}) {
     allowDegradedTestStorage: true
   });
   const operationLock = dependencies.operationLock ?? new AsyncKeyedLock();
-  const manager = new AccountManager(store, vault, appData, path.join(root, "never-launch-codex.exe"), {
+  const mockExecutable = path.join(root, "never-launch-codex.exe");
+  // RPC в этих проверках подменён. Наличие файла исключает поиск настоящего Codex на хосте.
+  fs.writeFileSync(mockExecutable, "fixture");
+  const manager = new AccountManager(store, vault, appData, mockExecutable, {
     codexHome, operationLock,
     antigravityPathInput: { platform: "win32", appData: path.join(root, "isolated-roaming"), home: root },
     readAntigravityCredentialStorePayload: () => null,

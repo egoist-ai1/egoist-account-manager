@@ -910,7 +910,7 @@ function AccountCard({
   language: AppSettings["language"];
   busy: string | null;
   onRefresh: (id: string) => void;
-  onSwitch: (id: string) => void;
+  onSwitch: (id: string, trigger?: HTMLElement) => void;
   onReauth: (id: string) => void;
   onRepair: (id: string) => void;
   onSelect: (id: string) => void;
@@ -991,7 +991,7 @@ function AccountCard({
         <button className="icon-btn" aria-label={isEnglish ? "Profile details" : "Подробнее о профиле"} disabled={busy !== null} onClick={(event) => onInspect(account.id, event.currentTarget)} title={isEnglish ? "Profile details" : "Подробнее о профиле"}>
           <MoreHorizontal />
         </button>
-        <button className={`profile-switch-action ${account.isActive ? "is-active" : ""}`} disabled={busy !== null || (account.isActive && account.runtimeVerification?.runtime === "verified") || !view.readiness.canSwitchManually} onClick={() => onSwitch(account.id)} title={account.isActive ? (isEnglish ? "Selected profile" : "Выбранный профиль") : (isEnglish ? "Switch profile" : "Переключить профиль")}>
+        <button className={`profile-switch-action ${account.isActive ? "is-active" : ""}`} disabled={busy !== null || (account.isActive && account.runtimeVerification?.runtime === "verified") || !view.readiness.canSwitchManually} onClick={(event) => onSwitch(account.id, event.currentTarget)} title={account.isActive ? (isEnglish ? "Selected profile" : "Выбранный профиль") : (isEnglish ? "Switch profile" : "Переключить профиль")}>
           {busy === `switch:${account.id}` ? <Loader2 className="spin" /> : account.isActive ? <CheckCircle2 /> : <Zap />}
           <span>{account.isActive ? account.runtimeVerification?.runtime === "verified" ? (isEnglish ? "Selected" : "Выбран") : (isEnglish ? "Reapply" : "Применить снова") : (isEnglish ? "Switch" : "Переключить")}</span>
         </button>
@@ -1022,7 +1022,7 @@ function AccountInspector({
   onRefresh: (id: string) => void;
   onValidateAuth: (id: string) => void;
   onRepair: (id: string) => void;
-  onSwitch: (id: string) => void;
+  onSwitch: (id: string, trigger?: HTMLElement) => void;
   onReauth: (id: string) => void;
   onOpenFolder: (id: string) => void;
   onMetadata: (id: string, input: { tags?: string[]; favorite?: boolean; archived?: boolean }) => void;
@@ -1072,7 +1072,7 @@ function AccountInspector({
           className="button"
           aria-label={isEnglish ? "Activate account" : "Активировать аккаунт"}
           disabled={switchDisabled}
-          onClick={() => onSwitch(account.id)}
+          onClick={(event) => onSwitch(account.id, event.currentTarget)}
           title={isAntigravity ? (isEnglish ? "Apply profile and restart Antigravity" : "Применить профиль и перезапустить Antigravity") : undefined}
         >
           <ArrowRightLeft />
@@ -1170,6 +1170,7 @@ type ConfirmState = {
   confirmLabel: string;
   tone?: "primary" | "danger";
   details?: string[];
+  returnFocus?: HTMLElement;
 };
 
 function passwordStrength(value: string, language: AppSettings["language"]): { label: string; className: string } {
@@ -1183,15 +1184,19 @@ function passwordStrength(value: string, language: AppSettings["language"]): { l
 function ConfirmDialog({
   state,
   language,
-  onClose
+  onClose,
+  registerTrigger
 }: {
   state: ConfirmState | null;
   language: AppSettings["language"];
   onClose: (confirmed: boolean) => void;
+  registerTrigger: (dialog: HTMLElement, trigger: HTMLElement) => void;
 }) {
   if (!state) return null;
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={state.title}>
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={state.title} ref={(dialog) => {
+      if (dialog && state.returnFocus) registerTrigger(dialog, state.returnFocus);
+    }}>
       <div className={`confirm-modal ${state.tone === "danger" ? "danger" : ""}`}>
         <div className="modal-head">
           <div>
@@ -1459,7 +1464,7 @@ function App() {
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [appNotifications, visibilityEpoch]);
 
-  useDialogManager((label) => {
+  const registerDialogTrigger = useDialogManager((label) => {
     if (label === "Profile details" || label === "Подробности профиля") setInspectorOpen(false);
     else if (label === "Предварительный импорт" || label === "Import preview") { if (busy !== "import:apply") setImportPreview(null); }
     else if (label === "Добавление аккаунта" || label === "Add account") closeLoginWizard();
@@ -2124,8 +2129,10 @@ function App() {
     }
   }
 
-  async function switchAccount(id: string) {
+  async function switchAccount(id: string, trigger?: HTMLElement) {
     const account = accounts.find((item) => item.id === id);
+    // Блокировка кнопки на время подготовки может снять с неё фокус.
+    const returnFocus = trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : undefined);
     setBusy(`prepare-switch:${id}`);
     let preparation;
     try {
@@ -2148,6 +2155,7 @@ function App() {
             ? (isEnglish ? "Квессер will apply the profile and relaunch Codex after it closes normally. If Codex stays open, the switch will be canceled." : "Квессер применит профиль и снова запустит Codex после штатного закрытия. Если Codex останется открыт, переключение будет отменено.")
             : (isEnglish ? "Квессер will close the installed Codex and restart it with the selected profile. If needed, it will stop the verified Codex process tree." : "Квессер закроет установленный Codex и запустит его с выбранным профилем. При необходимости он завершит проверенное дерево процессов Codex."),
         confirmLabel: isEnglish ? "Switch" : "Переключить",
+        returnFocus,
         details: [
           `${isEnglish ? "Provider" : "Платформа"}: ${platformLabel(account)}`,
           `${isEnglish ? "Current profile" : "Текущий профиль"}: ${currentLabel}`,
@@ -2882,7 +2890,7 @@ function App() {
         displayEmail={displayEmail}
         privacyMode={privacyMode}
       />
-      <ConfirmDialog state={confirmState ? { ...confirmState, body: displayMetadata(confirmState.body, privacyMode, language), details: confirmState.details?.map((detail) => displayMetadata(detail, privacyMode, language)) } : null} language={language} onClose={closeConfirm} />
+      <ConfirmDialog state={confirmState ? { ...confirmState, body: displayMetadata(confirmState.body, privacyMode, language), details: confirmState.details?.map((detail) => displayMetadata(detail, privacyMode, language)) } : null} language={language} onClose={closeConfirm} registerTrigger={registerDialogTrigger} />
     </main>
   );
 }

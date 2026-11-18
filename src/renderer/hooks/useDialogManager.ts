@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 const focusSelector = "button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
 
@@ -7,12 +7,13 @@ function focusable(dialog: HTMLElement): HTMLElement[] {
 }
 
 /** Gives every modal the same initial focus, keyboard boundary and return focus. */
-export function useDialogManager(onEscape: (label: string) => void): void {
+export function useDialogManager(onEscape: (label: string) => void): (dialog: HTMLElement, trigger: HTMLElement) => void {
   const onEscapeRef = useRef(onEscape);
+  const triggersRef = useRef(new WeakMap<HTMLElement, HTMLElement | null>());
   onEscapeRef.current = onEscape;
   useEffect(() => {
     let current: HTMLElement | null = null;
-    const triggers = new WeakMap<HTMLElement, HTMLElement | null>();
+    const triggers = triggersRef.current;
     let restore: Array<{ element: HTMLElement; inert: boolean; ariaHidden: string | null }> = [];
     const clearInert = () => {
       for (const { element, inert, ariaHidden } of restore) {
@@ -43,7 +44,7 @@ export function useDialogManager(onEscape: (label: string) => void): void {
         }
         const previousTrigger = previous ? triggers.get(previous) : null;
         if (previousTrigger?.isConnected && next.contains(previousTrigger)) previousTrigger.focus();
-        else if (!next.contains(document.activeElement)) {
+        if (!next.contains(document.activeElement)) {
           const target = next.querySelector<HTMLElement>("[data-dialog-initial-focus], [autofocus]") ?? focusable(next)[0] ?? next;
           if (target === next) next.tabIndex = -1;
           target.focus();
@@ -81,4 +82,5 @@ export function useDialogManager(onEscape: (label: string) => void): void {
     reconcile();
     return () => { observer.disconnect(); clearInert(); document.removeEventListener("keydown", onKeyDown, true); document.removeEventListener("focusin", onFocus); };
   }, []);
+  return useCallback((dialog, trigger) => { triggersRef.current.set(dialog, trigger); }, []);
 }

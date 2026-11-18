@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +11,7 @@ import {
 } from "../../src/main/processManager";
 
 describe("processManager", () => {
+  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
   it("prefers the Windows npm cmd shim over the extensionless shim from where.exe", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cam-codex-path-"));
     const extensionless = path.join(dir, "codex");
@@ -83,6 +84,7 @@ describe("processManager", () => {
 
   it.runIf(process.platform === "win32")("stages a WindowsApps binary to a local user folder to avoid spawn EPERM", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cam-appx-test-"));
+    vi.stubEnv("LOCALAPPDATA", path.join(dir, "local"));
     const fakeWindowsAppsExe = path.join(dir, "WindowsApps", "OpenAI.Codex_test", "app", "resources", "codex.exe");
     fs.mkdirSync(path.dirname(fakeWindowsAppsExe), { recursive: true });
     fs.writeFileSync(fakeWindowsAppsExe, "test-binary-content");
@@ -100,9 +102,19 @@ describe("processManager", () => {
     }
   });
 
-  it.runIf(process.platform === "win32")("resolves codex path to a non-WindowsApps executable on Windows", () => {
-    const resolved = ensureExecutableCodexPath("C:\\Program Files\\WindowsApps\\OpenAI.Codex_test\\app\\resources\\codex.exe");
-    expect(resolved).not.toContain("WindowsApps");
+  it.runIf(process.platform === "win32")("uses the installed fallback only when it exists", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cam-fallback-"));
+    const local = path.join(root, "local");
+    vi.stubEnv("LOCALAPPDATA", local);
+    vi.spyOn(os, "homedir").mockReturnValue(root);
+    const missing = path.join(root, "WindowsApps", "missing", "codex.exe");
+    const fallback = path.join(local, "OpenAI", "Codex", "bin", "codex.exe");
+    try {
+      expect(ensureExecutableCodexPath(missing)).toBeNull();
+      fs.mkdirSync(path.dirname(fallback), { recursive: true });
+      fs.writeFileSync(fallback, "fixture");
+      expect(ensureExecutableCodexPath(missing)).toBe(fallback);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 });
 

@@ -45,9 +45,12 @@ test("row keyboard selection preserves focus through updates; Enter only opens d
 });
 
 test("nested switch confirmation traps focus and returns to the inspector action", async ({ page }) => {
-  await installRendererFixture(page, { count: 1 }); await page.locator(".profile-table tbody tr").focus(); await page.keyboard.press("Enter");
+  await installRendererFixture(page, { count: 1, deferPrepareSwitch: true }); await page.locator(".profile-table tbody tr").focus(); await page.keyboard.press("Enter");
   const inspector = page.getByRole("dialog", { name: "Подробности профиля" }); const action = inspector.getByRole("button", { name: "Активировать аккаунт", exact: true });
-  await action.click(); const confirm = page.getByRole("dialog", { name: "Переключить профиль" }); await expect(confirm).toBeVisible();
+  await action.click();
+  await expect(action).toBeDisabled();
+  await page.evaluate(() => window.egoistFixture.resumePrepareSwitch?.());
+  const confirm = page.getByRole("dialog", { name: "Переключить профиль" }); await expect(confirm).toBeVisible();
   await page.keyboard.press("Tab"); expect(await confirm.evaluate((node) => node.contains(document.activeElement))).toBe(true);
   await page.keyboard.press("Escape"); await expect(confirm).toBeHidden(); await expect(inspector).toBeVisible(); await expect(action).toBeFocused();
   expect(await page.evaluate(() => window.egoistFixture.calls.switchAccount ?? 0)).toBe(0);
@@ -88,7 +91,7 @@ test("unknown and fractional quota remain honest; all scopes appear in details",
   expect(await page.evaluate(() => window.egoistFixture.calls.verifyRuntimeAccount)).toBe(1);
   await page.keyboard.press("Escape");
   await page.evaluate(() => { window.egoistFixture.accounts = window.egoistFixture.accounts.map((account) => ({ ...account, quotaSnapshot: null, fiveHourUsedPercent: null, weeklyUsedPercent: null })); window.egoistFixture.emitAccounts(); });
-  await expect(row.locator(".table-quota strong")).toHaveText("—");
+  await expect(row.locator(".table-quota strong")).toHaveText(["—"]);
   await expect(row.getByRole("button", { name: "Применить снова" })).toBeEnabled();
 });
 

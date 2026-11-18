@@ -5,6 +5,7 @@ import type {
   SwitchPreparationResult,
   SwitchTransaction,
   SwitchTransactionPhase,
+  SwitchVerificationEvidence,
   SwitchTransactionStatus
 } from "../../shared/types.js";
 import { redactSensitiveText } from "../../shared/redaction.js";
@@ -143,6 +144,25 @@ export class SwitchTransactionService {
       errorCode,
       errorMessage: redactSensitiveText(errorMessage).slice(0, 480)
     }, true);
+  }
+
+  beginRollback(id: string): SwitchTransaction {
+    const current = this.require(id);
+    if (!["committed", "recovery_required"].includes(current.status)) throw new Error("Switch transaction is not eligible for manual rollback");
+    if (!current.backupPath) throw new Error("Switch transaction has no recovery snapshot");
+    const updated = this.store.updateSwitchTransaction(id, { status: "rolling_back", phase: "rolling_back", completedAt: null }, current.version);
+    this.emit(updated);
+    return updated;
+  }
+
+  setVerification(id: string, evidence: SwitchVerificationEvidence): SwitchTransaction {
+    const updated = this.store.setSwitchVerification(id, evidence);
+    this.emit(updated);
+    return updated;
+  }
+
+  requireRecovered(platform: AccountPlatform): void {
+    if (this.store.getRecoveryRequired(platform)) throw new Error("Provider recovery is required before mutation");
   }
 
   list(limit = 30): SwitchTransaction[] {

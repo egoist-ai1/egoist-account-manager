@@ -15,6 +15,26 @@ function tempDir(): string {
   return created;
 }
 
+function fixtureCodexBinary(directory: string): string {
+  const file = path.join(directory, "fixture-codex.exe");
+  fs.writeFileSync(file, "Never executed: runCommand and RPC are injected fixtures.");
+  return file;
+}
+
+function writeFeatureSchema(outDir: string, quota = true): void {
+  const v2 = path.join(outDir, "v2");
+  fs.mkdirSync(v2, { recursive: true });
+  fs.writeFileSync(path.join(outDir, "ClientRequest.json"), JSON.stringify({ oneOf: [
+    { properties: { method: { enum: ["account/read"] } } },
+    ...(quota ? [{ properties: { method: { enum: ["account/rateLimits/read"] } } }] : [])
+  ] }));
+  fs.writeFileSync(path.join(v2, "GetAccountResponse.json"), JSON.stringify({ properties: { account: {} } }));
+  fs.writeFileSync(path.join(v2, "GetAccountRateLimitsResponse.json"), JSON.stringify({ properties: { rateLimits: {} } }));
+  fs.writeFileSync(path.join(v2, "NullableGetAccountRateLimitsParams.json"), JSON.stringify({ definitions: {
+    GetAccountRateLimitsParams: { properties: { excludeResetCreditDetails: { type: "boolean" } } }
+  } }));
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -61,7 +81,7 @@ describe("Codex capability schema", () => {
     const service = new CodexCapabilityService({
       appDataDir,
       codexHome: path.join(appDataDir, "global-home"),
-      codexPath: "C:\\Tools\\codex.cmd",
+      codexPath: fixtureCodexBinary(appDataDir),
       now: () => 1_700_000_000_000,
       runCommand: async (_codexPath, args) => {
         if (args[0] === "--version") {
@@ -72,6 +92,7 @@ describe("Codex capability schema", () => {
         }
         schemaGenerations += 1;
         const outDir = args.at(-1)!;
+        writeFeatureSchema(outDir);
         const v2 = path.join(outDir, "v2");
         fs.mkdirSync(v2, { recursive: true });
         fs.writeFileSync(path.join(v2, "LoginAccountParams.json"), JSON.stringify({
@@ -110,6 +131,7 @@ describe("Codex capability schema", () => {
 
     expect(first.cliVersion).toBe("codex-cli 0.144.0");
     expect(first.protocol.compatible).toBe(true);
+    expect(first.features).toMatchObject({ accountRead: { available: true }, quotaRead: { available: true }, excludeResetCreditDetails: { available: true } });
     expect(first.identity).toMatchObject({
       signedIn: true,
       authMode: "chatgpt",
@@ -128,12 +150,44 @@ describe("Codex capability schema", () => {
     expect(rpcStarts).toBe(1);
   });
 
+  it("invalidates capabilities on a changed CLI version and degrades only missing features", async () => {
+    const appDataDir = tempDir();
+    const codexPath = path.join(appDataDir, "codex.fixture");
+    fs.writeFileSync(codexPath, "fixture");
+    let version = "0.160.0";
+    let schemaGenerations = 0;
+    let readAccounts = 0;
+    const service = new CodexCapabilityService({ appDataDir, codexHome: path.join(appDataDir, "home"), codexPath,
+      runCommand: async (_path, args) => {
+        if (args[0] === "--version") return { stdout: `codex-cli ${version}`, stderr: "", exitCode: 0 };
+        if (args[0] === "login") return { stdout: "usage", stderr: "", exitCode: 0 };
+        schemaGenerations += 1;
+        const out = args.at(-1)!;
+        writeFeatureSchema(out, version === "0.160.0");
+        fs.writeFileSync(path.join(out, "v2", "LoginAccountParams.json"), JSON.stringify({ oneOf: [
+          { properties: { type: { enum: ["chatgpt"] } } }
+        ] }));
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }, createRpcClient: () => ({ start: async () => undefined, stop: async () => undefined,
+        readAccount: async () => { readAccounts += 1; return { account: null, requiresOpenaiAuth: true }; },
+        getInitializeResponse: () => ({ userAgent: "fixture", codexHome: "fixture", platformFamily: "windows", platformOs: "windows" }) }) });
+    expect((await service.getReport()).features?.quotaRead.available).toBe(true);
+    version = "0.161.0";
+    const updated = await service.getReport();
+    expect(updated.cliVersion).toBe("codex-cli 0.161.0");
+    expect(updated.protocol.compatible).toBe(true);
+    expect(updated.features).toMatchObject({ accountRead: { available: true }, quotaRead: { available: false }, excludeResetCreditDetails: { available: false } });
+    expect(updated.loginMethods.find(method => method.id === "chatgptDeviceCode")?.available).toBe(false);
+    expect(schemaGenerations).toBe(2);
+    expect(readAccounts).toBe(2);
+  });
+
   it("fails closed when the generated schema is malformed", async () => {
     const appDataDir = tempDir();
     const service = new CodexCapabilityService({
       appDataDir,
       codexHome: path.join(appDataDir, "home"),
-      codexPath: "codex",
+      codexPath: fixtureCodexBinary(appDataDir),
       runCommand: async (_codexPath, args) => {
         if (args[0] === "--version") {
           return { stdout: "codex-cli test\n", stderr: "", exitCode: 0 };

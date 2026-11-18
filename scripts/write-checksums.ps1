@@ -1,5 +1,5 @@
 param(
-  [string]$ReleaseDir = (Join-Path $PSScriptRoot "..\\release")
+  [string]$ReleaseDir
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,15 +16,15 @@ function Get-Sha256Hex([string]$Path) {
 }
 
 $package = Get-Content -Raw -Encoding utf8 (Join-Path $PSScriptRoot "..\\package.json") | ConvertFrom-Json
+if (-not $ReleaseDir) { $ReleaseDir = Join-Path (Split-Path -Parent $PSScriptRoot) ([string]$package.build.directories.output) }
 $version = $package.version
+$setupName = ([string]$package.build.nsis.artifactName).Replace('${version}', $version).Replace('${ext}', 'exe')
+$portableName = ([string]$package.build.portable.artifactName).Replace('${version}', $version).Replace('${ext}', 'exe')
 $files = Get-ChildItem -LiteralPath $ReleaseDir -File | Where-Object {
   $_.Name -in @(
-    "Account-Manager-EGO-Setup-$version.exe",
-    "Account-Manager-EGO-$version.exe",
-    "Account-Manager-EGO-Setup-$version.exe.blockmap",
-    "Egoist-Account-Manager-Setup-$version.exe",
-    "Egoist-Account-Manager-$version.exe",
-    "Egoist-Account-Manager-Setup-$version.exe.blockmap",
+    $setupName,
+    $portableName,
+    "$setupName.blockmap",
     "latest.yml"
   )
 }

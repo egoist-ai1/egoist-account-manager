@@ -33,19 +33,19 @@ describe("InAppNotificationService", () => {
   it("publishes only meaningful switch milestones and sounds only on completion", () => {
     expect(buildSwitchNotification(transaction("preparing"), "reserve", false)).toBeNull();
     expect(buildSwitchNotification(transaction("quiescing"), "reserve", false)).toMatchObject({
-      title: "Сессия защищена · 1 из 3",
+      title: "Подготовка переключения",
       silent: true,
       progress: { value: 1 / 3 }
     });
     expect(buildSwitchNotification(transaction("verifying"), "reserve", false)).toMatchObject({
-      title: "Codex перезапущен · 2 из 3",
+      title: "Проверка переключения",
       silent: true
     });
     expect(buildSwitchNotification(transaction("committed"), "reserve", false)).toMatchObject({
-      title: "Аккаунт активирован · 3 из 3",
-      body: "reserve подтверждён и готов к работе.",
+      title: "Профиль применён",
+      body: "reserve. Аккаунт в открытом Codex пока не подтверждён.",
       silent: false,
-      tone: "success"
+      tone: "warning"
     });
   });
 
@@ -55,6 +55,22 @@ describe("InAppNotificationService", () => {
 
     expect(service.take(payload)).not.toBeNull();
     expect(service.take(payload)).toBeNull();
+  });
+
+  it("announces only bound runtime email evidence as runtime success", () => {
+    const applied = transaction("committed");
+    applied.platform = "antigravity";
+    applied.verification = { profileApplied: true, credentials: "online_verified", credentialMethod: "google.userinfo",
+      launch: "process_started", runtime: "verified", runtimeSource: "antigravity.GetUserStatus",
+      observedEmail: "fixture@example.com", observedAt: 12, runtimePid: 123,
+      message: "Runtime email confirmed" };
+    expect(buildSwitchNotification(applied, "fixture", false)).toMatchObject({
+      title: "Аккаунт в приложении подтверждён", tone: "success", body: "fixture"
+    });
+    applied.verification.runtime = "unsupported";
+    applied.verification.credentials = "probe_observed";
+    expect(buildSwitchNotification(applied, "fixture", false)).toMatchObject({ tone: "warning" });
+    expect(buildSwitchNotification(applied, "fixture", false)?.title).not.toContain("подтверждён");
   });
 
   it("reports saved login and quota threshold without exposing raw errors", () => {
@@ -83,9 +99,9 @@ describe("InAppNotificationService", () => {
   it("keeps sound policy and progress inside a channel-neutral payload", () => {
     const payload = buildSwitchNotification(transaction("committed"), "A&B <profile>", false)!;
     expect(payload).toMatchObject({
-      tone: "success",
+      tone: "warning",
       silent: false,
-      progress: { value: 1, status: "Готово" }
+      progress: { value: 1, status: "Нужно подтверждение IDE" }
     });
     expect(payload.createdAt).toBeGreaterThan(0);
     expect(payload.body).toContain("A&B <profile>");
@@ -94,7 +110,7 @@ describe("InAppNotificationService", () => {
   it("announces an official repository listing without claiming artifact verification or silent installation", () => {
     expect(buildUpdateNotification("3.2.0", false)).toMatchObject({
       key: "release:3.2.0",
-      title: "Доступен Egoist Account Manager 3.2.0",
+      title: "Доступен Квессер 3.2.0",
       tone: "progress",
       silent: false
     });

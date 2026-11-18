@@ -4,8 +4,11 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  test:
+  node-checks:
     runs-on: windows-latest
 
     steps:
@@ -15,7 +18,47 @@ jobs:
       - name: Настроить pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 11.7.0
+          version: 11.28.0
+
+      - name: Настроить Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Установить зависимости
+        run: pnpm install --frozen-lockfile
+
+      - name: Проверить типы
+        run: pnpm run typecheck
+
+      - name: Подготовить собственный work проверок
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP 'kvesser-node'
+          [IO.Directory]::CreateDirectory($work) | Out-Null
+          "CAM_TEST_WORK_DIR=$work" >> $env:GITHUB_ENV
+
+      - name: Линт
+        run: pnpm run lint
+
+      - name: Тесты
+        run: pnpm run test:node
+
+      - name: Release delivery tests
+        run: pnpm run test:delivery
+        env:
+          CAM_RELEASE_TEST_WORK: ${{ runner.temp }}/egoist-delivery
+
+  electron-checks:
+    runs-on: windows-latest
+    steps:
+      - name: Получить код
+        uses: actions/checkout@v4
+
+      - name: Настроить pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.28.0
 
       - name: Настроить Node.js
         uses: actions/setup-node@v4
@@ -29,24 +72,47 @@ jobs:
       - name: Установить Chromium для UI smoke
         run: pnpm exec playwright install chromium
 
-      - name: Проверить типы
-        run: pnpm run typecheck
+      - name: Подготовить собственный work проверок
+        id: release
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP 'kvesser-electron'
+          [IO.Directory]::CreateDirectory($work) | Out-Null
+          "CAM_TEST_WORK_DIR=$work" >> $env:GITHUB_ENV
+          $pkg = Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json
+          "version=$($pkg.version)" >> $env:GITHUB_OUTPUT
+          "directory=$($pkg.build.directories.output)" >> $env:GITHUB_OUTPUT
 
-      - name: Линт
-        run: pnpm run lint
-
-      - name: Тесты
-        run: pnpm run test:node
-
-      - name: Собрать unpacked-приложение
-        run: pnpm run build:dir
+      - name: Собрать portable и установщик с manifest владения
+        run: pnpm run build
 
       - name: Smoke packaged application
         run: pnpm run smoke
 
-      - name: Сохранить unpacked-сборку
+      - name: Проверить точный package
+        run: pnpm run verify:package
+
+      - name: Проверить запуск shipping binary без live adapters
+        run: pnpm run verify:startup
+
+      - name: Сохранить UI receipts и trace при ошибке
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: egoist-account-manager-win-unpacked
-          path: release/win-unpacked
+          name: kvesser-${{ steps.release.outputs.version }}-ui-checks
+          path: |
+            ${{ env.CAM_TEST_WORK_DIR }}/canonical-smoke-results
+            ${{ env.CAM_TEST_WORK_DIR }}/ui-screens
+          if-no-files-found: ignore
+
+      - name: Сохранить проверенные локальные дистрибутивы
+        uses: actions/upload-artifact@v4
+        with:
+          name: kvesser-${{ steps.release.outputs.version }}-windows
+          path: |
+            ${{ steps.release.outputs.directory }}/win-unpacked
+            ${{ steps.release.outputs.directory }}/Kvesser-*.exe
+            ${{ steps.release.outputs.directory }}/*.blockmap
+            ${{ steps.release.outputs.directory }}/latest.yml
+            ${{ steps.release.outputs.directory }}/SHA256SUMS-*.txt
+            ${{ steps.release.outputs.directory }}/installer-build/ownership-receipt.json
           if-no-files-found: error

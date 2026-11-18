@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Clock3,
   KeyRound,
+  Loader2,
   Rocket,
   RotateCcw,
   ShieldAlert,
@@ -14,9 +15,11 @@ import {
   TimerReset,
   XCircle
 } from "lucide-react";
+import { RuntimeEvidence, runtimeLabel } from "../RuntimeEvidence";
+import { displayMetadata } from "../../displayPrivacy";
 import type { ManagedAccount, SwitchHistoryItem, SwitchTransaction, SwitchTransactionPhase } from "../../../shared/types";
 
-type ActivityFilter = "all" | "success" | "rollback" | "error";
+export type ActivityFilter = "all" | "success" | "rollback" | "error";
 
 function pluralRu(value: number, one: string, few: string, many: string): string {
   const mod100 = value % 100;
@@ -32,9 +35,9 @@ const phaseLabels: Record<SwitchTransactionPhase, [string, string]> = {
   validating_previous: ["Validate current", "Проверка текущего"],
   validating_target: ["Validate target", "Проверка целевого"],
   ready: ["Ready", "Готово"],
-  quiescing: ["Close Codex", "Закрытие Codex"],
+  quiescing: ["Close IDE", "Закрытие IDE"],
   activating: ["Apply authorization", "Применение входа"],
-  launching: ["Launch Codex", "Запуск Codex"],
+  launching: ["Launch IDE", "Запуск IDE"],
   verifying: ["Verify identity", "Проверка аккаунта"],
   committed: ["Committed", "Подтверждено"],
   rolling_back: ["Rolling back", "Выполняется откат"],
@@ -55,13 +58,13 @@ const compactStages = [
   {
     id: "apply",
     labels: ["Apply sign-in", "Применить вход"],
-    descriptions: ["Backup and atomic auth swap", "Резервная копия и замена auth"],
+    descriptions: ["Backup and atomic auth swap", "Снимок и замена данных входа"],
     phases: ["quiescing", "activating"] as SwitchTransactionPhase[],
     icon: KeyRound
   },
   {
     id: "launch",
-    labels: ["Launch Codex", "Запустить Codex"],
+    labels: ["Launch IDE", "Запустить IDE"],
     descriptions: ["Clean Desktop restart", "Чистый перезапуск Desktop"],
     phases: ["launching"] as SwitchTransactionPhase[],
     icon: Rocket
@@ -69,7 +72,7 @@ const compactStages = [
   {
     id: "verify",
     labels: ["Confirm account", "Подтвердить аккаунт"],
-    descriptions: ["Identity check or rollback", "Проверка identity или откат"],
+    descriptions: ["Identity check or rollback", "Проверка аккаунта или откат"],
     phases: ["verifying", "committed"] as SwitchTransactionPhase[],
     icon: BadgeCheck
   }
@@ -109,6 +112,7 @@ function transactionTone(transaction: SwitchTransaction): string {
 }
 
 function statusLabel(transaction: SwitchTransaction, isEnglish: boolean): string {
+  if (transaction.status === "committed") return transaction.verification?.runtime === "verified" ? (isEnglish ? "Runtime confirmed" : "IDE подтверждена") : (isEnglish ? "Profile applied" : "Профиль применён");
   const labels: Record<SwitchTransaction["status"], [string, string]> = {
     pending: ["Ready", "Готово"],
     running: ["In progress", "В процессе"],
@@ -123,17 +127,24 @@ function statusLabel(transaction: SwitchTransaction, isEnglish: boolean): string
 }
 
 export function verificationSummary(transaction: SwitchTransaction, isEnglish: boolean): string {
-  if (transaction.status === "committed") return isEnglish ? "All checks completed" : "Все проверки завершены";
+  if (transaction.status === "committed") return runtimeLabel(transaction.verification, isEnglish ? "en" : "ru");
   if (transaction.status === "rolled_back") return isEnglish ? "Previous session restored" : "Предыдущая сессия восстановлена";
   if (transaction.status === "recovery_required") return isEnglish ? "Manual recovery required" : "Требуется восстановление";
   return phaseLabels[transaction.phase][isEnglish ? 0 : 1];
 }
 
-function matchesFilter(transaction: SwitchTransaction, filter: ActivityFilter): boolean {
+export function matchesActivityFilter(transaction: SwitchTransaction, filter: ActivityFilter): boolean {
   if (filter === "all") return true;
   if (filter === "success") return transaction.status === "committed";
   if (filter === "rollback") return transaction.status === "rolled_back" || transaction.status === "aborted";
   return transaction.status === "failed" || transaction.status === "recovery_required";
+}
+
+export function rollbackEventFor(transaction: SwitchTransaction, transactions: SwitchTransaction[], history: SwitchHistoryItem[], accounts: ManagedAccount[]): SwitchHistoryItem | null {
+  const latestWrite = transactions.filter((item) => item.platform === transaction.platform && item.backupPath).sort((a, b) => b.createdAt - a.createdAt || b.updatedAt - a.updatedAt)[0];
+  if (latestWrite?.id !== transaction.id || !transaction.backupPath || !["committed", "recovery_required"].includes(transaction.status)) return null;
+  if (transaction.status !== "recovery_required" && !accounts.some((account) => account.id === transaction.targetAccountId && account.isActive)) return null;
+  return history.find((event) => event.accountId === transaction.targetAccountId && event.backupPath === transaction.backupPath) ?? null;
 }
 
 export function ActivityPage({
@@ -141,12 +152,20 @@ export function ActivityPage({
   history,
   accounts,
   isEnglish,
+  privacyMode = false,
+  busy = null,
+  onRollback,
+  onVerifyRuntime,
   onOpenSettings
 }: {
   transactions: SwitchTransaction[];
   history: SwitchHistoryItem[];
   accounts: ManagedAccount[];
   isEnglish: boolean;
+  privacyMode?: boolean;
+  busy?: string | null;
+  onRollback?: (eventId: string) => void;
+  onVerifyRuntime?: (accountId: string) => void;
   onOpenSettings: () => void;
 }) {
   const [filter, setFilter] = useState<ActivityFilter>("all");
@@ -160,10 +179,11 @@ export function ActivityPage({
   const averageDuration = completed.length
     ? Math.round(completed.reduce((sum, item) => sum + Math.max(0, (item.completedAt ?? item.updatedAt) - item.createdAt), 0) / completed.length)
     : null;
-  const visibleTransactions = useMemo(() => transactions.filter((item) => matchesFilter(item, filter)), [filter, transactions]);
+  const visibleTransactions = useMemo(() => transactions.filter((item) => matchesActivityFilter(item, filter)), [filter, transactions]);
   const accountLabel = (id: string | null) => {
     if (!id) return isEnglish ? "External session" : "Внешняя сессия";
-    return accounts.find((account) => account.id === id)?.label ?? id.slice(0, 8);
+    const label = accounts.find((account) => account.id === id)?.label ?? id.slice(0, 8);
+    return displayMetadata(label, privacyMode, isEnglish ? "en" : "ru");
   };
   const latestPreviousLabel = latest ? accountLabel(latest.previousAccountId) : null;
   const latestTargetLabel = latest ? accountLabel(latest.targetAccountId) : null;
@@ -171,23 +191,28 @@ export function ActivityPage({
     ? compactStages.findIndex((stage) => stage.phases.includes(latest.phase))
     : -1;
   const latestTerminal = latest ? ["committed", "rolled_back", "aborted", "failed", "recovery_required"].includes(latest.status) : false;
+  const latestRollback = latest ? rollbackEventFor(latest, transactions, history, accounts) : null;
+  const latestSelected = latest ? accounts.some((account) => account.id === latest.targetAccountId && account.isActive) : false;
 
   const filters: Array<{ id: ActivityFilter; labels: [string, string]; count: number }> = [
     { id: "all", labels: ["All", "Все"], count: transactions.length },
-    { id: "success", labels: ["Verified", "Успех"], count: successful },
-    { id: "rollback", labels: ["Rollback", "Откат"], count: recovered },
+    { id: "success", labels: ["Applied", "Применено"], count: successful },
+    { id: "rollback", labels: ["Rollback / cancel", "Откат / отмена"], count: transactions.filter((item) => matchesActivityFilter(item, "rollback")).length },
     { id: "error", labels: ["Attention", "Сбой"], count: problems }
   ];
 
   return (
-    <div className="v3-page activity-page activity-v304 activity-v306">
+    <div className="activity-page">
+      <header className="page-head">
+        <h2>{isEnglish ? "Switch journal" : "Журнал переключений"}</h2>
+      </header>
       <section className={`activity-command ${needsRecovery ? "needs-recovery" : ""}`} aria-live="polite">
         <div className="activity-command-main">
           <div className="activity-command-title">
             <span className={`activity-signal ${latest ? transactionTone(latest) : "neutral"}`}>{latest ? statusIcon(latest) : <Activity />}</span>
             <div>
-              <span className="v3-kicker">{isEnglish ? "LATEST SWITCH" : "ПОСЛЕДНЕЕ ПЕРЕКЛЮЧЕНИЕ"}</span>
-              <h2>{latest ? statusLabel(latest, isEnglish) : (isEnglish ? "Journal is ready" : "Журнал готов")}</h2>
+              {latest ? <span className="activity-latest-label">{isEnglish ? "Latest switch" : "Последнее переключение"} · {latest.platform === "antigravity" ? "Antigravity" : "Codex"}</span> : null}
+              <h3>{latest ? statusLabel(latest, isEnglish) : (isEnglish ? "Journal is ready" : "Журнал готов")}</h3>
               {latest ? (
                 <p className="activity-account-route">
                   <bdi title={latestPreviousLabel ?? undefined}>{latestPreviousLabel}</bdi>
@@ -201,13 +226,12 @@ export function ActivityPage({
             <div className="activity-latest-meta">
               <span><Clock3 />{formatTime(latest.createdAt, isEnglish)}</span>
               <span><TimerReset />{formatDuration(latest, isEnglish)}</span>
-              <code>#{latest.id.slice(0, 8)}</code>
             </div>
           ) : null}
         </div>
 
         <div className="activity-kpis">
-          <div><strong>{successRate === null ? "-" : `${successRate}%`}</strong><span>{isEnglish ? "successful operations" : "успешных операций"}</span></div>
+          <div><strong>{successRate === null ? "-" : `${successRate}%`}</strong><span>{isEnglish ? "profiles applied" : "профилей применено"}</span></div>
           <div><strong>{averageDuration === null ? "-" : `${averageDuration}${isEnglish ? "s" : " с"}`}</strong><span>{isEnglish ? "average duration" : "среднее время"}</span></div>
           <div className={recovered ? "is-warning" : ""}><strong>{recovered}</strong><span>{isEnglish ? "safe rollbacks" : pluralRu(recovered, "безопасный откат", "безопасных отката", "безопасных откатов")}</span></div>
           <div className={problems ? "is-danger" : ""}><strong>{problems}</strong><span>{isEnglish ? "need attention" : problems === 1 ? "требует внимания" : "требуют внимания"}</span></div>
@@ -218,15 +242,16 @@ export function ActivityPage({
         <section className="activity-route" aria-label={isEnglish ? "Switch progress" : "Ход переключения"}>
           <div className="activity-route-head">
             <div>
-              <span className="v3-kicker">{isEnglish ? "SAFE SWITCH ROUTE" : "ЗАЩИТА ПЕРЕКЛЮЧЕНИЯ"}</span>
-              <strong>{verificationSummary(latest, isEnglish)}</strong>
-              <p>{isEnglish ? "Four checks prevent Codex from starting with the wrong account." : "Четыре этапа не дают Codex запуститься с чужим или повреждённым входом."}</p>
+              <h3>{isEnglish ? "Switch progress" : "Ход переключения"}</h3>
+              <p>{verificationSummary(latest, isEnglish)}</p>
             </div>
             <span className={`transaction-state ${transactionTone(latest)}`}>{statusIcon(latest)}{statusLabel(latest, isEnglish)}</span>
           </div>
           <div className="compact-stepper switch-safety-route">
             {compactStages.map((stage, index) => {
-              const complete = latest.status === "committed" || index < activeStageIndex;
+              const verification = latest.verification;
+              const committedStages = [true, verification?.profileApplied === true, verification != null && verification.launch !== "not_requested", verification?.runtime === "verified"];
+              const complete = latest.status === "committed" ? committedStages[index] : index < activeStageIndex;
               const current = !latestTerminal && index === activeStageIndex;
               const restored = latest.status === "rolled_back" && index === 1;
               const failed = (latest.status === "failed" || latest.status === "recovery_required")
@@ -243,20 +268,22 @@ export function ActivityPage({
               );
             })}
           </div>
-          {latest.errorMessage ? <div className="activity-error"><ShieldAlert /><span><strong>{latest.errorCode ?? statusLabel(latest, isEnglish)}</strong>{latest.errorMessage}</span>{needsRecovery ? <button className="button recovery-action" onClick={onOpenSettings}>{isEnglish ? "Diagnostics" : "Диагностика"}<ArrowRight /></button> : null}</div> : null}
+          <RuntimeEvidence evidence={latest.verification} privacyMode={privacyMode} language={isEnglish ? "en" : "ru"} selected={latestSelected} busy={busy !== null} onVerify={latestSelected && onVerifyRuntime ? () => onVerifyRuntime(latest.targetAccountId) : undefined} />
+          {latestRollback && onRollback ? <div className="journal-recovery-action"><span>{isEnglish ? "Protected snapshot" : "Защищённый снимок"}: {formatTime(latestRollback.startedAt, isEnglish)}</span><button className="button secondary" disabled={busy !== null} aria-busy={busy === `rollback:${latestRollback.id}`} onClick={() => onRollback(latestRollback.id)}>{busy === `rollback:${latestRollback.id}` ? <Loader2 className="spin" /> : <RotateCcw />}{isEnglish ? "Restore snapshot" : "Восстановить снимок"}</button></div> : null}
+          {latest.errorMessage ? <div className="activity-error"><ShieldAlert /><span><strong>{latest.errorCode ?? statusLabel(latest, isEnglish)}</strong>{displayMetadata(latest.errorMessage, privacyMode, isEnglish ? "en" : "ru")}</span>{needsRecovery ? <button className="button recovery-action" onClick={onOpenSettings}>{isEnglish ? "Diagnostics" : "Диагностика"}<ArrowRight /></button> : null}</div> : null}
         </section>
       ) : null}
 
       <section className="activity-journal">
         <header className="activity-journal-head">
-          <div><span className="v3-kicker">{isEnglish ? "HISTORY AND AUDIT" : "ИСТОРИЯ И АУДИТ"}</span><h3>{isEnglish ? "Switch history" : "История переключений"}</h3><p>{isEnglish ? `${transactions.length} operations · ${history.length} audit records` : `${transactions.length} ${pluralRu(transactions.length, "операция", "операции", "операций")} · ${history.length} ${pluralRu(history.length, "запись аудита", "записи аудита", "записей аудита")}`}</p></div>
+          <div><h3>{isEnglish ? "History" : "История"}</h3><p>{isEnglish ? `${transactions.length} operations · ${history.length} audit records` : `${transactions.length} ${pluralRu(transactions.length, "операция", "операции", "операций")} · ${history.length} ${pluralRu(history.length, "запись аудита", "записи аудита", "записей аудита")}`}</p></div>
           <div className="activity-filters" aria-label={isEnglish ? "Journal filter" : "Фильтр журнала"}>
             {filters.map((item) => <button key={item.id} aria-pressed={filter === item.id} className={filter === item.id ? "is-selected" : ""} onClick={() => setFilter(item.id)}>{item.labels[isEnglish ? 0 : 1]}<span>{item.count}</span></button>)}
           </div>
         </header>
         <div className="activity-timeline">
           {visibleTransactions.length === 0 ? (
-            <div className="activity-empty"><ShieldCheck /><strong>{filter === "all" ? (isEnglish ? "No operations yet" : "Операций пока нет") : (isEnglish ? "Nothing in this category" : "В этой категории событий нет")}</strong><span>{isEnglish ? "The journal keeps only verified local facts." : "Журнал показывает только проверенные локальные факты."}</span></div>
+            <div className="activity-empty"><span className="empty-icon"><ShieldCheck aria-hidden="true" /></span><strong>{filter === "all" ? (isEnglish ? "No operations yet" : "Операций пока нет") : (isEnglish ? "Nothing in this category" : "В этой категории событий нет")}</strong></div>
           ) : visibleTransactions.map((transaction) => (
             <details className={`timeline-event ${transactionTone(transaction)}`} key={transaction.id}>
               <summary>
@@ -274,9 +301,11 @@ export function ActivityPage({
                 <ChevronDown className="timeline-chevron" />
               </summary>
               <div className="timeline-details">
+                <RuntimeEvidence evidence={transaction.verification} privacyMode={privacyMode} language={isEnglish ? "en" : "ru"} selected={transaction.status === "committed"} />
                 <span><b>{isEnglish ? "Transaction" : "Транзакция"}</b><code>{transaction.id}</code></span>
                 <span><b>{isEnglish ? "Technical phase" : "Техническая фаза"}</b><code>{transaction.phase}</code></span>
-                <span><b>{isEnglish ? "Result" : "Результат"}</b>{transaction.errorMessage ?? (isEnglish ? "Identity verified; active marker committed." : "Личность проверена; активный профиль зафиксирован.")}</span>
+                <span><b>{isEnglish ? "Result" : "Результат"}</b>{transaction.errorMessage ? (displayMetadata(transaction.errorMessage, privacyMode, isEnglish ? "en" : "ru")) : verificationSummary(transaction, isEnglish)}</span>
+                {onRollback && rollbackEventFor(transaction, transactions, history, accounts) ? <button className="button secondary" disabled={busy !== null} onClick={() => onRollback(rollbackEventFor(transaction, transactions, history, accounts)!.id)}><RotateCcw />{isEnglish ? "Restore snapshot" : "Восстановить снимок"}</button> : null}
               </div>
             </details>
           ))}

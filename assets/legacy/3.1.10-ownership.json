@@ -1,0 +1,512 @@
+{
+  "schemaVersion": 1,
+  "appId": "one.egoist.codex-account-manager",
+  "version": "3.1.10",
+  "sourceAsarSha256": "3a5ffd7b26b6a0f693e07c008acf3f4ce41aa1d7876a5727ce47aa73d8cad64e",
+  "files": [
+    {
+      "relativePath": "Account Manager EGO.exe",
+      "sha256": "0da1261ec479ef9dbd93fe4108068f2623e50337ecf923ac4a5a09735f594184"
+    },
+    {
+      "relativePath": "chrome_100_percent.pak",
+      "sha256": "34433fa04ddf5eb78b3b4e9c64a3af626e28641907ad7a6086614eb6a8f00a07"
+    },
+    {
+      "relativePath": "chrome_200_percent.pak",
+      "sha256": "581c8d53199c10512d31a340699f9ad269f8eea5fe6bc49e05c1bde98ee612aa"
+    },
+    {
+      "relativePath": "d3dcompiler_47.dll",
+      "sha256": "c8e25abd3d45dfb55966a74613258c39b4a83ea2ac77f2f80903499f4d5c03f0"
+    },
+    {
+      "relativePath": "dxcompiler.dll",
+      "sha256": "6e8b4754fac3171b395cfe9635ccb35207fda824860a3c02cf70b2fb0055f3ff"
+    },
+    {
+      "relativePath": "dxil.dll",
+      "sha256": "436f128f22050ae27323da61321a469de0678def7a4e6d86f9ccad4858724f0a"
+    },
+    {
+      "relativePath": "ffmpeg.dll",
+      "sha256": "ed7bb5be00fc16812092ef39b243fd0072f55a528a940b5b7793463672f57322"
+    },
+    {
+      "relativePath": "icudtl.dat",
+      "sha256": "1cf67874b5a87a8363a86fb3f81e3cbbed54d389062dab8fb52308d5cf8c8612"
+    },
+    {
+      "relativePath": "libEGL.dll",
+      "sha256": "68a4993edd27f5388d1c81b6f3dfdc7543bc08bb8d67f4601a7a539f92582ce9"
+    },
+    {
+      "relativePath": "libGLESv2.dll",
+      "sha256": "0fcccb1220cb52191a5f0d06c98bcdf909a53c2f652ba8b546e480da76b9f850"
+    },
+    {
+      "relativePath": "LICENSE.electron.txt",
+      "sha256": "5154e165bd6c2cc0cfbcd8916498c7abab0497923bafcd5cb07673fe8480087d"
+    },
+    {
+      "relativePath": "LICENSES.chromium.html",
+      "sha256": "0883a9eb407906c12b334d89bc5fbc63bd1df9e0803c252cc8d23cb76b6d58f3"
+    },
+    {
+      "relativePath": "locales/af.pak",
+      "sha256": "7bf59977f051c1ccb19cb8c48a8efd57922d088ad26cd51a85a671000c845a4e"
+    },
+    {
+      "relativePath": "locales/am.pak",
+      "sha256": "a387f4af550667980c7631532b5c8f50a20ecf2c2f45392a7e0bf23f8f6c91fc"
+    },
+    {
+      "relativePath": "locales/ar.pak",
+      "sha256": "e8f4b9b64235893bbee95c8360c739e5ba09687072dd4b7d706cee9ae4032887"
+    },
+    {
+      "relativePath": "locales/bg.pak",
+      "sha256": "da36ef0cde92b2021ff39b6c3341f4d2832c1129d13248aa371573812140db9a"
+    },
+    {
+      "relativePath": "locales/bn.pak",
+      "sha256": "4f246bc78ddfc2cc249ae99990470e2d470a13a2d7599ab8787400c4fd179cdc"
+    },
+    {
+      "relativePath": "locales/ca.pak",
+      "sha256": "b232cebcb102bf03c81286f1ec082e80d0e399d09d9251c3e574ef24fb15b68b"
+    },
+    {
+      "relativePath": "locales/cs.pak",
+      "sha256": "58b2d7c81430bec91ff72560acd604df82ff0090e2c4e3d1ce8cac2b69bc40e9"
+    },
+    {
+      "relativePath": "locales/da.pak",
+      "sha256": "66de87f60ce23d82457271b34da1baed85bf0f3f63b04d90610a20c4ebe66c23"
+    },
+    {
+      "relativePath": "locales/de.pak",
+      "sha256": "dadd0439167371607d9a82222f248f268d9e27669c1d87ca09d8751c07a90d01"
+    },
+    {
+      "relativePath": "locales/el.pak",
+      "sha256": "9a9db32904381a6eda169f56099313a494dae63f2795678449c4ad87cd3a69fb"
+    },
+    {
+      "relativePath": "locales/en-GB.pak",
+      "sha256": "7bbcf19623b0a34524d75a3211d305d6b01150b3ecf2bff3b140189a13c29eb4"
+    },
+    {
+      "relativePath": "locales/en-US.pak",
+      "sha256": "446a0f711467b162cced38128932f712e4a53fe344a165110196c366fd3d87ea"
+    },
+    {
+      "relativePath": "locales/es-419.pak",
+      "sha256": "337a0ef8be48fcf7d120026d8dd9970737604ad177df1709fefa5cca79c70079"
+    },
+    {
+      "relativePath": "locales/es.pak",
+      "sha256": "b32a3073e0e749b8b1f0f3e082343a8ca192cf3b7244847387526a5cd8beef7f"
+    },
+    {
+      "relativePath": "locales/et.pak",
+      "sha256": "740a4632aa00dbc07251c10cdef1480739069a6456fa9a642eef387fba935e09"
+    },
+    {
+      "relativePath": "locales/fa.pak",
+      "sha256": "7d13dfa4bc6ea7ae996f0696eb328de26b35e1ec7e606fb0c4f8192d4bfcbaec"
+    },
+    {
+      "relativePath": "locales/fi.pak",
+      "sha256": "53cca3552a8bf4ccc516103cdf929b5f10ba1859ccebe644bb080082faff6878"
+    },
+    {
+      "relativePath": "locales/fil.pak",
+      "sha256": "3503fbfa400b23a3019005a2f1d7a31d623b056889a66abcaeb1558ad4316924"
+    },
+    {
+      "relativePath": "locales/fr.pak",
+      "sha256": "a8db41476a1103bc5bfb617b150c6b6e2ca1eb24f534872c9c15e353649cd0bc"
+    },
+    {
+      "relativePath": "locales/gu.pak",
+      "sha256": "947324c6aada6255df0c702114796436215f8012634a58b065b7ff3fc92162bd"
+    },
+    {
+      "relativePath": "locales/he.pak",
+      "sha256": "d06fb5dc66cc104503a861d2e4e6ef53e9172549c862aadeddcc2b5bb856f25c"
+    },
+    {
+      "relativePath": "locales/hi.pak",
+      "sha256": "a775f5724ccbe9bdfeefc448b42e3b48402f81404d94dea4252bfb765a314b96"
+    },
+    {
+      "relativePath": "locales/hr.pak",
+      "sha256": "84c6bd6ce5bcd81a89b0908f22576725128e27688f6578d13d8b2f0e7fa6335f"
+    },
+    {
+      "relativePath": "locales/hu.pak",
+      "sha256": "cd1026c6596610617d8a313b899e9d2e2514d0cd1fbf97790f2c450309ede792"
+    },
+    {
+      "relativePath": "locales/id.pak",
+      "sha256": "4de71f7c766db79412dcc1f5521c5f3e678cf343327cc31b0fc28472102e0247"
+    },
+    {
+      "relativePath": "locales/it.pak",
+      "sha256": "ac12cbbdeeea05f0cf90cc57df1f6ef299444b1f499157eef8aa089f73da25f9"
+    },
+    {
+      "relativePath": "locales/ja.pak",
+      "sha256": "c737584f4b525c4d17cc2a79f0318640a7a666c43ef7aa24753551d1b75d7d7f"
+    },
+    {
+      "relativePath": "locales/kn.pak",
+      "sha256": "3eb9b3dda74b5e21abf7d7726cc2e682afd87141ee30a488e288695d48a5352e"
+    },
+    {
+      "relativePath": "locales/ko.pak",
+      "sha256": "bcc64be2004522a68a12dcfb6efb45f030d0badfe048220d2830b188e7f4135d"
+    },
+    {
+      "relativePath": "locales/lt.pak",
+      "sha256": "a7eae3ba06229763b85b29eb64e011b992679952165bb7239a9ece1d441de4ab"
+    },
+    {
+      "relativePath": "locales/lv.pak",
+      "sha256": "8a4c31840217419f608b15eca1490bb4e83c5a896556a045f95af7f1390f5f8a"
+    },
+    {
+      "relativePath": "locales/ml.pak",
+      "sha256": "434221a29e71a6dfc6c14a5843713df51b2afe8cc3114cb9fedfbfdfc590ce4d"
+    },
+    {
+      "relativePath": "locales/mr.pak",
+      "sha256": "ae12ff8ac009a4991d71363ff442abb3beaef772d08e72f4ccd685403a02f332"
+    },
+    {
+      "relativePath": "locales/ms.pak",
+      "sha256": "77912adf05407adf3dfd2b0eba269b1cb99d980dd0a16fae74dabea3a584a869"
+    },
+    {
+      "relativePath": "locales/nb.pak",
+      "sha256": "81b5a935f83a49ef4faf7132876e500a6cd49909c1d2b45d4bf1336769874b86"
+    },
+    {
+      "relativePath": "locales/nl.pak",
+      "sha256": "afc9e6696a40b0318ba96e786fe0b286c3ea9a2d548479c1fa43d96b1c137c62"
+    },
+    {
+      "relativePath": "locales/pl.pak",
+      "sha256": "f92f6bff33a975e189b78a4cf0e153e85743dda432347745ebf8f1b4ff51a99b"
+    },
+    {
+      "relativePath": "locales/pt-BR.pak",
+      "sha256": "d1aba0dbde99231d3096b7ef9ec62ed017c72804257de62ffb649d45cf234f9d"
+    },
+    {
+      "relativePath": "locales/pt-PT.pak",
+      "sha256": "1326efcde830a8b29541c98fb51e3b5e5428d2a59e1b21a11a677317d08b2bbd"
+    },
+    {
+      "relativePath": "locales/ro.pak",
+      "sha256": "7fd5b85509f67394eee48b07339c9a3a77fb1fb99b6204bae3209f9f0ffab3b1"
+    },
+    {
+      "relativePath": "locales/ru.pak",
+      "sha256": "23166d431d70048e248e3ff47732642cb1ab73f9516384e33ef3c1979574f2ff"
+    },
+    {
+      "relativePath": "locales/sk.pak",
+      "sha256": "91037f2ecb636857b92a2729b7c116d8dd98082b068e4f78b0fdab06f27d2eb7"
+    },
+    {
+      "relativePath": "locales/sl.pak",
+      "sha256": "321ab341e3225dddcac858448367d43677c20e739b2ccab52f8c86aa0727d868"
+    },
+    {
+      "relativePath": "locales/sr.pak",
+      "sha256": "7b337dcad390a9f08c3bd1d27235898e588827fa8da8808f4bc7012011578ef0"
+    },
+    {
+      "relativePath": "locales/sv.pak",
+      "sha256": "f10b4db7184a14f28bfdad82597d2d43b4ec859ab6eab59a5c3891aa6070f3ed"
+    },
+    {
+      "relativePath": "locales/sw.pak",
+      "sha256": "726ba26363103920712874418cbfc23ce899c46ca8a6dc3ec9da0bf48355622b"
+    },
+    {
+      "relativePath": "locales/ta.pak",
+      "sha256": "fd8fe5c21a10e6542599e9148c8a30557c4d437b9606d6b29b685d474d89534d"
+    },
+    {
+      "relativePath": "locales/te.pak",
+      "sha256": "28b85fa550df913e970fac8a599ec4963b1466e3b610350924518de107e41602"
+    },
+    {
+      "relativePath": "locales/th.pak",
+      "sha256": "cfd9e6651e9335fbc0483aed1098112234e973303bf7101d88e0518d3fb16ffe"
+    },
+    {
+      "relativePath": "locales/tr.pak",
+      "sha256": "4b047663f169169f3ccd33923782ae33348c37e5107314d3324f1850f3c5fb42"
+    },
+    {
+      "relativePath": "locales/uk.pak",
+      "sha256": "3ebafedd5f6005f56a2d7a500e59bcb435e58a6013c7e075b241a91ab1c605ed"
+    },
+    {
+      "relativePath": "locales/ur.pak",
+      "sha256": "51c318f3df2673cb34d0df9235021dd1794073cddf59d14433620da1141ec650"
+    },
+    {
+      "relativePath": "locales/vi.pak",
+      "sha256": "45c351251b938ea6f46305f2c324e8144bdf7500e08d430f8280b7db9e2ce52d"
+    },
+    {
+      "relativePath": "locales/zh-CN.pak",
+      "sha256": "78837eb8a17d34e371ed72b7c7d9262876592f409fc66b293461c5468386834c"
+    },
+    {
+      "relativePath": "locales/zh-TW.pak",
+      "sha256": "fb77ff841f652f0ac8be02ce625559ae516c63081a45bde96f9277f241172eca"
+    },
+    {
+      "relativePath": "resources.pak",
+      "sha256": "b0dd4c9e53c5f6e71e5016676a521fafb397cc73e7b612bacda5a8059ff06ca3"
+    },
+    {
+      "relativePath": "resources/app.asar",
+      "sha256": "3a5ffd7b26b6a0f693e07c008acf3f4ce41aa1d7876a5727ce47aa73d8cad64e"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
+      "sha256": "163dbb597f6046d3b9f4457f7bd3309a095c9cdcf5e727aac84bf90c753ec793"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/deps/common.gypi",
+      "sha256": "e71a565cd7733e05efc3a2792b54e260126f03f490325aa2a201202acbbdb315"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/deps/copy.js",
+      "sha256": "05a2bd41dbd96e33e2fc6cf4bcbc722b4bc8c529813b882f92113d7dbbbece67"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/deps/defines.gypi",
+      "sha256": "029426d3d6528d56ea75682a67a49e48747ccb7439faa75107601d4e2cafabc3"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/deps/download.sh",
+      "sha256": "cc2c1539a4c906bd0ec38104264f9bc1d45120e79de8cc595c29a2319d5c4628"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/deps/patches/1208.patch",
+      "sha256": "5d1f22d69fee3551b70a7b7b9b14be43fcfd04dbc8683233667abfa75905011a"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/deps/sqlite3.gyp",
+      "sha256": "a009b8f80cf0a944eacaf71a84e590504f353fbd8f8b341138d0c3094e372d18"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/deps/sqlite3/sqlite3.c",
+      "sha256": "60d2f39a3726cd6b9021da6f4e868608d66fbb6528a9f513dc8ffcc640493422"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/deps/sqlite3/sqlite3.h",
+      "sha256": "9e69a1353a4288450b0d5239ede11fc7f1f4c8e5eb07491fc8317eacb5b7de7e"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/deps/sqlite3/sqlite3ext.h",
+      "sha256": "ac9645e5c9ff0cf176efdd6e75cb5e98f46295d38e02db5c4d208826a39ab4be"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/deps/test_extension.c",
+      "sha256": "948af88dbf356835f5496c1a3d047fdbcc58f3717aa9bc94d0943d7de2b7cf5b"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/lib/database.js",
+      "sha256": "02ea23bdd23d7ac5de0675a2f32fc686e76d5c6a32bd3e3891f360e72e07f61f"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/lib/index.js",
+      "sha256": "82db11c4ee43a41d859988c5db42c3771dff565371f94bacbd1e4d8d6ceb47cd"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/lib/methods/aggregate.js",
+      "sha256": "e9f74eb919ec93fe089c95ddf25a98f1f631c80418fa34fb2346ca1bc29f1b82"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/lib/methods/backup.js",
+      "sha256": "ea29d34992bb02e006d0fdeda9675ac5d2bb227aaf57468decd997e9fc9c7dbf"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/lib/methods/function.js",
+      "sha256": "f431d49303b8bbdc044b1f1b455bdad21fc9b74b007de0acb22f08f25b4febd3"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/lib/methods/inspect.js",
+      "sha256": "4975a78daee850adee62ba98719d0f223819a0ec135a07c0e302994bd8dbff61"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/lib/methods/pragma.js",
+      "sha256": "8b1c54475bd4340b15e25c50d53d06308be65f8f919ecbe4aa9d285ca859ad5a"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/lib/methods/serialize.js",
+      "sha256": "7a10ee5c2735384b7f0c361811bc6d017db29f62b203fd3c68a35f667e2c2605"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/lib/methods/table.js",
+      "sha256": "97c42d9ded1aa96c7d916b5b92f96b4e59581d50eaf629cd2c7afb78ff26a9ea"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/lib/methods/transaction.js",
+      "sha256": "bc8624a3ef689d8f78e5669020ad121e17acbc93b1d5ee5afe26860b1084c66c"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/lib/methods/wrappers.js",
+      "sha256": "a150a6271d23f4e5f8953b129f370ff096c7cdc4b812afbf080a6cf4ab741bcf"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/lib/sqlite-error.js",
+      "sha256": "2582d61c27680dead168543f392eb102be621dfbef282a4ca4c7c21aa5e7c75d"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/lib/util.js",
+      "sha256": "92b2e39e2151b43a2252e10b6d6de876ecaf0008336a4fa1dfe1317b20f1916f"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/LICENSE",
+      "sha256": "09856b52897c91ab67e7456ef43067019f31dfd3b87fda72e655736b1ebdee55"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/package.json",
+      "sha256": "35f5841195912569932e7816ca09d03f6567a9c37a6668d4fdd450314d46e24b"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/addon.cpp",
+      "sha256": "20f19f480ce060900521cf9510922e5ca1c8e76936f07ac2916f316e549a0190"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/better_sqlite3.cpp",
+      "sha256": "01b2333517538a24919cc0b916c5a436561d7f712bac7befb6850e9f4b042dc5"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/objects/backup.cpp",
+      "sha256": "16a67102c49c9312eb1deecd08c27064325840df51d6957fe134b871f5d8798c"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/objects/backup.hpp",
+      "sha256": "02d57e03a1a03b3f8bb2fc503fc1704d4143b76d939fe37230fbb3b44177c44a"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/objects/database.cpp",
+      "sha256": "081c514fb0a472a0e0962f0619149c187b6cf424e09baa7f39cc5246c17f75aa"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/objects/database.hpp",
+      "sha256": "f47ab5d6bb775cadd0b2b73c4fcb6faf5cb2ae783a049ff4691fafc5d29a0bca"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/objects/statement-iterator.cpp",
+      "sha256": "6ac791fbb786fc498450e843f2a043eddeb03093eb6b31012a04ae7b84a8d7ab"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/objects/statement-iterator.hpp",
+      "sha256": "c064f10ad6bca99154d4f5325e187978d4c6d6cc6fedaa047a4d2f3b4b4f9655"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/objects/statement.cpp",
+      "sha256": "4875a4d1942b89b1dc715b50f3f01e0899530a0772d0fef6f26c358d7e3d12a3"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/objects/statement.hpp",
+      "sha256": "3dca186418c62d81f4b9170904fdc02e624c3d76a0c0c61e6aa95486799808e9"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/util/bind-map.cpp",
+      "sha256": "7026e107a7f662b6460fbd05e91d9594f5114ffa69de7a8ddb082911f6e90876"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/util/binder.cpp",
+      "sha256": "64e2ebe910f2efc1d7a847672565745da2c4f5656d951033d99567e7593409d8"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/util/constants.cpp",
+      "sha256": "bbf4a3f983631f01f723627ee0e897f92b12cd6ca3e8b8b965318931bba0f2b4"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/util/custom-aggregate.cpp",
+      "sha256": "742d03187a7b8483c9f42bb7b77ed29d0f6877450584fba2662164d2b8dd11b6"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/util/custom-function.cpp",
+      "sha256": "6a1f826df2cc2c402d8a3dd747a57dbcedb52fe9220a2bbda6a5e01f038b13d1"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/util/custom-table.cpp",
+      "sha256": "7549b38f24b7e69e78d407534a5cde8814a8a08628a421b122644a43940e0aaf"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/util/data-converter.cpp",
+      "sha256": "3cb73d0911e92893abf840752e9cfd6baded604d49b39ec4000599eec7c8c594"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/util/data.cpp",
+      "sha256": "74de42f9a0fa68277d8ea9cbaf8ee5f455bbd99cc41297696546c0ec8408c882"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/util/helpers.cpp",
+      "sha256": "7b763d2caa40f70bf6726c0f70ea50c1db69c7fa453b3bc2ec19577e99800984"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/util/macros.cpp",
+      "sha256": "09d5605bb65c8d43c0e235f878cbbffc98d79b1e35ee05b7c33766ce114a13a4"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/util/query-macros.cpp",
+      "sha256": "0dcf68c3ff527398ebe0a6b874b38aa23b3fb87f285b9701636c3b19282dde8c"
+    },
+    {
+      "relativePath": "resources/app.asar.unpacked/node_modules/better-sqlite3/src/util/row-builder.cpp",
+      "sha256": "d5b352ac4959a07db22a825019286e085910310d6363c61fbdf037e3f32d56fc"
+    },
+    {
+      "relativePath": "resources/default_app.asar",
+      "sha256": "06d4a28be095a80eff94dbd18edcfac5b5805e1b5538e0fb7cee7c7ae81db76a"
+    },
+    {
+      "relativePath": "resources/elevate.exe",
+      "sha256": "9b1fbf0c11c520ae714af8aa9af12cfd48503eedecd7398d8992ee94d1b4dc37"
+    },
+    {
+      "relativePath": "resources/icon.png",
+      "sha256": "eb39969100760d3d22ab284d5ac99eb873e8ff2c5b7e37247c7e3af109d7d272"
+    },
+    {
+      "relativePath": "snapshot_blob.bin",
+      "sha256": "c2d5dac7c064069b0942c0b89ad8dff19ce330eafe6d70d1da1b901aa8bb992c"
+    },
+    {
+      "relativePath": "v8_context_snapshot.bin",
+      "sha256": "175fa9cc4316627a7f9c97158442bfaee1fdc84bb2878d10c4dfe91fdc554903"
+    },
+    {
+      "relativePath": "version",
+      "sha256": "8b57aedd2a7515bedafbea144b444401ffb9648918dbe0c127a15e75284e26cc"
+    },
+    {
+      "relativePath": "vk_swiftshader_icd.json",
+      "sha256": "32d83ff113fef532a9f97e0d2831f8656628ab1c99e9060f0332b1532839afd9"
+    },
+    {
+      "relativePath": "vk_swiftshader.dll",
+      "sha256": "6e3b738934104835d60515901b3a766ad3fe959a4208072742cfd4c25ab29faa"
+    },
+    {
+      "relativePath": "vulkan-1.dll",
+      "sha256": "4a8e57900e0d34e82282a3fc18e4510109bc154dc3092620df6aa5bd6e14deee"
+    }
+  ]
+}

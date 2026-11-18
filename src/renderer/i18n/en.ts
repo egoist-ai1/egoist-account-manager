@@ -9,7 +9,7 @@ type UiTextShape = {
 export const uiTextEn: UiTextShape = {
   nav: {
     dashboard: "Dashboard",
-    accounts: "Accounts",
+    accounts: "Profiles",
     limits: "Limits",
     vault: "Transfer",
     health: "Diagnostics",

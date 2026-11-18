@@ -47,19 +47,28 @@ export async function createReleasePlan(root = defaultRoot, options = {}) {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   if (!/^\d+\.\d+\.\d+$/.test(pkg.version)) throw new Error('Only a stable semantic version can be released.');
   const version = pkg.version;
-  const setup = `Account-Manager-EGO-Setup-${version}.exe`;
-  const payloadNames = [setup, `Account-Manager-EGO-${version}.exe`, 'latest.yml', `${setup}.blockmap`];
+  const releaseDir = path.resolve(root, pkg.build?.directories?.output ?? 'release');
+  const relative = path.relative(root, releaseDir);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Release output must stay inside the project.');
+  const artifact = (configured, fallback) => {
+    const name = (configured ?? fallback).replaceAll('${version}', version).replaceAll('${ext}', 'exe');
+    if (path.basename(name) !== name || name.includes('${') || !name.endsWith('.exe')) throw new Error('Invalid artifact name.');
+    return name;
+  };
+  const setup = artifact(pkg.build?.nsis?.artifactName, `Account-Manager-EGO-Setup-${version}.exe`);
+  const portable = artifact(pkg.build?.portable?.artifactName, `Account-Manager-EGO-${version}.exe`);
+  const payloadNames = [setup, portable, 'latest.yml', `${setup}.blockmap`];
   const checksumName = `SHA256SUMS-${version}.txt`;
   const names = [...payloadNames, checksumName];
   const assets = [];
   for (const name of names) {
-    const file = path.join(root, 'release', name);
+    const file = path.join(releaseDir, name);
     const stat = fs.statSync(file);
     if (!stat.isFile() || stat.size <= 0) throw new Error(`Required release asset is empty or invalid: ${name}`);
     assets.push({ name, file, size: stat.size, sha256: await hashFile(file) });
   }
   const checksums = new Map();
-  for (const line of fs.readFileSync(path.join(root, 'release', checksumName), 'utf8').split(/\r?\n/).filter(line => line.trim())) {
+  for (const line of fs.readFileSync(path.join(releaseDir, checksumName), 'utf8').split(/\r?\n/).filter(line => line.trim())) {
     const match = /^([a-f0-9]{64})\s+\*?([^\r\n]+)$/i.exec(line);
     if (!match || !payloadNames.includes(match[2]) || checksums.has(match[2])) throw new Error('Invalid, unexpected, or duplicate checksum entry.');
     checksums.set(match[2], match[1].toLowerCase());
@@ -67,7 +76,7 @@ export async function createReleasePlan(root = defaultRoot, options = {}) {
   for (const asset of assets.filter(asset => asset.name !== checksumName)) {
     if (checksums.get(asset.name) !== asset.sha256) throw new Error(`SHA256SUMS does not match ${asset.name}`);
   }
-  const latest = fs.readFileSync(path.join(root, 'release', 'latest.yml'), 'utf8');
+  const latest = fs.readFileSync(path.join(releaseDir, 'latest.yml'), 'utf8');
   const setupAsset = assets.find(asset => asset.name === setup);
   const sha512 = await hashFile(setupAsset.file, 'sha512', 'base64');
   const fileEntries = [...latest.matchAll(/^  - url:\s*(.+)$/gm)];

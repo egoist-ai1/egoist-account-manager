@@ -82,7 +82,7 @@ describe('installer host-session safety', () => {
     const nsis = await fs.readFile(path.resolve('src/installer/setup.nsi'), 'utf8');
     const manifest = await fs.readFile(path.resolve('src/installer/ModernInstaller.manifest'), 'utf8');
     expect(installer).not.toMatch(/\.Kill\(|taskkill|Verb\s*=\s*"runas"|EnumWindows/);
-    expect(nsis).not.toMatch(/taskkill|RequestExecutionLevel admin|RMDir \/r "\$LOCALAPPDATA/);
+    expect(nsis).not.toMatch(/taskkill|RequestExecutionLevel admin|RMDir \/r/);
     expect(nsis).toContain('RequestExecutionLevel user');
     expect(nsis).not.toContain('StrCpy $INSTDIR "$LOCALAPPDATA');
     expect(manifest).toContain('level="asInvoker"');
@@ -105,35 +105,25 @@ describe('installer host-session safety', () => {
 });
 
 describe('isolated silent installer acceptance mode', () => {
-  it('requires a silent, nondefault, empty target before extracting any files', async () => {
+  it('validates a test-owned or empty target and excludes both user default locations', async () => {
     const nsis = await fs.readFile(path.resolve('src/installer/setup.nsi'), 'utf8');
-    const init = nsis.slice(nsis.indexOf('Function .onInit'), nsis.indexOf('Section "Account Manager EGO"'));
-    const testGuard = init.slice(init.indexOf('${GetOptions} $R0 "/TEST"'), init.indexOf('InitPluginsDir'));
-    expect(testGuard).toContain('${IfNot} ${Silent}');
-    expect(testGuard).toContain('${If} $R2 == $R3');
-    expect(testGuard).toContain('IfFileExists "$INSTDIR\\*.*" 0 TestDirectoryReady');
-    expect(testGuard.match(/SetErrorLevel 3/g)).toHaveLength(3);
+    const init = nsis.slice(nsis.indexOf('Function .onInit'), nsis.indexOf('Section "Kvesser"'));
+    expect(init).toContain('${IfNot} ${Silent}');
+    expect(init).toContain('/TEST');
+    expect(init).toContain('$LOCALAPPDATA\\Programs\\Egoist');
+    expect(init).toContain('$LOCALAPPDATA\\Programs\\Account Manager EGO');
+    expect(init).toContain('--validate-install');
   });
-  it('skips every live integration command and preserves that behavior for uninstall', async () => {
+  it('routes target writes and removal through the same compiled ownership boundary', async () => {
     const nsis = await fs.readFile(path.resolve('src/installer/setup.nsi'), 'utf8');
-    const install = nsis.slice(nsis.indexOf('Section "Account Manager EGO"'), nsis.indexOf('Section "Uninstall"'));
-    const skip = install.indexOf('Goto DoneIntegration');
-    const done = install.indexOf('DoneIntegration:');
-    const commands = [...install.matchAll(/^\s*(WriteReg\w+|CreateShortcut|CreateDirectory|nsExec::Exec.*ie4uinit).*$/gm)];
-    expect(commands.length).toBeGreaterThan(8);
-    for (const command of commands) {
-      expect(command.index).toBeGreaterThan(skip);
-      expect(command.index).toBeLessThan(done);
-    }
-    expect(install.slice(0, skip)).toContain('FileOpen $0 "$INSTDIR\\installer-test.flag" w');
+    const install = nsis.slice(nsis.indexOf('Section "Kvesser"'), nsis.indexOf('Section "Uninstall"'));
+    expect(install).toContain('SetOutPath "$PLUGINSDIR\\payload"');
+    expect(install).toContain('--install-owned');
+    expect(install).not.toContain('SetOutPath "$INSTDIR"');
+    expect(install).not.toMatch(/WriteReg|CreateShortcut|FileOpen \$0 "\$INSTDIR/);
+    expect(install.indexOf('Goto DoneIntegration')).toBeLessThan(install.indexOf('--integrate'));
     const uninstall = nsis.slice(nsis.indexOf('Section "Uninstall"'));
-    const uninstallSkip = uninstall.indexOf('IfFileExists "$INSTDIR\\installer-test.flag" UninstallFilesOnly 0');
-    const filesOnly = uninstall.indexOf('UninstallFilesOnly:');
-    for (const command of uninstall.matchAll(/^\s*(DeleteRegKey|Delete "\$SMPROGRAMS|Delete "\$DESKTOP|RMDir "\$SMPROGRAMS).*$/gm)) {
-      expect(command.index).toBeGreaterThan(uninstallSkip);
-      expect(command.index).toBeLessThan(filesOnly);
-    }
-    expect(uninstallSkip).toBeGreaterThan(0);
-    expect(uninstall.slice(filesOnly)).toContain('RMDir /r "$INSTDIR"');
+    expect(uninstall).toContain('--uninstall-owned');
+    expect(uninstall).not.toMatch(/DeleteRegKey|RMDir|Delete "\$INSTDIR/);
   });
 });

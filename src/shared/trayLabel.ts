@@ -1,4 +1,4 @@
-import { maskEmailForPrivacy } from "./privacyDisplay.js";
+import { maskEmailForPrivacy, maskSensitiveDisplayText } from "./privacyDisplay.js";
 
 export interface TrayAccountLabelInput {
   label: string;
@@ -6,8 +6,9 @@ export interface TrayAccountLabelInput {
   isActive: boolean;
 }
 
-export function buildTrayAccountLabel(account: TrayAccountLabelInput, privacyMode: boolean): string {
-  const prefix = account.isActive ? "✓ " : "";
+export function buildTrayAccountLabel(account: TrayAccountLabelInput, privacyMode: boolean, language: "ru" | "en" = "ru"): string {
+  const prefix = account.isActive ? (language === "en" ? "[Selected] " : "[Выбран] ") : "";
   const email = privacyMode ? maskEmailForPrivacy(account.email) : account.email;
-  return `${prefix}${account.label} · ${email}`;
+  const label = privacyMode ? maskSensitiveDisplayText(account.label) : account.label;
+  return `${prefix}${label} · ${email}`;
 }

@@ -3,8 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
+import { z } from "zod";
 import type {
   AccountImportResult,
+  AccountImportPreview,
+  SwitchVerificationEvidence,
   AntigravityCredentialBatchImportResult,
   AntigravityImportResult,
   AntigravityManualImportInput,
@@ -31,7 +35,7 @@ import type {
 import type { AccountExportRecord } from "./db.js";
 import { AccountStore } from "./db.js";
 import { Vault } from "./security.js";
-import { getAuthJsonPath, getDefaultCodexHome, getDefaultWorkspacePath, getProfileDir } from "./paths.js";
+import { getAuthJsonPath, getDefaultCodexHome, getDefaultWorkspacePath, getProfileDir, getProfilesDir, assertManagedPath } from "./paths.js";
 import {
   CodexRpcClient,
   classifyRateLimit,
@@ -53,30 +57,34 @@ import {
   type AuthBundleFile,
   type DurableAuthBundleAdapter
 } from "./services/durableAuthBundleService.js";
-import type { AntigravityPathInput } from "./services/antigravityPaths.js";
+import { resolveAntigravityPaths, type AntigravityPathInput } from "./services/antigravityPaths.js";
 import { getAntigravityProfileStatus } from "./services/antigravityProfileService.js";
 import {
   detectAntigravityLiveSession,
+  verifyAntigravityRuntimeIdentity,
   extractAntigravityLocalIdentity,
   fetchAntigravityLiveQuota,
   readAntigravityOfficialAuthState
 } from "./services/antigravityProfileReader.js";
 import {
   applyAntigravityAccountWritePlan,
-  type AntigravityAccountApplyResult,
   type AntigravityCredentialPackage
 } from "./services/antigravityAccountAdapter.js";
-import { generateAntigravityHardwarePersona } from "./services/antigravityHardwarePersonaService.js";
 import { QuotaWarmupService } from "./services/quotaWarmupService.js";
 import {
+  createAntigravityProfileBackup,
   restoreAntigravityProfileBackup,
-  type AntigravityProfileBackupManifest
+  type AntigravityCredentialSnapshot,
+  type AntigravityBackupProtection,
+  type AntigravityProfileBackupManifest,
+  verifySealedAntigravityBackupManifest
 } from "./services/antigravityProfileBackup.js";
 import {
   fetchAntigravityGoogleAccountContext,
   fetchAntigravityGoogleUserInfo,
   refreshAntigravityGoogleAccessToken,
   resolveAntigravityOAuthClient,
+  resolveAntigravityOAuthClientForAccount,
   type AntigravityGoogleAccountContext,
   type AntigravityGoogleOAuthResult
 } from "./services/antigravityGoogleAuthService.js";
@@ -88,13 +96,14 @@ import type {
 import { readAntigravityCredentialStorePayload } from "./services/antigravityCredentialStore.js";
 import type {
   AntigravityQuiesceResult,
-  AntigravityRestartInput,
+  AntigravityAsyncProcessInput,
   AntigravityRestartResult
 } from "./services/antigravityProcessService.js";
 import {
   cleanAntigravitySessionCache,
-  launchAntigravity,
-  quiesceAntigravity,
+  launchAntigravityAsync,
+  quiesceAntigravityAsync,
+  type resolveAntigravitySwitchTarget,
   restartAntigravityIntegration
 } from "./services/antigravityProcessService.js";
 import { fetchAntigravityQuota, parseSummaryGroups, quotaResultFromModels, type AntigravityQuotaResult } from "./services/antigravityQuotaService.js";
@@ -104,6 +113,9 @@ import {
   type ParsedAntigravityCredential
 } from "./services/antigravityCredentialImportService.js";
 import { validateAntigravityAuthState, validateCodexAuthState } from "./services/authValidationService.js";
+import { classifyAuthValidationError } from "../shared/authState.js";
+import { ProviderRequestError } from "../shared/quotaRefreshError.js";
+import { RefreshSchedulerService, RefreshPriority } from "./services/refreshSchedulerService.js";
 import { RefreshBackoff } from "./services/refreshBackoff.js";
 import { redactSensitiveText } from "../shared/redaction.js";
 import { hasCurrentQuotaRefreshFailure } from "../shared/quotaFreshness.js";
@@ -134,23 +146,29 @@ export interface AccountManagerDependencies {
   codexHome?: string;
   readAntigravityCredentialStorePayload?: (
     platform?: NodeJS.Platform
-  ) => AntigravityCredentialStoreReadResult | null;
+  ) => AntigravityCredentialStoreReadResult | null | Promise<AntigravityCredentialStoreReadResult | null>;
   writeAntigravityCredentialStoreToken?: (
     input: AntigravityCredentialStoreTokenInput,
     platform?: NodeJS.Platform
-  ) => AntigravityCredentialStoreWriteResult;
+  ) => AntigravityCredentialStoreWriteResult | Promise<AntigravityCredentialStoreWriteResult>;
+  restoreAntigravityCredentialStorePayload?: (snapshot: AntigravityCredentialSnapshot) => void | Promise<void>;
+  antigravityPathInput?: AntigravityPathInput;
   detectAntigravityLiveSession?: typeof detectAntigravityLiveSession;
   readAntigravityOfficialAuthState?: typeof readAntigravityOfficialAuthState;
   fetchAntigravityQuota?: typeof fetchAntigravityQuota;
   fetchAntigravityLiveQuota?: typeof fetchAntigravityLiveQuota;
+  verifyAntigravityRuntimeIdentity?: typeof verifyAntigravityRuntimeIdentity;
   fetchAntigravityGoogleUserInfo?: typeof fetchAntigravityGoogleUserInfo;
+  refreshAntigravityGoogleAccessToken?: typeof refreshAntigravityGoogleAccessToken;
   fetchAntigravityGoogleAccountContext?: typeof fetchAntigravityGoogleAccountContext;
   restartAntigravityIntegration?: typeof restartAntigravityIntegration;
-  quiesceAntigravity?: (input?: AntigravityRestartInput) => AntigravityQuiesceResult;
-  launchAntigravity?: (input?: AntigravityRestartInput) => AntigravityRestartResult;
+  quiesceAntigravity?: (input?: AntigravityAsyncProcessInput) => AntigravityQuiesceResult | Promise<AntigravityQuiesceResult>;
+  launchAntigravity?: (input?: AntigravityAsyncProcessInput) => AntigravityRestartResult | Promise<AntigravityRestartResult>;
+  resolveAntigravitySwitchTarget?: typeof resolveAntigravitySwitchTarget;
   desktopLifecycle?: Pick<WindowsDesktopLifecycleService, "quiesce" | "launchAndWaitReady">
     & Partial<Pick<WindowsDesktopLifecycleService, "getDiagnostics">>;
   getDesktopClosePolicy?: () => DesktopClosePolicy;
+  getCodexQuotaReadOptions?: () => { excludeResetCreditDetails?: boolean } | undefined;
   durableAuthBundleAdapter?: DurableAuthBundleAdapter;
   durableAuthRenameRetryDelaysMs?: number[];
   durableAuthStableCheckCount?: number;
@@ -161,7 +179,7 @@ export interface AccountManagerDependencies {
 }
 
 export interface ActiveCodexSessionSyncResult {
-  status: "updated" | "unchanged" | "signed_out" | "unmanaged" | "invalid" | "busy";
+  status: "updated" | "unchanged" | "signed_out" | "unmanaged" | "invalid" | "busy" | "unsupported_store" | "ambiguous";
   accountId: string | null;
 }
 
@@ -334,10 +352,6 @@ function readAntigravityBackupManifest(backupDir: string): AntigravityProfileBac
   return JSON.parse(fs.readFileSync(path.join(backupDir, "manifest.json"), "utf8")) as AntigravityProfileBackupManifest;
 }
 
-function restoreAntigravityBackupDir(backupDir: string): void {
-  restoreAntigravityProfileBackup(readAntigravityBackupManifest(backupDir));
-}
-
 function deriveExportKey(passphrase: string, salt: Buffer, iterations: number): Buffer {
   if (passphrase.trim().length < 12) {
     throw new Error("Export password must contain at least 12 characters");
@@ -377,6 +391,7 @@ function encryptPortablePayload(payload: PortablePayload, passphrase: string): P
 }
 
 function decryptPortablePayload(input: string, passphrase: string): PortablePayload {
+  if (Buffer.byteLength(input, "utf8") > 64 * 1024 * 1024) throw new Error("Account export exceeds the 64 MiB safety limit");
   const envelope = JSON.parse(input) as PortableEnvelope;
   if (envelope.format !== portableExportFormat || !supportedPortableExportVersions.has(envelope.version)) {
     throw new Error("Unsupported account export file");
@@ -384,10 +399,21 @@ function decryptPortablePayload(input: string, passphrase: string): PortablePayl
   if ((envelope.kdf?.name !== "pbkdf2-sha256" && envelope.kdf?.name !== "scrypt") || envelope.cipher?.name !== "aes-256-gcm") {
     throw new Error("Unsupported account export encryption");
   }
+  if (typeof envelope.kdf.salt !== "string" || typeof envelope.cipher.iv !== "string"
+    || typeof envelope.cipher.tag !== "string" || typeof envelope.cipher.ciphertext !== "string") {
+    throw new Error("Invalid account export encryption fields");
+  }
+  if (envelope.kdf.name === "pbkdf2-sha256"
+    && (!Number.isSafeInteger(envelope.kdf.iterations) || envelope.kdf.iterations < 100_000 || envelope.kdf.iterations > 2_000_000)) {
+    throw new Error("Unsupported export key derivation cost");
+  }
   const salt = Buffer.from(envelope.kdf.salt, "base64");
   const iv = Buffer.from(envelope.cipher.iv, "base64");
   const tag = Buffer.from(envelope.cipher.tag, "base64");
   const ciphertext = Buffer.from(envelope.cipher.ciphertext, "base64");
+  if (salt.length < 16 || salt.length > 64 || iv.length !== 12 || tag.length !== 16 || ciphertext.length === 0) {
+    throw new Error("Invalid account export encryption lengths");
+  }
   const key = envelope.kdf.name === "scrypt"
     ? deriveScryptExportKey(passphrase, salt)
     : deriveExportKey(passphrase, salt, envelope.kdf.iterations);
@@ -398,13 +424,6 @@ function decryptPortablePayload(input: string, passphrase: string): PortablePayl
     throw new Error("Invalid account export payload");
   }
   return payload;
-}
-
-function backupFile(filePath: string): void {
-  if (!fs.existsSync(filePath)) return;
-  const backupPath = `${filePath}.cam-backup-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-  fs.copyFileSync(filePath, backupPath);
-  pruneAuthBackups(filePath);
 }
 
 function getAuthAccountId(authJson: string): string | null {
@@ -470,37 +489,6 @@ function buildCodexCompatibilityFiles(
   return files;
 }
 
-function syncCodexGlobalState(codexHome: string, targetAuthJson: string, previousAuthJson: string | null): number {
-  const files = buildCodexCompatibilityFiles(codexHome, targetAuthJson, previousAuthJson);
-  for (const file of files) {
-    const filePath = path.join(codexHome, file.relativePath);
-    backupFile(filePath);
-    atomicWrite(filePath, file.contents);
-  }
-  return files.length;
-}
-
-function pruneAuthBackups(filePath: string, keep = 20): void {
-  try {
-    const dir = path.dirname(filePath);
-    const prefix = `${path.basename(filePath)}.cam-backup-`;
-    const backups = fs
-      .readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.startsWith(prefix))
-      .map((entry) => {
-        const fullPath = path.join(dir, entry.name);
-        return { path: fullPath, mtime: fs.statSync(fullPath).mtimeMs };
-      })
-      .sort((a, b) => b.mtime - a.mtime);
-
-    for (const backup of backups.slice(keep)) {
-      fs.rmSync(backup.path, { force: true });
-    }
-  } catch {
-    // Backup pruning is best-effort and must never block account switching.
-  }
-}
-
 function getDisplayLabel(email: string): string {
   return email.split("@")[0] || email;
 }
@@ -542,12 +530,17 @@ function matchesCodexAccountIdentity(identity: CodexAccountIdentity, account: Ma
 
 function matchesCodexAuthMaterial(metadata: ReturnType<typeof inspectCodexAuthJson>, account: ManagedAccount): boolean {
   if (!metadata.inferredAuthMode) return false;
+  if (!compatibleCodexEmail(metadata.email, account.email)) return false;
   if ((account.authMode === "apiKey") !== (metadata.inferredAuthMode === "apiKey") && account.authMode !== null) return false;
   if (metadata.authFingerprint === account.authFingerprint) return true;
   if (metadata.inferredAuthMode === "apiKey") return false;
   if (account.workspaceAccountId !== metadata.workspaceAccountId) return false;
   if (account.providerAccountId) return account.providerAccountId === metadata.providerAccountId;
   return Boolean(metadata.email && metadata.email.trim().toLowerCase() === account.email.trim().toLowerCase());
+}
+
+function compatibleCodexEmail(observed: string | null, saved: string): boolean {
+  return !observed || saved.startsWith("codex:") || saved.trim().toLowerCase() === observed.trim().toLowerCase();
 }
 
 function withCodexPlan(snapshot: RateLimitSnapshot, identityPlanType: PlanType): RateLimitSnapshot {
@@ -565,11 +558,7 @@ function inferHomeFromAppData(appDataDir: string): string | null {
 }
 
 function sanitizeAntigravityLimits(limits: RateLimitSnapshot): RateLimitSnapshot {
-  const planType = limits.planType === "pro" ? "unknown" : limits.planType;
-  return {
-    ...limits,
-    planType
-  };
+  return limits;
 }
 
 function canReadCurrentWindowsCredentialStore(pathInput: AntigravityPathInput): boolean {
@@ -582,6 +571,10 @@ function canReadCurrentWindowsCredentialStore(pathInput: AntigravityPathInput): 
 export class AccountManager extends EventEmitter {
   private readonly pendingLogins = new Map<string, PendingLogin>();
   private codexPath: string | null;
+  private readonly importPreviews = new Map<string, { preview: AccountImportPreview; records: AccountExportRecord[]; revision: string }>();
+  private readonly refreshScheduler = new RefreshSchedulerService(2);
+  private readonly refreshEpochs = new Map<string, number>();
+  private readonly refreshContexts = new Map<string, { version: number; epoch: number; signal: AbortSignal }>();
   private readonly refreshBackoff = new RefreshBackoff({ baseDelayMs: 60_000, maxDelayMs: 30 * 60_000 });
   private readonly switchInFlight = new Map<ManagedAccount["platform"], { accountId: string; promise: Promise<ManagedAccount> }>();
   private readonly codexProfileVault: CodexProfileVaultService;
@@ -621,17 +614,18 @@ export class AccountManager extends EventEmitter {
   }
 
   list(): ManagedAccount[] {
-    this.repairStaleAntigravityDisplayState();
     return this.store.list();
   }
 
   secureManagedProfileHomes(): { sealed: number; drifted: number } {
+    if (this.store.getRecoveryRequired("codex")) return { sealed: 0, drifted: 0 };
     return this.codexProfileVault.secureExistingProfiles();
   }
 
   repairLegacyQuotaRefreshState(): number {
     let repaired = 0;
     for (const account of this.store.list()) {
+      if (this.store.getRecoveryRequired(account.platform)) continue;
       if (account.credentialState !== "ready") continue;
       const refreshReason = hasCurrentQuotaRefreshFailure(account)
         ? account.lastRefreshError
@@ -654,10 +648,12 @@ export class AccountManager extends EventEmitter {
    * fingerprint, provider/workspace or signed JWT email match.
    */
   syncActiveCodexSession(): ActiveCodexSessionSyncResult {
-    if (this.operationLock.isLocked("provider:codex")) {
+    if (this.store.getRecoveryRequired("codex") || this.operationLock.isLocked("provider:codex")) {
       return { status: "busy", accountId: null };
     }
-    const authPath = getAuthJsonPath(this.getGlobalCodexHome());
+    const globalHome = this.getGlobalCodexHome();
+    if (!inspectCodexCredentialStore(globalHome).managerCompatible) return { status: "unsupported_store", accountId: null };
+    const authPath = getAuthJsonPath(globalHome);
     if (!fs.existsSync(authPath)) {
       const activeAccount = this.store.list().find((account) => account.platform === "codex" && account.isActive);
       if (activeAccount) {
@@ -679,9 +675,16 @@ export class AccountManager extends EventEmitter {
       return { status: "invalid", accountId: null };
     }
 
+    return this.matchAndSyncCodexSession(authJson, metadata, true);
+  }
+
+  private matchAndSyncCodexSession(
+    authJson: string, metadata: ReturnType<typeof inspectCodexAuthJson>, clearUnmatched: boolean
+  ): ActiveCodexSessionSyncResult {
     const accounts = this.store.list().filter((account) => account.platform === "codex");
     const compatible = accounts.filter((account) =>
       (account.authMode === null || (account.authMode === "apiKey") === (metadata.inferredAuthMode === "apiKey"))
+      && compatibleCodexEmail(metadata.email, account.email)
       && (!metadata.providerAccountId || !account.providerAccountId || account.providerAccountId === metadata.providerAccountId)
       && account.workspaceAccountId === metadata.workspaceAccountId
     );
@@ -697,12 +700,13 @@ export class AccountManager extends EventEmitter {
       : provider.length === 1 ? provider[0]
         : emailMatches.length === 1 ? emailMatches[0] : null;
     if (!matched) {
-      if (activeAccount) {
+      if (clearUnmatched && activeAccount) {
         this.store.clearActive("codex");
         this.emitLog(`Codex active session is unmanaged; cleared active state on ${activeAccount.email}.`);
         this.emit("accounts-updated");
       }
-      return { status: "unmanaged", accountId: null };
+      const ambiguous = [exact, provider, emailMatches].some((candidates) => candidates.length > 1);
+      return { status: ambiguous ? "ambiguous" : "unmanaged", accountId: null };
     }
 
     const inferredAuthMode = matched.authMode ?? metadata.inferredAuthMode;
@@ -711,8 +715,7 @@ export class AccountManager extends EventEmitter {
       || matched.workspaceAccountId !== metadata.workspaceAccountId
       || matched.workspaceLabel !== metadata.workspaceLabel
       || matched.expiresAt !== metadata.expiresAt
-      || (matched.authMode === null && inferredAuthMode !== null)
-      || matched.credentialState !== "ready";
+      || (matched.authMode === null && inferredAuthMode !== null);
     let saved = matched;
     let changed = false;
     if (needsVaultUpdate) {
@@ -723,8 +726,8 @@ export class AccountManager extends EventEmitter {
         workspaceAccountId: metadata.workspaceAccountId,
         workspaceLabel: metadata.workspaceLabel,
         expiresAt: metadata.expiresAt,
-        credentialState: "ready",
-        lastAuthenticatedAt: Math.floor(Date.now() / 1000),
+        credentialState: "needs_review",
+        lastAuthenticatedAt: null,
         authMode: inferredAuthMode
       });
       changed = true;
@@ -743,7 +746,7 @@ export class AccountManager extends EventEmitter {
   }
 
   async syncActiveAntigravitySession(): Promise<ActiveAntigravitySessionSyncResult> {
-    if (this.operationLock.isLocked("provider:antigravity")) {
+    if (this.store.getRecoveryRequired("antigravity") || this.operationLock.isLocked("provider:antigravity")) {
       return { status: "busy", accountId: null };
     }
 
@@ -751,17 +754,31 @@ export class AccountManager extends EventEmitter {
   }
 
   private async syncActiveAntigravitySessionUnlocked(): Promise<ActiveAntigravitySessionSyncResult> {
+    if (this.store.getRecoveryRequired("antigravity")) return { status: "busy", accountId: null };
     const accounts = this.store.list().filter((account) => account.platform === "antigravity");
+    if (accounts.length === 0) return { status: "unmanaged", accountId: null };
     const activeAccount = accounts.find((account) => account.isActive);
+    const lastSwitch = activeAccount && this.switchTransactions.list(100).find((item) =>
+      item.platform === "antigravity" && item.status === "committed" && item.backupPath);
+    let selectedHub = false;
+    if (lastSwitch?.backupPath && lastSwitch.targetAccountId === activeAccount?.id) {
+      try {
+        selectedHub = this.readAntigravityRollbackManifest(lastSwitch.backupPath).runtime?.target === "hub";
+      } catch (error) {
+        this.emitLog(error);
+      }
+    }
 
     let activeEmail: string | null = null;
     let detectionSource = "none";
     let officialState: ReturnType<typeof readAntigravityOfficialAuthState> | null = null;
+    let credentialLookupFailed = false;
+    let storedToken: { refresh_token?: string; access_token?: string; expiry?: string } | undefined;
 
     // 1. Live session detection via Language Server RPC (highest authority when IDE is running)
     try {
       const liveDetector = this.dependencies.detectAntigravityLiveSession ?? detectAntigravityLiveSession;
-      const liveSession = await liveDetector();
+      const liveSession = selectedHub ? null : await liveDetector();
       if (liveSession?.email) {
         activeEmail = liveSession.email.trim().toLowerCase();
         detectionSource = "live_language_server";
@@ -769,42 +786,39 @@ export class AccountManager extends EventEmitter {
     } catch (error) {
       this.emitLog(`Antigravity live session detection skipped: ${error instanceof Error ? error.message : String(error)}`);
     }
+    this.switchTransactions.requireRecovered("antigravity");
 
     // 2. Windows Credential Manager fallback (gemini:antigravity)
-    if (!activeEmail) {
-      try {
-        const credReader = this.dependencies.readAntigravityCredentialStorePayload ?? readAntigravityCredentialStorePayload;
-        const credResult = credReader(process.platform);
-        if (credResult?.payload) {
-          const parsedCred = JSON.parse(credResult.payload) as {
-            token?: { refresh_token?: string; access_token?: string };
-          };
-          const secretRefreshToken = parsedCred?.token?.refresh_token?.trim();
-          if (secretRefreshToken) {
-            for (const acc of accounts) {
-              try {
-                const fullAcc = this.store.get(acc.id);
-                if (fullAcc) {
-                  const vaultRec = this.readAntigravityVaultRecord(fullAcc);
-                  if (vaultRec.googleOAuth?.refreshToken && vaultRec.googleOAuth.refreshToken === secretRefreshToken) {
-                    activeEmail = acc.email.trim().toLowerCase();
-                    detectionSource = "windows_credential_manager";
-                    break;
-                  }
-                }
-              } catch {
-                // Ignore vault decryption error during matching
+    try {
+      const credReader = this.dependencies.readAntigravityCredentialStorePayload ?? readAntigravityCredentialStorePayload;
+      const credResult = await credReader(process.platform);
+      if (credResult?.payload) {
+        storedToken = (JSON.parse(credResult.payload) as { token?: typeof storedToken })?.token;
+        const secretRefreshToken = storedToken?.refresh_token?.trim();
+        if (!activeEmail && secretRefreshToken) {
+          for (const acc of accounts) {
+            const fullAccount = this.store.get(acc.id);
+            if (!fullAccount) continue;
+            try {
+              const record = this.readAntigravityVaultRecord(fullAccount);
+              if ((record.googleOAuth?.refreshToken ?? record.credentials?.refreshToken) === secretRefreshToken) {
+                activeEmail = acc.email.trim().toLowerCase();
+                detectionSource = "windows_credential_manager";
+                break;
               }
+            } catch {
+              // Недоступный профиль не участвует в сопоставлении.
             }
           }
         }
-      } catch (error) {
-        this.emitLog(`Antigravity credential store inspection skipped: ${error instanceof Error ? error.message : String(error)}`);
       }
+    } catch (error) {
+      credentialLookupFailed = true;
+      this.emitLog(`Antigravity credential store inspection skipped: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     // 3. Fallback: official auth state from state.vscdb
-    if (!activeEmail) {
+    if (!activeEmail && !selectedHub && !(activeAccount?.runtimeVerification?.profileApplied && credentialLookupFailed)) {
       try {
         const stateReader = this.dependencies.readAntigravityOfficialAuthState ?? readAntigravityOfficialAuthState;
         officialState = stateReader();
@@ -817,7 +831,11 @@ export class AccountManager extends EventEmitter {
       }
     }
 
+    this.switchTransactions.requireRecovered("antigravity");
     if (!activeEmail) {
+      if (activeAccount?.runtimeVerification?.profileApplied && (credentialLookupFailed || (selectedHub && storedToken))) {
+        return { status: "unchanged", accountId: activeAccount.id };
+      }
       if (activeAccount) {
         this.store.clearActive("antigravity");
         this.emitLog(`Antigravity session signed out: cleared active status on ${activeAccount.email}.`);
@@ -847,14 +865,9 @@ export class AccountManager extends EventEmitter {
 
     // 1. Sync live tokens from Windows Credential Manager (gemini:antigravity)
     try {
-      const credReader = this.dependencies.readAntigravityCredentialStorePayload ?? readAntigravityCredentialStorePayload;
-      const credResult = credReader(process.platform);
-      if (credResult?.payload) {
-        const parsedCred = JSON.parse(credResult.payload) as {
-          token?: { refresh_token?: string; access_token?: string; expiry?: string };
-        };
-        const credAccessToken = parsedCred?.token?.access_token?.trim();
-        const credRefreshToken = parsedCred?.token?.refresh_token?.trim();
+      if (storedToken) {
+        const credAccessToken = storedToken.access_token?.trim();
+        const credRefreshToken = storedToken.refresh_token?.trim();
         if (credAccessToken || credRefreshToken) {
           const fullAccount = this.store.get(saved.id);
           if (fullAccount) {
@@ -867,8 +880,8 @@ export class AccountManager extends EventEmitter {
             if (needsTokenUpdate && vaultRecord.googleOAuth
               && credRefreshToken === vaultRecord.googleOAuth.refreshToken) {
               let expiresAt: number | null = null;
-              if (parsedCred?.token?.expiry) {
-                const parsedMs = Date.parse(parsedCred.token.expiry);
+              if (storedToken.expiry) {
+                const parsedMs = Date.parse(storedToken.expiry);
                 if (Number.isFinite(parsedMs)) expiresAt = Math.floor(parsedMs / 1000);
               }
               const updatedGoogleOAuth = {
@@ -881,7 +894,8 @@ export class AccountManager extends EventEmitter {
                 ...vaultRecord,
                 googleOAuth: updatedGoogleOAuth
               };
-              this.store.updateEncryptedAuthJson(saved.id, this.vault.encryptUtf8(JSON.stringify(vaultRecord)));
+              this.switchTransactions.requireRecovered("antigravity");
+              this.persistLocallyObservedAntigravityAuth(fullAccount, vaultRecord);
               this.emitLog(`Synchronized live Antigravity tokens from Windows Credential Manager to ${saved.email}.`);
               changed = true;
             }
@@ -905,7 +919,8 @@ export class AccountManager extends EventEmitter {
             const needsTokenUpdate = (ideAccessToken && ideAccessToken !== currentAccessToken)
               || (ideRefreshToken && ideRefreshToken !== currentRefreshToken);
 
-            if (needsTokenUpdate && vaultRecord.googleOAuth) {
+            if (needsTokenUpdate && vaultRecord.googleOAuth
+              && ideRefreshToken === vaultRecord.googleOAuth.refreshToken) {
               const updatedGoogleOAuth = {
                 ...vaultRecord.googleOAuth,
                 refreshToken: ideRefreshToken ?? currentRefreshToken ?? vaultRecord.googleOAuth.refreshToken,
@@ -917,7 +932,8 @@ export class AccountManager extends EventEmitter {
                 ...vaultRecord,
                 googleOAuth: updatedGoogleOAuth
               };
-              this.store.updateEncryptedAuthJson(saved.id, this.vault.encryptUtf8(JSON.stringify(vaultRecord)));
+              this.switchTransactions.requireRecovered("antigravity");
+              this.persistLocallyObservedAntigravityAuth(fullAccount, vaultRecord);
               this.emitLog(`Persisted rotated Antigravity credentials for ${saved.email}.`);
               changed = true;
             }
@@ -936,31 +952,9 @@ export class AccountManager extends EventEmitter {
     return { status: "unchanged", accountId: saved.id };
   }
 
-  private repairStaleAntigravityDisplayState(): void {
-    for (const account of this.store.list()) {
-      if (account.platform !== "antigravity") continue;
-      if (account.label && account.label.includes("\uFFFD")) {
-        const clean = account.email.split("@")[0] || account.email;
-        this.store.updateMeta(account.id, { label: clean });
-      }
-      if (account.antigravity?.lastQuotaRefreshAt === null) {
-        if (account.status !== "unknown" || account.planType !== "unknown") {
-          this.store.setPlanAndStatus(account.id, "unknown", "unknown", account.statusReason);
-        }
-        continue;
-      }
-      if (account.planType === "pro") {
-        this.store.setPlanAndStatus(account.id, "unknown", account.status, account.statusReason);
-        continue;
-      }
-      if (account.planType && account.planType !== "unknown") continue;
-      if (account.antigravity?.lastQuotaRefreshAt !== null) {
-        this.store.setPlanAndStatus(account.id, "standard", account.status, null);
-      }
-    }
-  }
-
   async shutdown(): Promise<void> {
+    this.refreshScheduler.dispose();
+    this.importPreviews.clear();
     const pending = [...this.pendingLogins.values()];
     this.pendingLogins.clear();
     for (const login of pending) {
@@ -995,6 +989,7 @@ export class AccountManager extends EventEmitter {
     input: CodexLoginRequest,
     options: { replaceAccountId?: string; previousProfileDir?: string } = {}
   ): Promise<LoginStartResult> {
+    this.switchTransactions.requireRecovered("codex");
     const profileId = crypto.randomUUID();
     const profileDir = getProfileDir(this.appDataDir, profileId);
     fs.mkdirSync(profileDir, { recursive: true });
@@ -1104,14 +1099,48 @@ export class AccountManager extends EventEmitter {
   async refreshAccount(accountId: string): Promise<ManagedAccount> {
     const account = this.store.get(accountId);
     if (!account) throw new Error("Account not found");
-    return this.operationLock.runExclusive(`provider:${account.platform}`, () =>
-      this.refreshAccountUnlocked(accountId)
-    );
+    this.switchTransactions.requireRecovered(account.platform);
+    const epoch = this.refreshEpochs.get(account.id) ?? 0;
+    return this.refreshScheduler.schedule(account.id, (signal) => this.operationLock.runExclusive(`provider:${account.platform}`, async () => {
+      this.refreshContexts.set(account.id, { version: this.store.get(account.id)?.version ?? account.version, epoch, signal });
+      try {
+        this.ensureRefreshCurrent(account.id);
+        const refreshed = await this.refreshAccountUnlocked(accountId);
+        this.ensureRefreshCurrent(account.id);
+        this.emit("accounts-updated");
+        return refreshed;
+      } finally { this.refreshContexts.delete(account.id); }
+    }), { generation: account.version + ":" + epoch, priority: account.isActive ? RefreshPriority.active : RefreshPriority.manual });
+  }
+
+  private ensureRefreshCurrent(accountId: string): void {
+    const context = this.refreshContexts.get(accountId);
+    if (!context) return;
+    const current = this.store.get(accountId);
+    if (context.signal.aborted || !current || current.version !== context.version
+      || (this.refreshEpochs.get(accountId) ?? 0) !== context.epoch) {
+      const error = new Error("Stale quota response discarded");
+      error.name = "AbortError";
+      throw error;
+    }
+    this.switchTransactions.requireRecovered(current.platform);
+  }
+
+  private acceptOwnCredentialUpdate(accountId: string): void {
+    const context = this.refreshContexts.get(accountId);
+    const current = this.store.get(accountId);
+    if (context && current) context.version = current.version;
+  }
+
+  private cancelAccountRefresh(accountId: string): void {
+    this.refreshEpochs.set(accountId, (this.refreshEpochs.get(accountId) ?? 0) + 1);
+    this.refreshScheduler.cancel(accountId);
   }
 
   private async refreshAccountUnlocked(accountId: string): Promise<ManagedAccount> {
     const account = this.store.get(accountId);
     if (!account) throw new Error("Account not found");
+    this.switchTransactions.requireRecovered(account.platform);
     if (account.platform === "antigravity") {
       const blocked = this.refreshBackoff.getBlockedReason(account.id);
       if (blocked) {
@@ -1119,11 +1148,14 @@ export class AccountManager extends EventEmitter {
       }
       try {
         const refreshed = await this.refreshAntigravityGoogleQuota(account);
+        this.ensureRefreshCurrent(account.id);
         this.refreshBackoff.recordSuccess(account.id);
         return refreshed;
       } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") throw error;
+        this.ensureRefreshCurrent(account.id);
         const message = redactSensitiveText(error instanceof Error ? error.message : String(error));
-        this.refreshBackoff.recordFailure(account.id, message);
+        this.refreshBackoff.recordFailure(account.id, message, { retryAfterSeconds: error instanceof ProviderRequestError ? error.retryAfterSeconds : null });
         this.store.insertRateLimitSnapshot({
           id: crypto.randomUUID(),
           accountId: account.id,
@@ -1140,6 +1172,7 @@ export class AccountManager extends EventEmitter {
             rateLimitReachedType: null
           }
         });
+        if (error instanceof ProviderRequestError && error.requiresReauth) this.store.setCredentialState(account.id, "needs_reauth", message);
         return this.store.recordRateLimitFailure(account.id, message);
       }
     }
@@ -1147,7 +1180,8 @@ export class AccountManager extends EventEmitter {
     if (blocked) {
       throw new Error(blocked.message);
     }
-    const usesActiveGlobalSession = account.isActive && fs.existsSync(getAuthJsonPath(this.getGlobalCodexHome()));
+    const globalStore = account.isActive ? inspectCodexCredentialStore(this.getGlobalCodexHome()) : null;
+    const usesActiveGlobalSession = Boolean(globalStore?.managerCompatible && globalStore.authJsonPresent);
     const codexHome = usesActiveGlobalSession ? this.getGlobalCodexHome() : account.profileDir;
     let ownsHydratedProfile = !usesActiveGlobalSession;
     if (!usesActiveGlobalSession) {
@@ -1158,6 +1192,9 @@ export class AccountManager extends EventEmitter {
     }
 
     let client = new CodexRpcClient(codexHome, this.requireCodexPath());
+    const signal = this.refreshContexts.get(account.id)?.signal;
+    const cancelProbe = () => { void client.stop(); };
+    signal?.addEventListener("abort", cancelProbe, { once: true });
     let identityVerified = false;
     try {
       // Quota polling must not rotate credentials. Explicit validation/repair
@@ -1167,13 +1204,16 @@ export class AccountManager extends EventEmitter {
       let identity: CodexAccountIdentity;
       let effectiveUsesActiveGlobalSession = usesActiveGlobalSession;
       try {
+        this.ensureRefreshCurrent(account.id);
         accountResponse = await client.readAccount(false);
+        this.ensureRefreshCurrent(account.id);
         identity = getAccountIdentity(accountResponse.account, account.authMode ?? "chatgpt");
         if (!matchesCodexAccountIdentity(identity, account)
           || !matchesCodexAuthMaterial(inspectCodexAuthJson(readStableAuthJson(getAuthFilePath(codexHome))), account)) {
           throw new Error("Codex profile belongs to a different account");
         }
       } catch (error) {
+        this.ensureRefreshCurrent(account.id);
         if (effectiveUsesActiveGlobalSession) {
           // The active global session drifted or threw. Fall back to isolated profileDir hydrated from vault.
           await client.stop();
@@ -1181,6 +1221,7 @@ export class AccountManager extends EventEmitter {
           ownsHydratedProfile = true;
           client = new CodexRpcClient(account.profileDir, this.requireCodexPath());
           accountResponse = await client.readAccount(false);
+        this.ensureRefreshCurrent(account.id);
           identity = getAccountIdentity(accountResponse.account, account.authMode ?? "chatgpt");
           if (!matchesCodexAccountIdentity(identity, account)
             || !matchesCodexAuthMaterial(inspectCodexAuthJson(readStableAuthJson(getAuthFilePath(account.profileDir))), account)) {
@@ -1195,6 +1236,7 @@ export class AccountManager extends EventEmitter {
           await client.stop();
           client = new CodexRpcClient(account.profileDir, this.requireCodexPath());
           accountResponse = await client.readAccount(false);
+        this.ensureRefreshCurrent(account.id);
           identity = getAccountIdentity(accountResponse.account, account.authMode ?? "chatgpt");
           if (!matchesCodexAccountIdentity(identity, account)
             || !matchesCodexAuthMaterial(inspectCodexAuthJson(readStableAuthJson(getAuthFilePath(account.profileDir))), account)) {
@@ -1203,11 +1245,9 @@ export class AccountManager extends EventEmitter {
         }
       }
       identityVerified = true;
-      if (effectiveUsesActiveGlobalSession) {
-        this.syncActiveGlobalAuthToVault(account);
-      } else {
-        this.syncProfileAuthToVault(account);
-      }
+      if (effectiveUsesActiveGlobalSession) this.syncActiveGlobalAuthToVault(account);
+      else this.syncProfileAuthToVault(account, true);
+      this.acceptOwnCredentialUpdate(account.id);
       if (account.authMode === "apiKey") {
         this.refreshBackoff.recordSuccess(account.id);
         return this.store.setStatus(
@@ -1216,7 +1256,8 @@ export class AccountManager extends EventEmitter {
           "API key authenticated. Codex does not expose ChatGPT quota windows for this mode."
         );
       }
-      const response = await client.readRateLimits();
+      const response = await client.readRateLimits(this.dependencies.getCodexQuotaReadOptions?.());
+      this.ensureRefreshCurrent(account.id);
       const snapshot = withCodexPlan(selectBestRateLimit(response), identity.planType);
       const classified = classifyRateLimit(snapshot);
       this.store.insertRateLimitSnapshot({
@@ -1230,10 +1271,13 @@ export class AccountManager extends EventEmitter {
       this.refreshBackoff.recordSuccess(account.id);
       return this.store.setRateLimits(account.id, snapshot, classified.status, classified.reason);
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") throw error;
+      this.ensureRefreshCurrent(account.id);
       const message = redactSensitiveText(error instanceof Error ? error.message : String(error));
-      const authenticationFailed = !identityVerified && isCodexProfileLoginError(error);
+      const authenticationFailed = (error instanceof ProviderRequestError && error.requiresReauth)
+        || (!identityVerified && isCodexProfileLoginError(error));
       if (authenticationFailed) this.refreshBackoff.recordSuccess(account.id);
-      else this.refreshBackoff.recordFailure(account.id, message);
+      else this.refreshBackoff.recordFailure(account.id, message, { retryAfterSeconds: error instanceof ProviderRequestError ? error.retryAfterSeconds : null });
       this.store.insertRateLimitSnapshot({
         id: crypto.randomUUID(),
         accountId: account.id,
@@ -1250,10 +1294,13 @@ export class AccountManager extends EventEmitter {
           rateLimitReachedType: null
         }
       });
-      return authenticationFailed
-        ? this.store.setCredentialState(account.id, "needs_reauth", message)
-        : this.store.recordRateLimitFailure(account.id, message);
+      if (authenticationFailed) {
+        this.store.recordRateLimitFailure(account.id, message);
+        return this.store.setCredentialState(account.id, "needs_reauth", message);
+      }
+      return this.store.recordRateLimitFailure(account.id, message);
     } finally {
+      signal?.removeEventListener("abort", cancelProbe);
       await client.stop();
       // Never seal an auth.json that failed identity verification. A failed
       // app-server refresh can rewrite the file; persisting it would destroy
@@ -1265,7 +1312,15 @@ export class AccountManager extends EventEmitter {
   async validateAuth(accountId: string): Promise<AuthValidationState> {
     const account = this.store.get(accountId);
     if (!account) throw new Error("Account not found");
-    return this.operationLock.runExclusive(`provider:${account.platform}`, () => this.validateAuthUnlocked(accountId));
+    this.switchTransactions.requireRecovered(account.platform);
+    return this.operationLock.runExclusive("provider:" + account.platform, async () => {
+      this.switchTransactions.requireRecovered(account.platform);
+      const result = await this.validateAuthUnlocked(accountId);
+      this.switchTransactions.requireRecovered(account.platform);
+      if (["expired", "revoked", "needs_reauth"].includes(result.state)) this.store.setCredentialState(accountId, "needs_reauth", result.errorReason);
+      this.emit("accounts-updated");
+      return result;
+    });
   }
 
   private async validateAuthUnlocked(accountId: string): Promise<AuthValidationState> {
@@ -1290,11 +1345,10 @@ export class AccountManager extends EventEmitter {
             };
           }
           try {
+            const client = resolveAntigravityOAuthClientForAccount(googleOAuth.oauthClientId);
             const refreshed = await refreshAntigravityGoogleAccessToken({
-              clientId: googleOAuth.oauthClientId,
-              // PKCE desktop clients do not ship a client secret. Stored records
-              // retain only the public client id that authorized the session.
-              clientSecret: null,
+              clientId: client.clientId,
+              clientSecret: client.clientSecret,
               refreshToken: googleOAuth.refreshToken,
               requestTimeoutMs: 10_000
             });
@@ -1303,10 +1357,11 @@ export class AccountManager extends EventEmitter {
             googleOAuth.expiresAt = refreshed.expiresAt ?? googleOAuth.expiresAt;
             googleOAuth.scope = refreshed.scope.length ? refreshed.scope : googleOAuth.scope;
             googleOAuth.tokenType = refreshed.tokenType ?? googleOAuth.tokenType;
-            this.store.updateEncryptedAuthJson(account.id, this.vault.encryptUtf8(JSON.stringify(record)));
+            this.switchTransactions.requireRecovered(account.platform);
+            this.persistLocallyObservedAntigravityAuth(account, record);
           } catch (error) {
             return {
-              state: "needs_reauth",
+              state: classifyAuthValidationError(error),
               lastValidatedAt: now,
               errorReason: redactSensitiveText(error instanceof Error ? error.message : String(error))
             };
@@ -1314,10 +1369,13 @@ export class AccountManager extends EventEmitter {
         }
         try {
           const userInfoFetcher = this.dependencies.fetchAntigravityGoogleUserInfo ?? fetchAntigravityGoogleUserInfo;
-          await userInfoFetcher({
-            accessToken: googleOAuth.accessToken,
-            requestTimeoutMs: 10_000
-          });
+          const user = await userInfoFetcher({ accessToken: googleOAuth.accessToken, requestTimeoutMs: 10_000 });
+          this.switchTransactions.requireRecovered(account.platform);
+          if ((user.id && account.providerAccountId && user.id !== account.providerAccountId) || user.email.trim().toLowerCase() !== account.email.trim().toLowerCase()) {
+            this.store.setCredentialState(account.id, "needs_review", "Antigravity credential identity mismatch");
+            throw new Error("Antigravity credential identity mismatch");
+          }
+          this.store.markCredentialVerified(account.id);
           return {
             state: "authorized",
             lastValidatedAt: now,
@@ -1325,10 +1383,29 @@ export class AccountManager extends EventEmitter {
           };
         } catch (error) {
           return {
-            state: "validation_failed",
+            state: classifyAuthValidationError(error),
             lastValidatedAt: now,
             errorReason: redactSensitiveText(error instanceof Error ? error.message : String(error))
           };
+        }
+      }
+      if (record?.credentials?.accessToken) {
+        const now = Math.floor(Date.now() / 1000);
+        try {
+          const user = await (this.dependencies.fetchAntigravityGoogleUserInfo ?? fetchAntigravityGoogleUserInfo)({
+            accessToken: record.credentials.accessToken, requestTimeoutMs: 10_000
+          });
+          this.switchTransactions.requireRecovered(account.platform);
+          if (user.email.trim().toLowerCase() !== account.email.trim().toLowerCase()
+            || (account.providerAccountId && user.id && user.id !== account.providerAccountId)) {
+            this.store.setCredentialState(account.id, "needs_review", "Credential identity mismatch");
+            throw new Error("Antigravity credential identity mismatch");
+          }
+          this.store.markCredentialVerified(account.id);
+          return { state: "authorized", lastValidatedAt: now, errorReason: null };
+        } catch (error) {
+          return { state: classifyAuthValidationError(error), lastValidatedAt: now,
+            errorReason: redactSensitiveText(error instanceof Error ? error.message : String(error)) };
         }
       }
       const status = getAntigravityProfileStatus(this.getAntigravityPathInputForAccount(account));
@@ -1340,7 +1417,9 @@ export class AccountManager extends EventEmitter {
     try {
       const result = await validateCodexAuthState({
         readAccount: async (refreshToken) => {
-          const response = await client.readAccount(refreshToken);
+          // Копия активного профиля не должна ротировать токен работающего Desktop.
+          const response = await client.readAccount(refreshToken && !account.isActive);
+          this.switchTransactions.requireRecovered(account.platform);
           const identity = getAccountIdentity(response.account, account.authMode ?? "chatgpt");
           if (!matchesCodexAccountIdentity(identity, account)
             || !matchesCodexAuthMaterial(inspectCodexAuthJson(readStableAuthJson(getAuthFilePath(account.profileDir))), account)) {
@@ -1350,9 +1429,10 @@ export class AccountManager extends EventEmitter {
         },
         expectedAuthMode: account.authMode ?? "chatgpt"
       });
+      this.switchTransactions.requireRecovered(account.platform);
       if (result.state === "authorized") {
-        this.store.setCredentialState(account.id, "ready", null);
-        this.syncProfileAuthToVault(account);
+        this.store.markCredentialVerified(account.id);
+        this.syncProfileAuthToVault(account, true);
         this.refreshBackoff.recordSuccess(account.id);
       } else if (["expired", "revoked", "needs_reauth"].includes(result.state)) {
         this.store.setCredentialState(account.id, "needs_reauth", result.errorReason);
@@ -1370,31 +1450,11 @@ export class AccountManager extends EventEmitter {
     await this.syncActiveAntigravitySession();
 
     const accounts = this.store.list();
-    const refreshed: ManagedAccount[] = [];
-    for (const account of accounts) {
-      if (options.excludeAccountIds?.has(account.id)) {
-        refreshed.push(this.store.get(account.id) ?? account);
-        continue;
-      }
-      if (account.platform === "codex" && account.status === "error" && isCodexProfileLoginError(account.statusReason ?? "")) {
-        refreshed.push(account);
-        continue;
-      }
-      if (this.refreshBackoff.getBlockedReason(account.id)) {
-        refreshed.push(this.store.get(account.id) ?? account);
-        continue;
-      }
-      try {
-        refreshed.push(await this.refreshAccount(account.id));
-      } catch (error) {
-        this.emitLog(`Auto-refresh failed for ${account.email}: ${error instanceof Error ? error.message : String(error)}`);
-        refreshed.push(this.store.get(account.id) ?? account);
-      }
-    }
-
-    this.syncActiveCodexSession();
-    await this.syncActiveAntigravitySession();
-
+    await Promise.all(accounts.filter((account) => !options.excludeAccountIds?.has(account.id)
+      && !this.refreshBackoff.getBlockedReason(account.id)).map(async (account) => {
+      try { await this.refreshAccount(account.id); }
+      catch (error) { if (!(error instanceof Error && error.name === "AbortError")) this.emitLog(error); }
+    }));
     return this.store.list();
   }
 
@@ -1410,8 +1470,15 @@ export class AccountManager extends EventEmitter {
   }
 
   async prepareSwitchAccount(accountId: string): Promise<SwitchPreparationResult> {
+    const account = this.store.get(accountId);
+    if (!account) throw new Error("Account not found");
+    return this.operationLock.runExclusive("provider:" + account.platform, () => this.prepareSwitchAccountUnlocked(accountId));
+  }
+
+  private async prepareSwitchAccountUnlocked(accountId: string): Promise<SwitchPreparationResult> {
     let target = this.store.get(accountId);
     if (!target) throw new Error("Account not found");
+    this.switchTransactions.requireRecovered(target.platform);
     if (target.platform === "codex") {
       if (this.hasPendingReauthentication(target.id)) {
         throw new Error("The target Codex profile is still being reauthenticated. Finish the current sign-in before switching.");
@@ -1462,6 +1529,10 @@ export class AccountManager extends EventEmitter {
   }
 
   cancelSwitch(transactionId: string): SwitchTransaction {
+    const tx = this.switchTransactions.get(transactionId);
+    if (tx && ["failed", "aborted", "committed", "rolled_back", "recovery_required"].includes(tx.phase)) {
+      return tx;
+    }
     return this.switchTransactions.cancel(transactionId);
   }
 
@@ -1474,6 +1545,14 @@ export class AccountManager extends EventEmitter {
   }
 
   async recoverInterruptedSwitches(): Promise<SwitchTransaction[]> {
+    return this.operationLock.runExclusive(["provider:codex", "provider:antigravity"], () =>
+      this.crossProcessSwitchLock.runExclusive("startup-recovery", async () => {
+        try { return await this.recoverInterruptedSwitchesUnlocked(); }
+        finally { this.createDurableAuthBundleService().cleanupOrphanedTransientFiles(); }
+      }));
+  }
+
+  private async recoverInterruptedSwitchesUnlocked(): Promise<SwitchTransaction[]> {
     const recovered: SwitchTransaction[] = [];
     const interrupted = this.switchTransactions.list(100).filter((transaction) =>
       transaction.status === "pending"
@@ -1489,14 +1568,25 @@ export class AccountManager extends EventEmitter {
         "quiescing"
       ].includes(transaction.phase);
       if (preWrite) {
-        recovered.push(this.switchTransactions.cancel(transaction.id));
+        const cancelled = this.switchTransactions.cancel(transaction.id);
+        this.finishInterruptedAntigravityEvent(cancelled);
+        recovered.push(cancelled);
         continue;
       }
       if (transaction.platform !== "codex") {
-        recovered.push(this.switchTransactions.advanceById(transaction.id, "recovery_required", {
-          errorCode: "INTERRUPTED_PROVIDER_RECOVERY",
-          errorMessage: "Interrupted provider activation requires explicit recovery."
-        }));
+        if (transaction.backupPath) {
+          try { await this.rollbackTransaction(transaction); }
+          catch (error) { this.emitLog(error); }
+          const result = this.switchTransactions.get(transaction.id)!;
+          this.finishInterruptedAntigravityEvent(result);
+          recovered.push(result);
+        } else {
+          const result = this.switchTransactions.advanceById(transaction.id, "recovery_required", {
+            errorCode: "INTERRUPTED_PROVIDER_RECOVERY", errorMessage: "Interrupted provider activation has no verified snapshot."
+          });
+          this.finishInterruptedAntigravityEvent(result);
+          recovered.push(result);
+        }
         continue;
       }
 
@@ -1520,6 +1610,8 @@ export class AccountManager extends EventEmitter {
         if (
           transaction.previousFingerprint
           && activeFingerprint === transaction.previousFingerprint
+          && manifestExists
+          && this.createDurableAuthBundleService().verifyPreviousFiles(backupPath)
         ) {
           const previous = transaction.previousAccountId
             ? this.store.get(transaction.previousAccountId)
@@ -1543,7 +1635,7 @@ export class AccountManager extends EventEmitter {
           }
           const diagnostics = await this.desktopLifecycle?.getDiagnostics?.();
           if (this.desktopLifecycle && diagnostics?.selected) {
-            await this.desktopLifecycle.launchAndWaitReady(diagnostics.selected);
+            await this.desktopLifecycle.launchAndWaitReady(diagnostics.selected, { allowExistingRoot: true });
           }
           current = this.switchTransactions.get(transaction.id) ?? current;
           if (current.phase === "launching") {
@@ -1552,6 +1644,11 @@ export class AccountManager extends EventEmitter {
           const target = this.store.get(transaction.targetAccountId);
           if (!target) throw new Error("Interrupted switch target account no longer exists");
           await this.verifyActiveCodexAccount(target);
+          this.switchTransactions.setVerification(current.id, {
+            profileApplied: true, credentials: "probe_observed", credentialMethod: "codex.app_server.independent_probe",
+            launch: "not_requested", runtime: "unsupported", runtimeSource: null, observedEmail: null,
+            observedAt: null, runtimePid: null, message: "Аккаунт работающей IDE не подтверждён"
+          });
           const finalized = this.switchTransactions.finalizeWithActiveAccount(
             current.id,
             "committed",
@@ -1628,6 +1725,22 @@ export class AccountManager extends EventEmitter {
     return recovered;
   }
 
+  private finishInterruptedAntigravityEvent(transaction: SwitchTransaction): void {
+    if (transaction.platform !== "antigravity") return;
+    const event = this.store.getSwitchEvent(transaction.id);
+    if (!event || event.status !== "running") return;
+    this.store.recordSwitchEvent({
+      id: event.id,
+      accountId: event.accountId,
+      previousAccountId: event.previousAccountId,
+      startedAt: event.startedAt,
+      completedAt: Math.floor(Date.now() / 1000),
+      status: transaction.status === "rolled_back" ? "rolled_back" : "failed",
+      error: transaction.errorMessage,
+      backupPath: transaction.backupPath
+    });
+  }
+
   private finishRecoveredRollback(
     transaction: SwitchTransaction,
     previousAccountId: string | null
@@ -1684,6 +1797,8 @@ export class AccountManager extends EventEmitter {
   async switchAccount(accountId: string, transactionId?: string): Promise<ManagedAccount> {
     const account = this.store.get(accountId);
     if (!account) throw new Error("Account not found");
+    this.switchTransactions.requireRecovered(account.platform);
+    this.cancelAccountRefresh(account.id);
     const current = this.switchInFlight.get(account.platform);
     if (current) {
       if (current.accountId === accountId) return current.promise;
@@ -1700,19 +1815,29 @@ export class AccountManager extends EventEmitter {
     const execute = async () => {
       const prepared = transactionId
         ? this.switchTransactions.get(transactionId)
-        : (await this.prepareSwitchAccount(accountId)).transaction;
+        : (await this.prepareSwitchAccountUnlocked(accountId)).transaction;
       if (!prepared) throw new Error("Prepared switch transaction not found");
       activeTransactionId = prepared.id;
       if (account.platform === "codex" && this.hasPendingReauthentication(account.id)) {
         throw new Error("The target Codex profile is still being reauthenticated. Finish the current sign-in before switching.");
       }
+      if (prepared.targetAccountId !== accountId || prepared.platform !== account.platform) {
+        throw new Error("Prepared switch does not match the requested account");
+      }
+      if (account.platform === "antigravity") {
+        const previous = this.store.list().find((item) => item.platform === account.platform && item.isActive);
+        if (prepared.previousAccountId !== (previous?.id ?? null)) {
+          throw new Error("The active Antigravity profile changed. Confirm the switch again.");
+        }
+        if (this.store.get(accountId)?.credentialState !== "ready") {
+          throw new Error("The Antigravity profile must be verified before switching.");
+        }
+      }
       this.switchTransactions.begin(prepared.id, accountId);
       return this.performSwitchAccount(accountId, prepared.id);
     };
     const promise = this.operationLock.runExclusive(`provider:${account.platform}`, () =>
-      account.platform === "codex"
-        ? this.crossProcessSwitchLock.runExclusive(`switch:${accountId}`, execute)
-        : execute()
+      this.crossProcessSwitchLock.runExclusive(`switch:${accountId}`, execute)
     ).catch((error) => {
       if (activeTransactionId) {
         this.failSwitchTransactionIfActive(
@@ -1733,107 +1858,132 @@ export class AccountManager extends EventEmitter {
     const account = this.store.get(accountId);
     if (!account) throw new Error("Account not found");
     if (account.platform === "antigravity") {
-      const eventId = crypto.randomUUID();
+      const eventId = transactionId;
       const startedAt = Math.floor(Date.now() / 1000);
       const previousAccountId = this.store.list().find((item) => item.platform === "antigravity" && item.isActive)?.id ?? null;
-      this.store.recordSwitchEvent({
-        id: eventId,
-        accountId,
-        previousAccountId,
-        startedAt,
-        completedAt: null,
-        status: "running",
-        error: null,
-        backupPath: null
-      });
+      let backup: AntigravityProfileBackupManifest | null = null;
+      let stopped: AntigravityAsyncProcessInput | null = null;
+      this.store.recordSwitchEvent({ id: eventId, accountId, previousAccountId, startedAt,
+        completedAt: null, status: "running", error: null, backupPath: null });
       try {
-        this.switchTransactions.advanceById(transactionId, "activating");
-        let record = this.readAntigravityVaultRecord(account);
-
-        if (record.googleOAuth) {
-          const fresh = await this.ensureAntigravityGoogleTokenFresh(account, record);
-          record = fresh.record;
-        }
-
-        const quiesceResult = this.quiesceAntigravityRuntime(account);
-        if (quiesceResult.wasRunning) {
-          this.emitLog(`Antigravity IDE quiesced for account switch: ${quiesceResult.reason}`);
-        }
-
+        const record = this.readAntigravityVaultRecord(account);
         const pathInput = this.getAntigravityPathInputForAccount(account);
-        cleanAntigravitySessionCache(pathInput);
-        const profileStatus = getAntigravityProfileStatus(pathInput);
-        const applyResult = record.credentials
-          ? profileStatus.readyForWriteActions
-            ? applyAntigravityAccountWritePlan({
-              ...pathInput,
-              backupRoot: path.join(this.appDataDir, "antigravity-backups"),
-              credentials: record.credentials
-            })
-            : null
-          : record.googleOAuth
-            ? this.writeAntigravityGoogleIdeProfile(record.googleOAuth, account)
-            : null;
-        const credentialStoreResult = record.googleOAuth
-          ? this.writeAntigravityGoogleCredentialStore(record.googleOAuth, account)
-          : record.credentials
-            ? this.writeAntigravityCredentialPackageStore(record.credentials, account)
-          : null;
-
-        this.switchTransactions.advanceById(transactionId, "launching", {
-          backupPath: applyResult?.backupDir ?? null
-        });
-
-        const restartResult = (credentialStoreResult?.applied || applyResult?.applied || quiesceResult.wasRunning)
-          ? this.launchAntigravityRuntime(account, quiesceResult.wasRunning)
-          : null;
-
-        this.switchTransactions.advanceById(transactionId, "verifying");
-        const saved = this.switchTransactions.finalizeWithActiveAccount(
-          transactionId,
-          "committed",
-          accountId,
-          { backupPath: applyResult?.backupDir ?? null }
-        ).account;
-        this.store.recordSwitchEvent({
-          id: eventId,
-          accountId,
-          previousAccountId,
-          startedAt,
-          completedAt: Math.floor(Date.now() / 1000),
-          status: "completed",
-          error: null,
-          backupPath: applyResult?.backupDir ?? null
-        });
-        if (applyResult) {
-          this.emitLog(
-            `Antigravity profile switched: ${applyResult.summary.email}. StateKeys=${applyResult.summary.stateKeys.length} StorageKeys=${applyResult.summary.storageKeys.length} Backup=${applyResult.backupId}`
-          );
-        } else if (record.googleOAuth) {
-          this.emitLog(
-            credentialStoreResult?.applied
-              ? `Antigravity Google OAuth account selected: ${record.googleOAuth.email}. OS credential store updated for Antigravity. Relaunch=${restartResult?.restarted ? "ok" : "skipped"}`
-              : `Antigravity Google OAuth account selected: ${record.googleOAuth.email}. OS credential store was not updated.`
-          );
-          if (restartResult && !restartResult.restarted) {
-            this.emitLog(`Antigravity relaunch after switch was not completed: ${restartResult.reason}`);
-          }
-        } else {
-          this.emitLog(`Antigravity local profile selected: ${record.localProfile?.email ?? record.localProfile?.label ?? account.label}. Official session remains managed by Antigravity.`);
+        const hub = resolveAntigravityPaths({ ...pathInput, target: "hub" });
+        const preferredTarget = pathInput.target ?? (record.googleOAuth && fs.existsSync(hub.appStoragePath) ? "hub" : "ide");
+        const selected = await this.dependencies.resolveAntigravitySwitchTarget?.({ ...pathInput, target: preferredTarget });
+        const target = selected?.target ?? preferredTarget;
+        const runtimeInput = { ...pathInput, target, exePath: selected?.exePath };
+        if (target === "ide" && !getAntigravityProfileStatus(runtimeInput).readyForWriteActions) {
+          throw new Error("Antigravity IDE profile is not ready for safe writes");
         }
+        const { credentials, refreshed } = await this.getAntigravitySwitchCredentials(record);
+        const { accessToken, refreshToken } = credentials;
+        const needsCredentialStore = target === "hub" || canReadCurrentWindowsCredentialStore(pathInput)
+          || Boolean(this.dependencies.writeAntigravityCredentialStoreToken);
+        if (needsCredentialStore && (!this.dependencies.readAntigravityCredentialStorePayload
+          || !this.dependencies.writeAntigravityCredentialStoreToken || !this.dependencies.restoreAntigravityCredentialStorePayload)) {
+          throw new Error("Antigravity Credential Manager adapters are unavailable");
+        }
+        const verifyCredentials = this.dependencies.fetchAntigravityGoogleUserInfo ?? fetchAntigravityGoogleUserInfo;
+        const user = await verifyCredentials({ accessToken, requestTimeoutMs: 10_000 });
+        this.switchTransactions.requireRecovered(account.platform);
+        if (user.verifiedEmail === false || (account.providerAccountId && user.id && account.providerAccountId !== user.id)
+          || user.email.trim().toLowerCase() !== account.email.trim().toLowerCase()) {
+          this.store.setCredentialState(account.id, "needs_review", "Antigravity credential identity mismatch");
+          throw new Error("Antigravity credential identity mismatch");
+        }
+        if (refreshed) this.store.updateObservedAuthMaterial(account.id, this.vault.encryptUtf8(JSON.stringify(record)), true);
+        else this.store.markCredentialVerified(account.id);
+        if (this.switchTransactions.get(transactionId)?.phase !== "quiescing") throw new Error("Antigravity switch was cancelled");
+        const quiesced = await this.quiesceAntigravityRuntime(runtimeInput);
+        if (!quiesced.quiesced) throw new Error(`Antigravity could not be stopped: ${quiesced.reason}`);
+        const launchInput = { ...runtimeInput, exePath: quiesced.exePath ?? runtimeInput.exePath ?? null };
+        if (quiesced.wasRunning) stopped = launchInput;
+        const credentialSnapshot = needsCredentialStore
+          ? await this.captureAntigravityCredentialSnapshot(runtimeInput) : undefined;
+        this.switchTransactions.requireRecovered(account.platform);
+        const snapshot = createAntigravityProfileBackup({ ...runtimeInput,
+          backupRoot: path.join(this.appDataDir, "antigravity-backups"),
+          sealBackup: (contents) => this.vault.encryptUtf8(contents), credentialSnapshot,
+          runtime: { target, exePath: launchInput.exePath, wasRunning: quiesced.wasRunning } });
+        this.switchTransactions.advanceById(transactionId, "activating", { backupPath: snapshot.backupDir });
+        backup = snapshot;
+        this.store.recordSwitchEvent({ id: eventId, accountId, previousAccountId, startedAt,
+          completedAt: null, status: "running", error: null, backupPath: backup.backupDir });
+        if (target === "ide") {
+          const cleaned = cleanAntigravitySessionCache(runtimeInput);
+          if (cleaned.errors.length) throw new Error("Antigravity session cache could not be safely prepared");
+          const protection: AntigravityBackupProtection = {
+            existingBackup: backup, sealBackup: (contents) => this.vault.encryptUtf8(contents),
+            unsealBackup: (contents) => this.vault.decryptUtf8(contents), credentialSnapshot
+          };
+          const applied = applyAntigravityAccountWritePlan({ ...runtimeInput, ...protection,
+            backupRoot: path.join(this.appDataDir, "antigravity-backups"), credentials: {
+              ...credentials, googleProjectId: credentials.googleProjectId ?? account.antigravity?.googleProjectId ?? null
+            } });
+          if (!applied.applied) throw new Error("Antigravity profile was not applied");
+        }
+        if (needsCredentialStore) {
+          const storeResult = await this.dependencies.writeAntigravityCredentialStoreToken!(
+            { accessToken, refreshToken, expiresAt: credentials.expiresAt ?? null }, pathInput.platform);
+          if (!storeResult.applied) throw new Error("Antigravity Credential Manager write failed");
+          const readback = await this.dependencies.readAntigravityCredentialStorePayload!(pathInput.platform);
+          let material: { token?: { access_token?: string; refresh_token?: string } } | null;
+          try {
+            material = JSON.parse(readback?.payload ?? "null");
+          } catch {
+            throw new Error("Antigravity Credential Manager readback is invalid");
+          }
+          if (material?.token?.access_token !== accessToken || material.token?.refresh_token !== refreshToken) {
+            throw new Error("Antigravity Credential Manager readback mismatch");
+          }
+        }
+        this.switchTransactions.setVerification(transactionId, {
+          profileApplied: true, credentials: "online_verified", credentialMethod: "google.userinfo",
+          launch: "not_requested", runtime: "pending", runtimeSource: null, observedEmail: null,
+          observedAt: null, runtimePid: null, message: "Профиль записан и проверен"
+        });
+        this.switchTransactions.advanceById(transactionId, "launching", { backupPath: backup.backupDir });
+        const launched = await this.launchAntigravityRuntime(launchInput);
+        if (!launched.restarted) throw new Error("Antigravity launch failed: " + launched.reason);
+        this.switchTransactions.advanceById(transactionId, "verifying");
+        const runtime = await this.collectRuntimeEvidence(account, launchInput, launched);
+        const evidence: SwitchVerificationEvidence = { ...runtime, profileApplied: true,
+          credentials: "online_verified", credentialMethod: "google.userinfo",
+          launch: launched.windowObserved ? "window_observed" : "process_started" };
+        this.switchTransactions.setVerification(transactionId, evidence);
+        if (evidence.runtime === "mismatch") throw new Error(evidence.message);
+        const saved = this.switchTransactions.finalizeWithActiveAccount(transactionId, "committed", accountId,
+          { backupPath: backup.backupDir }).account;
+        this.store.recordSwitchEvent({ id: eventId, accountId, previousAccountId, startedAt,
+          completedAt: Math.floor(Date.now() / 1000), status: "completed", error: null, backupPath: backup.backupDir });
+        this.emitLog(evidence.message);
         return saved;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.store.recordSwitchEvent({
-          id: eventId,
-          accountId,
-          previousAccountId,
-          startedAt,
-          completedAt: Math.floor(Date.now() / 1000),
-          status: "failed",
-          error: message,
-          backupPath: null
-        });
+        const message = redactSensitiveText(error instanceof Error ? error.message : String(error));
+        if (this.switchTransactions.get(transactionId)?.status === "committed") {
+          this.emitLog(error);
+          return this.store.get(accountId)!;
+        }
+        if (
+          (error instanceof ProviderRequestError && error.requiresReauth)
+          || /invalid_grant|token expired|reauth|sign.?in required/i.test(message)
+        ) {
+          this.store.setCredentialState(accountId, "needs_reauth", message);
+          this.emit("accounts-updated");
+        }
+        if (backup) {
+          await this.rollbackTransaction(this.switchTransactions.get(transactionId)!, message).catch((rollbackError) => this.emitLog(rollbackError));
+        } else if (!backup && stopped) {
+          try {
+            const reopened = await this.launchAntigravityRuntime(stopped, false);
+            if (!reopened.restarted) throw new Error(reopened.reason);
+          } catch (launchError) {
+            this.emitLog(launchError);
+          }
+        }
+        this.store.recordSwitchEvent({ id: eventId, accountId, previousAccountId, startedAt,
+          completedAt: Math.floor(Date.now() / 1000), status: "failed", error: message, backupPath: backup?.backupDir ?? null });
         throw error;
       }
     }
@@ -1928,8 +2078,10 @@ export class AccountManager extends EventEmitter {
       backupPath: switchResult.backupPath
     });
     try {
+      let launchedPid: number | null = null;
       if (this.desktopLifecycle && quiesceResult?.identity) {
         const readiness = await this.desktopLifecycle.launchAndWaitReady(quiesceResult.identity);
+        launchedPid = readiness.rootPid;
         this.emitLog(
           `Launched exact desktop package ${readiness.identity.packageFullName}; visible root PID=${readiness.rootPid}.`
         );
@@ -1940,13 +2092,19 @@ export class AccountManager extends EventEmitter {
       }
       this.switchTransactions.advanceById(transactionId, "verifying");
       await this.verifyActiveCodexAccount(targetAccount);
+      this.switchTransactions.setVerification(transactionId, {
+        profileApplied: true, credentials: "probe_observed", credentialMethod: "codex.app_server.independent_probe",
+        launch: launchedPid ? "window_observed" : "not_requested", runtime: "unsupported", runtimeSource: null,
+        observedEmail: null, observedAt: null, runtimePid: launchedPid,
+        message: "Аккаунт работающей IDE не подтверждён"
+      });
       const saved = this.switchTransactions.finalizeWithActiveAccount(
         transactionId,
         "committed",
         accountId,
         { backupPath: switchResult.backupPath }
       ).account;
-      this.emitLog(`Codex switch committed after desktop readiness and official identity verification: ${accountId}.`);
+      this.emitLog(`Codex profile committed; independent credentials probe checked, Desktop account unconfirmed: ${accountId}.`);
       return saved;
     } catch (error) {
       await this.rollbackFailedCodexRelaunch({
@@ -2028,6 +2186,99 @@ export class AccountManager extends EventEmitter {
       throw new Error(`Codex switch failed and automatic rollback requires recovery: ${rollbackMessage}`, {
         cause: rollbackError
       });
+    }
+  }
+
+  private async collectRuntimeEvidence(
+    account: ManagedAccount,
+    input: AntigravityAsyncProcessInput = this.getAntigravityPathInputForAccount(account),
+    launched?: AntigravityRestartResult
+  ): Promise<SwitchVerificationEvidence> {
+    const base: SwitchVerificationEvidence = {
+      profileApplied: account.runtimeVerification?.profileApplied ?? false,
+      credentials: account.runtimeVerification?.credentials ?? "not_checked",
+      credentialMethod: account.runtimeVerification?.credentialMethod ?? null,
+      launch: account.runtimeVerification?.launch ?? "not_requested",
+      runtime: "unsupported", runtimeSource: null, observedEmail: null, observedAt: null, runtimePid: null,
+      message: "Аккаунт работающей IDE не подтверждён"
+    };
+    if (account.platform === "codex") return base;
+    const verify = this.dependencies.verifyAntigravityRuntimeIdentity ?? verifyAntigravityRuntimeIdentity;
+    const expectedIde = launched?.pid && launched.creationTime ? { pid: launched.pid, creationTime: launched.creationTime } : undefined;
+    const runtimeInput = { ...input, exePath: launched?.exePath ?? input.exePath, expectedIde };
+    let evidence = await verify(account.email, runtimeInput);
+    if (expectedIde) {
+      for (const wait of [350, 800]) {
+        if (evidence.runtime === "verified") break;
+        await delay(wait);
+        const next = await verify(account.email, runtimeInput);
+        if (evidence.runtime !== "mismatch" || next.runtime !== "unsupported") evidence = next;
+      }
+    }
+    return { ...base, ...evidence,
+      message: input.target === "hub" && evidence.runtime === "unsupported" && !this.dependencies.verifyAntigravityRuntimeIdentity
+        ? "Аккаунт записан в Windows. Подтвердить активный сеанс Antigravity пока не удалось"
+        : evidence.message };
+  }
+
+  async verifyRuntimeAccount(accountId: string): Promise<SwitchVerificationEvidence> {
+    const requested = this.store.get(accountId);
+    if (!requested) throw new Error("Account not found");
+    return this.operationLock.runExclusive("provider:" + requested.platform, async () => {
+      this.switchTransactions.requireRecovered(requested.platform);
+      const account = this.store.get(accountId);
+      if (!account?.isActive) throw new Error("Runtime verification requires the currently selected profile");
+      const latest = this.switchTransactions.list(100).find((item) => item.platform === account.platform && item.backupPath);
+      const transaction = latest?.targetAccountId === account.id && latest.status === "committed" ? latest : null;
+      const runtime = account.platform === "antigravity" && transaction?.backupPath
+        ? this.readAntigravityRollbackManifest(transaction.backupPath).runtime : undefined;
+      const evidence = await this.collectRuntimeEvidence(account, {
+        ...this.getAntigravityPathInputForAccount(account), target: runtime?.target, exePath: runtime?.exePath
+      });
+      const current = this.store.get(accountId);
+      this.switchTransactions.requireRecovered(account.platform);
+      if (!current?.isActive || current.version !== account.version) {
+        throw new Error("Profile changed during runtime verification; retry for the selected profile");
+      }
+      if (transaction) this.switchTransactions.setVerification(transaction.id, evidence);
+      else this.store.setRuntimeVerification(account.id, evidence);
+      if (evidence.runtime === "mismatch" && transaction?.backupPath) {
+        await this.crossProcessSwitchLock.runExclusive("runtime-rollback:" + transaction.id, () => this.rollbackTransaction(transaction));
+      }
+      this.emit("accounts-updated");
+      return evidence;
+    });
+  }
+
+  private async captureAntigravityCredentialSnapshot(input: AntigravityPathInput): Promise<AntigravityCredentialSnapshot> {
+    const result = await this.dependencies.readAntigravityCredentialStorePayload!(input.platform);
+    return { existed: result !== null, value: result?.payload ?? null };
+  }
+
+  private readAntigravityRollbackManifest(backupDir: string): AntigravityProfileBackupManifest {
+    const root = path.join(this.appDataDir, "antigravity-backups");
+    const manifest = readAntigravityBackupManifest(assertManagedPath(root, backupDir));
+    if (manifest.version !== 2 || !manifest.sealedManifest) {
+      throw new Error("Legacy Antigravity backup has no authenticated full snapshot; recovery inspection is required");
+    }
+    verifySealedAntigravityBackupManifest(manifest, (sealed) => this.vault.decryptUtf8(sealed));
+    if (manifest.backupDir !== backupDir) throw new Error("Antigravity rollback snapshot location does not match the transaction");
+    return manifest;
+  }
+
+  private async restoreAntigravityBackup(manifest: AntigravityProfileBackupManifest, input: AntigravityPathInput): Promise<void> {
+    if ((input.target === "hub" || canReadCurrentWindowsCredentialStore(input)) && !manifest.credentialSnapshot) {
+      throw new Error("Antigravity rollback snapshot has no Credential Manager state");
+    }
+    if (manifest.credentialSnapshot && !this.dependencies.restoreAntigravityCredentialStorePayload) {
+      throw new Error("Credential Manager rollback adapter is unavailable");
+    }
+    const restored = restoreAntigravityProfileBackup(manifest, {
+      unsealBackup: (sealed) => this.vault.decryptUtf8(sealed), pathInput: input,
+      backupRoot: path.join(this.appDataDir, "antigravity-backups")
+    });
+    if (restored.credentialSnapshot) {
+      await this.dependencies.restoreAntigravityCredentialStorePayload!(restored.credentialSnapshot);
     }
   }
 
@@ -2167,12 +2418,7 @@ export class AccountManager extends EventEmitter {
 
     if (accountResponse?.account) {
       const identity = getAccountIdentity(accountResponse.account, matched.authMode ?? "chatgpt");
-      const stableProviderMatch = Boolean(
-        metadata.providerAccountId
-        && matched.providerAccountId === metadata.providerAccountId
-        && matched.workspaceAccountId === metadata.workspaceAccountId
-      );
-      if (!stableProviderMatch && !matchesCodexAccountIdentity(identity, matched)) {
+      if (!matchesCodexAccountIdentity(identity, matched)) {
         throw new Error("The current Codex identity does not match the managed profile metadata");
       }
     }
@@ -2347,85 +2593,101 @@ export class AccountManager extends EventEmitter {
 
   async rollbackSwitch(eventId: string): Promise<SwitchHistoryItem[]> {
     const event = this.store.getSwitchEvent(eventId);
-    if (!event) throw new Error("Switch event not found");
-    if (!event.backupPath) throw new Error("Switch event does not have a backup file");
-    if (!fs.existsSync(event.backupPath)) throw new Error("Switch backup file is missing");
-    if (fs.statSync(event.backupPath).isDirectory()) {
-      const durableManifestPath = path.join(event.backupPath, "manifest.json");
-      let isDurableCodexManifest = false;
-      try {
-        const candidate = JSON.parse(fs.readFileSync(durableManifestPath, "utf8")) as { format?: unknown };
-        isDurableCodexManifest = candidate.format === "one.egoist.codex-account-manager.auth-activation";
-      } catch {
-        isDurableCodexManifest = false;
-      }
-      if (isDurableCodexManifest) {
-        const switchService = new SwitchService({
-          codexHome: this.getGlobalCodexHome(),
-          sealBackup: (contents) => this.vault.encryptUtf8(contents),
-          unsealBackup: (ciphertext) => this.vault.decryptUtf8(ciphertext),
-          afterWrite: async () => undefined,
-          recordEvent: async () => undefined
-        });
-        await switchService.rollback(event.backupPath);
-        const restoredAccountId = event.previousAccountId;
-        if (restoredAccountId && this.store.get(restoredAccountId)?.platform === "codex") {
-          this.store.setActive(restoredAccountId);
+    if (!event?.backupPath || !fs.existsSync(event.backupPath)) throw new Error("Switch backup is unavailable");
+    const target = this.store.get(event.accountId);
+    if (!target) throw new Error("Switch target profile is unavailable");
+    return this.operationLock.runExclusive("provider:" + target.platform, () =>
+      this.crossProcessSwitchLock.runExclusive("rollback:" + eventId, async () => {
+        const transaction = this.switchTransactions.list(100).find((item) => item.platform === target.platform && item.backupPath);
+        if (!transaction || transaction.backupPath !== event.backupPath || transaction.targetAccountId !== event.accountId
+          || !["committed", "recovery_required"].includes(transaction.status)) {
+          throw new Error("Only the latest applied provider snapshot can be restored. Historical or incomplete backups require inspection.");
         }
-        this.store.recordSwitchEvent({
-          id: crypto.randomUUID(),
-          accountId: restoredAccountId ?? event.accountId,
-          previousAccountId: event.accountId,
-          startedAt: Math.floor(Date.now() / 1000),
-          completedAt: Math.floor(Date.now() / 1000),
-          status: "rolled_back",
-          error: null,
-          backupPath: event.backupPath
-        });
-        this.emitLog(`Rolled back the durable Codex auth bundle from ${event.backupPath}.`);
+        const selected = this.store.get(transaction.targetAccountId);
+        if (transaction.status !== "recovery_required" && !selected?.isActive) {
+          throw new Error("The selected provider profile changed after this snapshot. Inspect recovery before restoring it.");
+        }
+        await this.rollbackTransaction(transaction);
+        this.store.recordSwitchEvent({ id: crypto.randomUUID(), accountId: event.previousAccountId ?? event.accountId,
+          previousAccountId: event.accountId, startedAt: Math.floor(Date.now() / 1000),
+          completedAt: Math.floor(Date.now() / 1000), status: "rolled_back", error: null, backupPath: event.backupPath });
+        this.emit("accounts-updated");
         return this.getSwitchHistory();
-      }
-      restoreAntigravityBackupDir(event.backupPath);
-      if (event.previousAccountId && this.store.get(event.previousAccountId)?.platform === "antigravity") {
-        this.store.setActive(event.previousAccountId);
-      }
-      this.store.recordSwitchEvent({
-        id: crypto.randomUUID(),
-        accountId: event.previousAccountId ?? event.accountId,
-        previousAccountId: event.accountId,
-        startedAt: Math.floor(Date.now() / 1000),
-        completedAt: Math.floor(Date.now() / 1000),
-        status: "rolled_back",
-        error: null,
-        backupPath: event.backupPath
-      });
-      this.emitLog(`Rolled back Antigravity profile from ${event.backupPath}.`);
-      return this.getSwitchHistory();
-    }
+      })
+    );
+  }
 
-    const authPath = getAuthJsonPath(this.getGlobalCodexHome());
-    fs.mkdirSync(path.dirname(authPath), { recursive: true });
-    const currentAuthJson = fs.existsSync(authPath) ? readStableAuthJson(authPath) : null;
-    backupFile(authPath);
-    fs.copyFileSync(event.backupPath, authPath);
-    const restoredAuthJson = readStableAuthJson(authPath);
-    const syncedFiles = syncCodexGlobalState(this.getGlobalCodexHome(), restoredAuthJson, currentAuthJson);
-    const restoredAccountId = getAuthAccountId(restoredAuthJson) ?? event.previousAccountId;
-    if (restoredAccountId && this.store.get(restoredAccountId)?.platform === "codex") {
-      this.store.setActive(restoredAccountId);
+  private async rollbackTransaction(transaction: SwitchTransaction, activationError?: string): Promise<void> {
+    if (!transaction.backupPath) throw new Error("Rollback snapshot is unavailable");
+    const target = this.store.get(transaction.targetAccountId);
+    const previous = transaction.previousAccountId ? this.store.get(transaction.previousAccountId) : null;
+    if (!target) throw new Error("Rollback target metadata is unavailable");
+    const current = ["committed", "recovery_required"].includes(transaction.status)
+      ? this.switchTransactions.beginRollback(transaction.id)
+      : transaction.phase === "rolling_back" ? transaction : this.switchTransactions.advanceById(transaction.id, "rolling_back",
+        activationError ? { errorCode: "ANTIGRAVITY_ACTIVATION_FAILED", errorMessage: activationError } : {});
+    let previousEvidence: SwitchVerificationEvidence | null = null;
+    try {
+      if (current.platform === "antigravity") {
+        const manifest = this.readAntigravityRollbackManifest(current.backupPath!);
+        const runtimeInput = { ...this.getAntigravityPathInputForAccount(target),
+          target: manifest.runtime?.target, exePath: manifest.runtime?.exePath };
+        const stopped = await this.quiesceAntigravityRuntime(runtimeInput);
+        if (!stopped.quiesced) throw new Error(`Antigravity rollback could not stop the application: ${stopped.reason}`);
+        await this.restoreAntigravityBackup(manifest, runtimeInput);
+        const shouldReopen = manifest.runtime
+          ? manifest.runtime.wasRunning || (!activationError && stopped.wasRunning)
+          : Boolean(previous) || stopped.wasRunning;
+        if (shouldReopen) {
+          const launchInput = { ...runtimeInput, target: runtimeInput.target ?? stopped.target,
+            exePath: stopped.exePath ?? runtimeInput.exePath };
+          const launched = await this.launchAntigravityRuntime(launchInput);
+          if (!launched.restarted) throw new Error(`Antigravity rollback launch failed: ${launched.reason}`);
+          if (previous) {
+            const evidence = await this.collectRuntimeEvidence(previous, launchInput, launched);
+            if (evidence.runtime === "mismatch") throw new Error("Antigravity rollback identity mismatch");
+            previousEvidence = { ...evidence, profileApplied: true, launch: launched.windowObserved ? "window_observed" : "process_started" };
+          }
+        }
+      } else {
+        const stopped = await this.desktopLifecycle?.quiesce("exact-tree-fallback");
+        if (stopped && !["not-running", "quiesced"].includes(stopped.status)) throw new Error("Codex rollback could not stop Desktop");
+        const service = this.createCodexSwitchService();
+        if (fs.statSync(current.backupPath!).isDirectory()) await service.rollback(current.backupPath!);
+        else {
+          const authJson = readStableAuthJson(current.backupPath!);
+          const activePath = getAuthJsonPath(this.getGlobalCodexHome());
+          const active = fs.existsSync(activePath) ? readStableAuthJson(activePath) : null;
+          await service.switchTo({ transactionId: crypto.randomUUID(), accountId: previous?.id ?? target.id,
+            previousAccountId: target.id, expectedAuthAccountId: getAuthAccountId(authJson), authJson,
+            compatibilityFiles: buildCodexCompatibilityFiles(this.getGlobalCodexHome(), authJson, active) });
+        }
+        let pid: number | null = null;
+        if (this.desktopLifecycle && stopped?.identity) pid = (await this.desktopLifecycle.launchAndWaitReady(stopped.identity)).rootPid;
+        if (previous) {
+          await this.verifyActiveCodexAccount(previous);
+          previousEvidence = { profileApplied: true, credentials: "probe_observed",
+            credentialMethod: "codex.app_server.independent_probe", launch: pid ? "window_observed" : "not_requested",
+            runtime: "unsupported", runtimeSource: null, observedEmail: null, observedAt: null, runtimePid: pid,
+            message: "Аккаунт работающей IDE не подтверждён" };
+        }
+      }
+      const details = { backupPath: current.backupPath,
+        ...(activationError ? { errorCode: "ANTIGRAVITY_ROLLED_BACK", errorMessage: activationError } : {}) };
+      this.store.setRuntimeVerification(target.id, null);
+      if (previous) this.switchTransactions.finalizeWithActiveAccount(current.id, "rolled_back", previous.id,
+        details);
+      else {
+        this.store.clearActive(current.platform);
+        this.switchTransactions.advanceById(current.id, "rolled_back", details);
+      }
+      if (previous) this.store.setRuntimeVerification(previous.id, previousEvidence);
+    } catch (error) {
+      this.switchTransactions.advanceById(current.id, "recovery_required", { backupPath: current.backupPath,
+        errorCode: activationError ? "ANTIGRAVITY_RECOVERY_REQUIRED" : "MANUAL_ROLLBACK_FAILED",
+        errorMessage: redactSensitiveText(error instanceof Error ? error.message : String(error)) });
+      throw error;
     }
-    this.store.recordSwitchEvent({
-      id: crypto.randomUUID(),
-      accountId: restoredAccountId ?? event.previousAccountId ?? event.accountId,
-      previousAccountId: event.accountId,
-      startedAt: Math.floor(Date.now() / 1000),
-      completedAt: Math.floor(Date.now() / 1000),
-      status: "rolled_back",
-      error: null,
-      backupPath: event.backupPath
-    });
-    this.emitLog(`Rolled back Codex auth from ${event.backupPath}. Synced ${syncedFiles} global state file(s).`);
-    return this.getSwitchHistory();
   }
 
   getSchemaVersion(): number {
@@ -2445,10 +2707,19 @@ export class AccountManager extends EventEmitter {
   }
 
   async deleteAccount(accountId: string): Promise<void> {
+    const selected = this.store.get(accountId);
+    if (!selected) return;
+    return this.operationLock.runExclusive("provider:" + selected.platform, () => this.deleteAccountUnlocked(accountId));
+  }
+
+  private async deleteAccountUnlocked(accountId: string): Promise<void> {
+    this.cancelAccountRefresh(accountId);
     const account = this.store.get(accountId);
-    if (account?.isActive) throw new Error("Active account must be switched before deletion");
-    if (account?.profileDir && account.profileDir.startsWith(this.appDataDir) && fs.existsSync(account.profileDir)) {
-      fs.rmSync(account.profileDir, { recursive: true, force: true });
+    if (account) this.switchTransactions.requireRecovered(account.platform);
+    if (account?.isActive) throw new Error("Selected account must be switched before deletion");
+    if (account?.platform === "codex" && fs.existsSync(account.profileDir)) {
+      const owned = assertManagedPath(getProfilesDir(this.appDataDir), account.profileDir);
+      fs.rmSync(owned, { recursive: true, force: true });
     }
     this.store.delete(accountId);
   }
@@ -2500,120 +2771,137 @@ export class AccountManager extends EventEmitter {
     return { exportedCount: records.length, filePath };
   }
 
-  async importAccounts(filePath: string, passphrase: string): Promise<AccountImportResult> {
+  previewImport(filePath: string, passphrase: string): AccountImportPreview {
+    const stat = fs.lstatSync(filePath);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024 * 1024) throw new Error("Import requires a regular account export file up to 64 MiB");
     const payload = decryptPortablePayload(fs.readFileSync(filePath, "utf8"), passphrase);
-    const imported: ManagedAccount[] = [];
-    for (const account of payload.accounts) {
-      if (!account.id || !account.email) {
-        throw new Error("Account export contains an invalid account entry");
+    const finiteTime = z.number().finite().nonnegative().nullable().optional();
+    const schema = z.object({
+      id: z.string().min(1).max(1024), platform: z.enum(["codex", "antigravity"]).optional(),
+      email: z.string().trim().min(1).max(320), label: z.string().max(512).optional(),
+      planType: z.string().max(128).nullable().optional(),
+      authJson: z.string().max(maximumAuthJsonBytes).optional(),
+      antigravityVaultJson: z.string().max(maximumAuthJsonBytes).optional(),
+      notes: z.string().max(65536).nullable().optional(),
+      createdAt: finiteTime, updatedAt: finiteTime, lastUsedAt: finiteTime,
+      lastRefreshAt: finiteTime, subscriptionEndsAt: finiteTime,
+      rateLimitJson: z.string().max(maximumAuthJsonBytes).nullable().optional()
+    }).passthrough();
+    const accounts = z.array(schema).max(2000).parse(payload.accounts);
+    const records: AccountExportRecord[] = [];
+    const entries: AccountImportPreview["entries"] = [];
+    const identities = new Set(this.store.list().flatMap((account) => this.importIdentities(account)));
+    const now = Math.floor(Date.now() / 1000);
+    for (const item of accounts) {
+      const platform = item.platform ?? "codex";
+      let metadata: ReturnType<typeof inspectCodexAuthJson> | null = null;
+      let vaultRecord: AntigravityVaultRecord | null = null;
+      if (platform === "codex") {
+        if (!item.authJson) throw new Error("Codex export entry is missing credentials");
+        const parsed: unknown = JSON.parse(item.authJson);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Codex credentials must be a JSON object");
+        metadata = inspectCodexAuthJson(item.authJson);
+        if (!metadata.inferredAuthMode) throw new Error("Codex export entry has no usable credential material");
+        if (metadata.email && metadata.email.toLowerCase() !== item.email.toLowerCase()) throw new Error("Export email does not match Codex credential material");
+      } else {
+        if (!item.antigravityVaultJson) throw new Error("Antigravity export entry is missing credentials");
+        const parsed: unknown = JSON.parse(item.antigravityVaultJson);
+        const recordSchema = z.object({
+          format: z.literal(antigravityVaultFormat), version: z.literal(antigravityVaultVersion),
+          authMode: z.enum(["manual_credentials", "local_profile", "google_oauth"]).optional(),
+          credentials: z.object({
+            accountId: z.string().min(1), email: z.string().min(1), refreshToken: z.string().min(1),
+            accessToken: z.string().nullable().optional(), expiresAt: finiteTime
+          }).passthrough().optional(),
+          googleOAuth: z.object({
+            accountId: z.string().min(1), email: z.string().min(1), accessToken: z.string().min(1),
+            refreshToken: z.string().nullable(), oauthClientId: z.string().min(1),
+            redirectUri: z.string(), scope: z.array(z.string()), expiresAt: finiteTime
+          }).passthrough().optional(),
+          localProfile: z.object({ accountId: z.string().min(1), email: z.string().nullable(), profileDir: z.string() }).passthrough().optional()
+        }).passthrough().refine((record) => Boolean(record.credentials || record.googleOAuth || record.localProfile), "Missing Antigravity credential material");
+        vaultRecord = recordSchema.parse(parsed) as unknown as AntigravityVaultRecord;
+        const materialEmail = vaultRecord.googleOAuth?.email ?? vaultRecord.credentials?.email ?? vaultRecord.localProfile?.email;
+        if (materialEmail && materialEmail.toLowerCase() !== item.email.toLowerCase()) throw new Error("Export email does not match Antigravity credential material");
+        if (vaultRecord.credentials) delete vaultRecord.credentials.persona;
       }
-      if ((account.platform ?? "codex") === "antigravity") {
-        if (!account.antigravityVaultJson) throw new Error("Antigravity export entry is missing credential payload");
-        const vaultRecord = JSON.parse(account.antigravityVaultJson) as AntigravityVaultRecord;
-        if (vaultRecord.format !== antigravityVaultFormat || vaultRecord.version !== antigravityVaultVersion) {
-          throw new Error("Unsupported Antigravity credential payload");
-        }
-        const status = getAntigravityProfileStatus();
-        const localProfile = vaultRecord.localProfile;
-        const credentials = vaultRecord.credentials;
-        imported.push(
-          this.store.importPortable({
-            id: account.id,
-            platform: "antigravity",
-            label: account.label || getDisplayLabel(account.email),
-            email: account.email,
-            planType: account.planType ?? "unknown",
-            encryptedAuthJson: this.vault.encryptUtf8(account.antigravityVaultJson),
-            isActive: false,
-            createdAt: account.createdAt,
-            updatedAt: account.updatedAt,
-            lastUsedAt: account.lastUsedAt,
-            lastRefreshAt: account.lastRefreshAt,
-            subscriptionEndsAt: account.subscriptionEndsAt,
-            status: account.status ?? "unknown",
-            statusReason: account.statusReason,
-            rateLimitJson: account.rateLimitJson,
-            notes: account.notes,
-            authMode: null,
-            providerAccountId: account.providerAccountId,
-            workspaceAccountId: account.workspaceAccountId,
-            workspaceLabel: account.workspaceLabel,
-            authFingerprint: account.authFingerprint,
-            credentialState: account.credentialState,
-            lastAuthenticatedAt: account.lastAuthenticatedAt,
-            expiresAt: account.expiresAt,
-            version: account.accountVersion,
-            profileDir: status.diagnostics.userDataDir,
-            antigravity: {
-              googleProjectId: account.antigravity?.googleProjectId ?? credentials?.googleProjectId ?? localProfile?.googleProjectId ?? null,
-              fingerprintId: account.antigravity?.fingerprintId ?? vaultRecord.fingerprintId,
-              lastQuotaRefreshAt: null,
-              forbidden: false,
-              ideStateDetected: status.detected
-            }
-          })
-        );
-        continue;
+      if (item.rateLimitJson) {
+        const limits: unknown = JSON.parse(item.rateLimitJson);
+        if (!limits || typeof limits !== "object" || Array.isArray(limits)) throw new Error("Export quota snapshot is invalid");
       }
-
-      if (!account.authJson) throw new Error("Codex export entry is missing auth.json");
-      JSON.parse(account.authJson);
-      const profileDir = getProfileDir(this.appDataDir, account.id);
-      const authPath = getAuthFilePath(profileDir);
-      atomicWrite(authPath, account.authJson);
-      imported.push(
-        this.store.importPortable({
-          id: account.id,
-          label: account.label || getDisplayLabel(account.email),
-          email: account.email,
-          planType: account.planType ?? "unknown",
-          encryptedAuthJson: this.vault.encryptUtf8(account.authJson),
-          isActive: false,
-          createdAt: account.createdAt,
-          updatedAt: account.updatedAt,
-          lastUsedAt: account.lastUsedAt,
-          lastRefreshAt: account.lastRefreshAt,
-          subscriptionEndsAt: account.subscriptionEndsAt,
-          status: account.status ?? "unknown",
-          statusReason: account.statusReason,
-          rateLimitJson: account.rateLimitJson,
-          notes: account.notes,
-          authMode: account.authMode ?? "chatgpt",
-          providerAccountId: account.providerAccountId,
-          workspaceAccountId: account.workspaceAccountId,
-          workspaceLabel: account.workspaceLabel,
-          authFingerprint: account.authFingerprint ?? inspectCodexAuthJson(account.authJson).authFingerprint,
-          credentialState: account.credentialState,
-          lastAuthenticatedAt: account.lastAuthenticatedAt,
-          expiresAt: account.expiresAt,
-          version: account.accountVersion,
-          profileDir
-        })
-      );
-      this.codexProfileVault.removePlaintext(profileDir);
+      const id = crypto.randomUUID();
+      const record: AccountExportRecord = {
+        id, platform, label: item.label || getDisplayLabel(item.email), email: item.email,
+        planType: item.planType ?? "unknown", profileDir: getProfileDir(this.appDataDir, id),
+        encryptedAuthJson: this.vault.encryptUtf8(platform === "codex" ? item.authJson! : JSON.stringify(vaultRecord)),
+        isActive: false, createdAt: item.createdAt ?? now, updatedAt: now,
+        lastUsedAt: item.lastUsedAt ?? null, lastRefreshAt: null,
+        subscriptionEndsAt: item.subscriptionEndsAt ?? null, status: "unknown",
+        statusReason: "Imported credential material requires verification.", rateLimitJson: item.rateLimitJson ?? null,
+        notes: item.notes ?? null, authMode: metadata?.inferredAuthMode ?? null,
+        providerAccountId: metadata?.providerAccountId ?? vaultRecord?.googleOAuth?.accountId ?? vaultRecord?.credentials?.accountId ?? null,
+        workspaceAccountId: metadata?.workspaceAccountId ?? null, workspaceLabel: metadata?.workspaceLabel ?? null,
+        authFingerprint: metadata?.authFingerprint ?? null, credentialState: "needs_review",
+        lastAuthenticatedAt: null, expiresAt: metadata?.expiresAt ?? vaultRecord?.googleOAuth?.expiresAt ?? null, version: 1,
+        antigravity: platform === "antigravity" ? {
+          googleProjectId: vaultRecord?.googleOAuth?.googleProjectId ?? vaultRecord?.credentials?.googleProjectId ?? null,
+          fingerprintId: null, lastQuotaRefreshAt: null, forbidden: false, ideStateDetected: false
+        } : null
+      };
+      const keys = this.importIdentities(record);
+      const conflict = keys.some((key) => identities.has(key));
+      entries.push({ email: record.email, label: record.label, platform, action: conflict ? "skip" : "import",
+        reason: conflict ? "An existing profile or earlier entry has the same identity." : null });
+      if (!conflict) { for (const key of keys) identities.add(key); records.push(record); }
     }
-    return { importedCount: imported.length, accounts: this.list() };
+    for (const [id, saved] of this.importPreviews) if (saved.preview.expiresAt <= now) this.importPreviews.delete(id);
+    if (this.importPreviews.size >= 4) this.importPreviews.delete(this.importPreviews.keys().next().value!);
+    const preview: AccountImportPreview = { previewId: crypto.randomUUID(), total: accounts.length,
+      importableCount: records.length, skippedCount: accounts.length - records.length, expiresAt: now + 600, entries };
+    this.importPreviews.set(preview.previewId, { preview, records, revision: this.importRevision() });
+    return preview;
+  }
+
+  async applyImport(previewId: string): Promise<AccountImportResult> {
+    return this.operationLock.runExclusive(["import", "provider:codex", "provider:antigravity"], async () => {
+      const saved = this.importPreviews.get(previewId);
+      if (!saved || saved.preview.expiresAt <= Math.floor(Date.now() / 1000)) throw new Error("Import preview has expired. Preview the file again.");
+      if (saved.revision !== this.importRevision()) throw new Error("Profiles changed after preview. Preview the file again.");
+      for (const record of saved.records) this.switchTransactions.requireRecovered(record.platform ?? "codex");
+      const imported = this.store.importPortableBatch(saved.records);
+      this.importPreviews.delete(previewId);
+      this.emit("accounts-updated");
+      return { importedCount: imported.length, skippedCount: saved.preview.skippedCount, accounts: this.list() };
+    });
+  }
+
+  async importAccounts(filePath: string, passphrase: string): Promise<AccountImportResult> {
+    return this.applyImport(this.previewImport(filePath, passphrase).previewId);
+  }
+
+  private importIdentities(account: Pick<AccountExportRecord, "platform" | "email" | "authMode" | "authFingerprint" | "providerAccountId" | "workspaceAccountId">): string[] {
+    const provider = account.platform ?? "codex";
+    if (account.authMode === "apiKey") return [provider + ":key:" + account.authFingerprint];
+    const scope = ":" + (account.workspaceAccountId ?? "");
+    return [provider + ":email:" + account.email.trim().toLowerCase() + scope,
+      ...(account.providerAccountId ? [provider + ":subject:" + account.providerAccountId + scope] : [])];
+  }
+
+  private importRevision(): string {
+    return crypto.createHash("sha256").update(JSON.stringify(this.store.list().map((account) =>
+      [account.id, account.version, account.authFingerprint, account.email, account.workspaceAccountId]))).digest("hex");
   }
 
   detectLocalSessions(): { codex: boolean; codexEmail: string | null; antigravity: boolean } {
     let codex = false;
     let codexEmail: string | null = null;
     try {
-      const authPath = getAuthJsonPath(this.getGlobalCodexHome());
-      if (fs.existsSync(authPath)) {
-        const text = fs.readFileSync(authPath, "utf8");
-        const parsed = JSON.parse(text);
-        if (parsed.tokens || parsed.OPENAI_API_KEY) {
-          codex = true;
-          const token = parsed.tokens?.id_token || parsed.tokens?.access_token;
-          if (token && typeof token === "string") {
-            const parts = token.split(".");
-            if (parts.length >= 2) {
-              const jwt = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
-              if (jwt.email) codexEmail = jwt.email;
-            }
-          }
-        }
+      const globalHome = this.getGlobalCodexHome();
+      const store = inspectCodexCredentialStore(globalHome);
+      if (store.managerCompatible && store.authJsonPresent) {
+        const metadata = inspectCodexAuthJson(readStableAuthJson(getAuthJsonPath(globalHome)));
+        codex = metadata.inferredAuthMode !== null;
+        codexEmail = codex ? metadata.email : null;
       }
     } catch {
       // ignore read error
@@ -2631,7 +2919,16 @@ export class AccountManager extends EventEmitter {
   }
 
   async importCurrentCodexSession(): Promise<{ imported: boolean; account: ManagedAccount | null; reason: string }> {
+    return this.operationLock.runExclusive("provider:codex", () => this.importCurrentCodexSessionUnlocked());
+  }
+
+  private async importCurrentCodexSessionUnlocked(): Promise<{ imported: boolean; account: ManagedAccount | null; reason: string }> {
+    this.switchTransactions.requireRecovered("codex");
     const globalHome = this.getGlobalCodexHome();
+    const store = inspectCodexCredentialStore(globalHome);
+    if (!store.managerCompatible) {
+      return { imported: false, account: null, reason: store.message };
+    }
     const authPath = getAuthJsonPath(globalHome);
     if (!fs.existsSync(authPath)) {
       return { imported: false, account: null, reason: "Файл auth.json не найден в ~/.codex" };
@@ -2642,17 +2939,17 @@ export class AccountManager extends EventEmitter {
       return { imported: false, account: null, reason: "Файл auth.json не содержит действительной авторизации" };
     }
 
-    const existing = this.store.list().find((a) => a.platform === "codex" && a.authFingerprint === metadata.authFingerprint);
-    if (existing) {
-      const active = this.store.setActive(existing.id);
-      this.emit("accounts-updated");
-      return { imported: true, account: active, reason: "Аккаунт уже добавлен и выбран как активный." };
+    const synced = this.matchAndSyncCodexSession(authJson, metadata, false);
+    if (synced.accountId) {
+      return { imported: true, account: this.store.get(synced.accountId), reason: "Выбран существующий профиль Codex." };
+    }
+    if (synced.status === "ambiguous") {
+      return { imported: false, account: null, reason: "Сеансу соответствуют несколько профилей. Выберите профиль и подтвердите вход." };
     }
 
     const profileId = crypto.randomUUID();
     const profileDir = getProfileDir(this.appDataDir, profileId);
     fs.mkdirSync(profileDir, { recursive: true });
-    fs.writeFileSync(getAuthFilePath(profileDir), authJson, "utf8");
 
     const globalConfig = path.join(globalHome, "config.toml");
     if (fs.existsSync(globalConfig)) {
@@ -2709,12 +3006,12 @@ export class AccountManager extends EventEmitter {
       workspaceAccountId: metadata.workspaceAccountId,
       workspaceLabel: metadata.workspaceLabel,
       authFingerprint: metadata.authFingerprint,
-      credentialState: "ready",
+      credentialState: "needs_review",
       clearRefreshError: true,
-      lastAuthenticatedAt: Math.floor(Date.now() / 1000),
+      lastAuthenticatedAt: null,
       expiresAt: metadata.expiresAt,
       version: 1,
-      status: "active",
+      status: "unknown",
       statusReason: null
     });
 
@@ -2730,7 +3027,7 @@ export class AccountManager extends EventEmitter {
 
   async importCurrentAntigravitySession(): Promise<{ imported: boolean; account: ManagedAccount | null; reason: string }> {
     const credentialStoreReader = this.dependencies.readAntigravityCredentialStorePayload ?? readAntigravityCredentialStorePayload;
-    const credentialStorePayload = credentialStoreReader(process.platform);
+    const credentialStorePayload = await credentialStoreReader(process.platform);
     if (!credentialStorePayload || !credentialStorePayload.payload) {
       return {
         imported: false,
@@ -2755,16 +3052,15 @@ export class AccountManager extends EventEmitter {
     const batch = await this.importParsedAntigravityCredentials(parsed);
     const firstImported = batch.imported[0];
     if (firstImported) {
-      const account = this.store.get(firstImported.accountId);
-      if (account) {
-        this.store.setActive(account.id);
+      return this.operationLock.runExclusive("provider:antigravity", async () => {
+        this.switchTransactions.requireRecovered("antigravity");
+        const account = this.store.get(firstImported.accountId);
+        if (!account) throw new Error("Imported Antigravity profile is unavailable");
+        const selected = this.store.setActive(account.id);
         this.emit("accounts-updated");
-        return {
-          imported: true,
-          account,
-          reason: `Сессия Antigravity (${account.email}) успешно подхвачена и активирована.`
-        };
-      }
+        return { imported: true, account: selected,
+          reason: `Сессия Antigravity (${account.email}) сохранена. Аккаунт работающей IDE не подтверждён.` };
+      });
     }
 
     const failureReason = batch.failures[0]?.reason ?? "Неизвестная ошибка импорта сессии Antigravity";
@@ -2776,6 +3072,7 @@ export class AccountManager extends EventEmitter {
   }
 
   async importAntigravityFromIde(pathInput: AntigravityPathInput = {}): Promise<AntigravityImportResult> {
+    this.switchTransactions.requireRecovered("antigravity");
     const status = getAntigravityProfileStatus(pathInput);
     if (!status.detected) {
       return {
@@ -2790,7 +3087,7 @@ export class AccountManager extends EventEmitter {
     const officialAuth = readAntigravityOfficialAuthState(pathInput);
     if (officialAuth.oauth?.refreshToken) {
       try {
-        const client = resolveAntigravityOAuthClient({});
+        const client = resolveAntigravityOAuthClient();
         const refreshed = await refreshAntigravityGoogleAccessToken({
           clientId: client.clientId,
           clientSecret: client.clientSecret,
@@ -2827,7 +3124,7 @@ export class AccountManager extends EventEmitter {
 
     const credentialStoreReader = this.dependencies.readAntigravityCredentialStorePayload ?? readAntigravityCredentialStorePayload;
     const credentialStorePayload = canReadCurrentWindowsCredentialStore(pathInput)
-      ? credentialStoreReader(pathInput.platform ?? process.platform)
+      ? await credentialStoreReader(pathInput.platform ?? process.platform)
       : null;
     if (credentialStorePayload) {
       const parsed = parseAntigravityCredentialPayload({
@@ -2860,47 +3157,53 @@ export class AccountManager extends EventEmitter {
       }
     }
 
-    const identity = extractAntigravityLocalIdentity(pathInput);
-    const email = identity.email ?? `${identity.accountId}@local.antigravity`;
-    const existing = this.store.getByPlatformEmail("antigravity", email);
-    const now = Math.floor(Date.now() / 1000);
-    const vaultRecord: AntigravityVaultRecord = {
-      format: antigravityVaultFormat,
-      version: antigravityVaultVersion,
-      authMode: "local_profile",
-      localProfile: {
-        accountId: identity.accountId,
-        email: identity.email,
-        label: identity.label,
-        profileDir: status.diagnostics.userDataDir,
+    return this.operationLock.runExclusive("provider:antigravity", async () => {
+      this.switchTransactions.requireRecovered("antigravity");
+      const identity = extractAntigravityLocalIdentity(pathInput);
+      const email = identity.email ?? `${identity.accountId}@local.antigravity`;
+      const existing = this.store.getByPlatformEmail("antigravity", email);
+      if (existing) return { imported: true, account: existing,
+        reason: "Профиль уже сохранён. Локальные данные не заменяют его credentials.", status, identity };
+      const now = Math.floor(Date.now() / 1000);
+      const vaultRecord: AntigravityVaultRecord = {
+        format: antigravityVaultFormat,
+        version: antigravityVaultVersion,
+        authMode: "local_profile",
+        localProfile: {
+          accountId: identity.accountId,
+          email: identity.email,
+          label: identity.label,
+          profileDir: status.diagnostics.userDataDir,
+          fingerprintId: identity.fingerprintId,
+          googleProjectId: identity.googleProjectId,
+          importedAt: now,
+          source: identity.source,
+          confidence: identity.confidence
+        },
         fingerprintId: identity.fingerprintId,
-        googleProjectId: identity.googleProjectId,
-        importedAt: now,
-        source: identity.source,
-        confidence: identity.confidence
-      },
-      fingerprintId: identity.fingerprintId,
-      importedAt: now
-    };
+        importedAt: now
+      };
 
-    const account = this.store.upsert({
-      id: existing?.id ?? identity.accountId,
-      platform: "antigravity",
-      label: existing?.label ?? identity.label,
-      email,
-      planType: "unknown",
-      profileDir: status.diagnostics.userDataDir,
-      encryptedAuthJson: this.vault.encryptUtf8(JSON.stringify(vaultRecord)),
-      rateLimits: null,
-      antigravity: {
-        googleProjectId: identity.googleProjectId,
-        fingerprintId: identity.fingerprintId,
-        lastQuotaRefreshAt: null,
-        forbidden: false,
-        ideStateDetected: status.detected
-      },
-      status: "unknown",
-      statusReason: "Локальный профиль импортирован как metadata-only; Google OAuth/Code Assist не проверены."
+      const account = this.store.upsert({
+        id: identity.accountId,
+        platform: "antigravity",
+        label: identity.label,
+        email,
+        planType: "unknown",
+        profileDir: status.diagnostics.userDataDir,
+        encryptedAuthJson: this.vault.encryptUtf8(JSON.stringify(vaultRecord)),
+        rateLimits: null,
+        antigravity: {
+          googleProjectId: identity.googleProjectId,
+          fingerprintId: identity.fingerprintId,
+          lastQuotaRefreshAt: null,
+          forbidden: false,
+          ideStateDetected: status.detected
+        },
+        credentialState: "needs_review",
+        lastAuthenticatedAt: null,
+        status: "unknown",
+        statusReason: "Локальный профиль импортирован как metadata-only; Google OAuth/Code Assist не проверены."
     });
 
     this.emitLog(`Imported Antigravity local profile metadata: ${identity.email ?? identity.accountId}.`);
@@ -2913,12 +3216,18 @@ export class AccountManager extends EventEmitter {
       status,
       identity
     };
+    });
   }
 
-  async importAntigravityGoogleOAuth(
+  async importAntigravityGoogleOAuth(input: AntigravityGoogleOAuthResult, pathInput: AntigravityPathInput = {}): Promise<AntigravityImportResult> {
+    return this.operationLock.runExclusive("provider:antigravity", () => this.importAntigravityGoogleOAuthUnlocked(input, pathInput));
+  }
+
+  private async importAntigravityGoogleOAuthUnlocked(
     input: AntigravityGoogleOAuthResult,
     pathInput: AntigravityPathInput = {}
   ): Promise<AntigravityImportResult> {
+    this.switchTransactions.requireRecovered("antigravity");
     const status = getAntigravityProfileStatus(pathInput);
     const now = Math.floor(Date.now() / 1000);
     const accountId = input.user.id ?? crypto.createHash("sha256").update(input.user.email).digest("hex").slice(0, 24);
@@ -2956,6 +3265,9 @@ export class AccountManager extends EventEmitter {
     const account = this.store.upsert({
       id: existing?.id ?? dbId,
       platform: "antigravity",
+      providerAccountId: input.user.id,
+      credentialState: "ready",
+      lastAuthenticatedAt: now,
       label,
       email: input.user.email,
       planType,
@@ -2973,27 +3285,8 @@ export class AccountManager extends EventEmitter {
       statusReason: "Google OAuth сохранён; лимиты Code Assist ещё проверяются."
     });
 
-    const existingActive = this.store.list().find((item) => item.platform === "antigravity" && item.isActive);
-    const wasAlreadyActive = existing?.isActive === true;
-    const shouldActivate = wasAlreadyActive || !existingActive;
-
-    let accountWithQuota = account;
-    if (shouldActivate) {
-      this.scheduleAntigravityGoogleCredentialStoreWrite(account.id, vaultRecord.googleOAuth!);
-      try {
-        const ideWrite = this.writeAntigravityGoogleIdeProfile(vaultRecord.googleOAuth!, account);
-        if (ideWrite?.applied) {
-          this.emitLog(`Antigravity IDE unified auth state updated for ${account.email}. Backup=${ideWrite.backupId}`);
-        }
-      } catch (error) {
-        const message = redactSensitiveText(error instanceof Error ? error.message : String(error));
-        this.emitLog(`Antigravity IDE unified auth state update failed: ${message}`);
-        accountWithQuota = this.store.setStatus(account.id, "error", message);
-      }
-      if (accountWithQuota.status !== "error") {
-        accountWithQuota = this.store.setActive(account.id);
-      }
-    }
+    const shouldActivate = false;
+    const accountWithQuota = account;
     this.scheduleAntigravityGoogleQuotaRefresh(account.id, vaultRecord);
 
     this.emitLog(
@@ -3024,30 +3317,25 @@ export class AccountManager extends EventEmitter {
     };
   }
 
-  async importAntigravityCredentials(
+  async importAntigravityCredentials(input: AntigravityManualImportInput, pathInput: AntigravityPathInput = {}): Promise<AntigravityManualImportResult> {
+    return this.operationLock.runExclusive("provider:antigravity", () => this.importAntigravityCredentialsUnlocked(input, pathInput));
+  }
+
+  private async importAntigravityCredentialsUnlocked(
     input: AntigravityManualImportInput,
     pathInput: AntigravityPathInput = {}
   ): Promise<AntigravityManualImportResult> {
+    this.switchTransactions.requireRecovered("antigravity");
     const credentials: AntigravityCredentialPackage = {
       accountId: input.accountId.trim(),
       email: input.email.trim(),
       refreshToken: input.refreshToken.trim(),
       accessToken: normalizeNullableString(input.accessToken),
       expiresAt: input.expiresAt ?? null,
-      googleProjectId: normalizeNullableString(input.googleProjectId),
-      machineId: normalizeNullableString(input.machineId)
+      googleProjectId: normalizeNullableString(input.googleProjectId)
     };
-    let status = getAntigravityProfileStatus(pathInput);
-    const applyResult = status.readyForWriteActions
-      ? applyAntigravityAccountWritePlan({
-        ...pathInput,
-        backupRoot: path.join(this.appDataDir, "antigravity-backups"),
-        credentials
-      })
-      : null;
-    let account: ManagedAccount;
-    try {
-      const existing = this.store.getByPlatformEmail("antigravity", credentials.email);
+    const status = getAntigravityProfileStatus(pathInput);
+    const existing = this.store.getByPlatformEmail("antigravity", credentials.email);
       const accountId = existing?.id ?? antigravityAccountDbId(credentials.accountId);
       const label = normalizeNullableString(input.label) ?? existing?.label ?? getDisplayLabel(credentials.email);
       const vaultRecord: AntigravityVaultRecord = {
@@ -3055,12 +3343,13 @@ export class AccountManager extends EventEmitter {
         version: antigravityVaultVersion,
         authMode: "manual_credentials",
         credentials,
-        fingerprintId: normalizeNullableString(input.fingerprintId),
+        fingerprintId: null,
         importedAt: Math.floor(Date.now() / 1000)
       };
-      account = this.store.upsert({
+    const account = this.store.upsert({
         id: accountId,
         platform: "antigravity",
+        providerAccountId: credentials.accountId,
         label,
         email: credentials.email,
         planType: "unknown",
@@ -3069,27 +3358,16 @@ export class AccountManager extends EventEmitter {
         rateLimits: null,
         antigravity: {
           googleProjectId: credentials.googleProjectId ?? null,
-          fingerprintId: normalizeNullableString(input.fingerprintId),
+          fingerprintId: null,
           lastQuotaRefreshAt: null,
           forbidden: false,
           ideStateDetected: status.detected
         },
+        credentialState: "needs_review",
+        lastAuthenticatedAt: null,
         status: "unknown",
         statusReason: "Antigravity credentials imported; validation has not completed."
       });
-      if (!applyResult) {
-        try {
-          this.writeAntigravityCredentialPackageStore(credentials, account);
-        } catch (error) {
-          const message = redactSensitiveText(error instanceof Error ? error.message : String(error));
-          this.emitLog(`Antigravity manual credential store update failed: ${message}`);
-        }
-      }
-    } catch (error) {
-      if (applyResult) restoreAntigravityBackupDir(applyResult.backupDir);
-      status = getAntigravityProfileStatus(pathInput);
-      throw error;
-    }
 
     const tokenFields: Array<"refreshToken" | "accessToken"> = ["refreshToken"];
     if (credentials.accessToken) tokenFields.push("accessToken");
@@ -3097,7 +3375,7 @@ export class AccountManager extends EventEmitter {
       imported: true,
       account,
       status,
-      summary: applyResult?.summary ?? {
+      summary: {
         accountId: credentials.accountId,
         email: credentials.email,
         stateKeys: [],
@@ -3105,8 +3383,8 @@ export class AccountManager extends EventEmitter {
         writesMachineId: false,
         tokenFields
       },
-      backupId: applyResult?.backupId ?? "credential-manager-only",
-      backupDir: applyResult?.backupDir ?? ""
+      backupId: "vault-only",
+      backupDir: ""
     };
   }
 
@@ -3198,6 +3476,7 @@ export class AccountManager extends EventEmitter {
       await pending.client.stop();
       const current = this.store.get(pending.replaceAccountId ?? profileId);
       if (current) this.syncProfileAuthToVault(current);
+      this.discardUncommittedLoginProfile(pending.profileDir);
     }
   }
 
@@ -3209,6 +3488,7 @@ export class AccountManager extends EventEmitter {
     replaceAccountId?: string;
     previousProfileDir?: string;
   }): Promise<ManagedAccount> {
+    this.switchTransactions.requireRecovered("codex");
     const accountResponse = await input.client.readAccount(true);
     const identity = getAccountIdentity(accountResponse.account, input.authMode);
     let rateLimits = null;
@@ -3220,12 +3500,22 @@ export class AccountManager extends EventEmitter {
       }
     }
 
+    this.switchTransactions.requireRecovered("codex");
     const authPath = getAuthFilePath(input.profileDir);
     if (!fs.existsSync(authPath)) throw new Error("Codex did not create auth.json for this profile");
     const authJson = readStableAuthJson(authPath);
     const metadata = inspectCodexAuthJson(authJson);
-    const encryptedAuthJson = this.vault.encryptUtf8(authJson);
     const replaceAccount = input.replaceAccountId ? this.store.get(input.replaceAccountId) : null;
+    if (input.replaceAccountId && !replaceAccount) throw new Error("The profile being reauthenticated no longer exists");
+    if (replaceAccount && input.authMode !== "apiKey" && replaceAccount.authMode !== "apiKey" && (
+      !compatibleCodexEmail(identity.email, replaceAccount.email)
+      || !compatibleCodexEmail(metadata.email, replaceAccount.email)
+      || (replaceAccount.providerAccountId && metadata.providerAccountId !== replaceAccount.providerAccountId)
+      || (replaceAccount.workspaceAccountId && metadata.workspaceAccountId !== replaceAccount.workspaceAccountId)
+    )) {
+      throw new Error("Sign-in returned a different account or workspace. Add it as a separate profile.");
+    }
+    const encryptedAuthJson = this.vault.encryptUtf8(authJson);
     const saveId = input.replaceAccountId ?? input.profileId;
     const identitySuffix = metadata.providerAccountId ?? metadata.authFingerprint.slice(0, 12);
     const email = identity.email
@@ -3263,26 +3553,21 @@ export class AccountManager extends EventEmitter {
         : null
     });
 
-    if (replaceAccount?.isActive) {
-      const activeAuthPath = getAuthJsonPath(this.getGlobalCodexHome());
-      const previousAuthJson = fs.existsSync(activeAuthPath) ? readStableAuthJson(activeAuthPath) : null;
-      backupFile(activeAuthPath);
-      atomicWrite(activeAuthPath, authJson);
-      const syncedFiles = syncCodexGlobalState(this.getGlobalCodexHome(), authJson, previousAuthJson);
-      this.store.setActive(account.id);
-      this.emitLog(`Reauthenticated active Codex account and synced ${syncedFiles} global state file(s)`);
+    if (replaceAccount?.isActive && replaceAccount.authFingerprint !== metadata.authFingerprint) {
+      this.store.clearActive("codex");
+      this.emitLog("Credentials were verified and saved. Apply the profile explicitly to update Desktop.");
     }
 
     if (
       input.replaceAccountId
       && input.previousProfileDir
       && input.previousProfileDir !== input.profileDir
-      && input.previousProfileDir.startsWith(this.appDataDir)
+      && this.codexProfileVault.isManagedProfile(input.previousProfileDir)
     ) {
-      fs.rmSync(input.previousProfileDir, { recursive: true, force: true });
+      fs.rmSync(assertManagedPath(getProfilesDir(this.appDataDir), input.previousProfileDir), { recursive: true, force: true });
     }
     const savedWithSecrets = this.store.get(account.id);
-    return savedWithSecrets ? this.codexProfileVault.sealVerified(savedWithSecrets) : account;
+    return savedWithSecrets ? this.codexProfileVault.sealVerified(savedWithSecrets, { identityVerified: true }) : account;
   }
 
   private async failPendingLogin(loginId: string, profileId: string, message: string): Promise<void> {
@@ -3293,6 +3578,13 @@ export class AccountManager extends EventEmitter {
     const event: AuthEvent = { loginId, profileId, success: false, error: redactSensitiveText(message) };
     this.emit("auth-event", event);
     await pending.client.stop();
+    this.discardUncommittedLoginProfile(pending.profileDir);
+  }
+
+  private discardUncommittedLoginProfile(profileDir: string): void {
+    if (!this.codexProfileVault.isManagedProfile(profileDir)) return;
+    if (this.store.list().some((account) => path.resolve(account.profileDir) === path.resolve(profileDir))) return;
+    fs.rmSync(assertManagedPath(getProfilesDir(this.appDataDir), profileDir), { recursive: true, force: true });
   }
 
   private hasPendingReauthentication(accountId: string): boolean {
@@ -3354,14 +3646,19 @@ export class AccountManager extends EventEmitter {
     this.codexProfileVault.hydrate(account);
   }
 
-  private syncProfileAuthToVault(account: ManagedAccount): void {
+  private syncProfileAuthToVault(account: ManagedAccount, identityVerified = false): void {
     try {
+      this.switchTransactions.requireRecovered(account.platform);
       const current = this.store.get(account.id);
       if (!current) return;
-      this.codexProfileVault.sealVerified(current);
+      this.codexProfileVault.sealVerified(current, { identityVerified });
     } catch (error) {
       this.emitLog(`Profile auth cache sync skipped for ${account.email}: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  private persistLocallyObservedAntigravityAuth(account: ManagedAccount, record: AntigravityVaultRecord): void {
+    this.store.updateObservedAuthMaterial(account.id, this.vault.encryptUtf8(JSON.stringify(record)));
   }
 
   private syncActiveGlobalAuthToVault(account: ManagedAccount): ManagedAccount {
@@ -3404,6 +3701,7 @@ export class AccountManager extends EventEmitter {
 
   private async restoreProfileAuthFromCurrentGlobalSession(account: ManagedAccount): Promise<boolean> {
     const globalCodexHome = this.getGlobalCodexHome();
+    if (!inspectCodexCredentialStore(globalCodexHome).managerCompatible) return false;
     if (path.resolve(globalCodexHome).toLowerCase() === path.resolve(account.profileDir).toLowerCase()) return false;
 
     const globalAuthPath = getAuthJsonPath(globalCodexHome);
@@ -3420,8 +3718,6 @@ export class AccountManager extends EventEmitter {
       const authJson = readStableAuthJson(globalAuthPath);
       if (!matchesCodexAuthMaterial(inspectCodexAuthJson(authJson), account)) return false;
       const profileAuthPath = getAuthFilePath(account.profileDir);
-      const existingAuthJson = fs.existsSync(profileAuthPath) ? readStableAuthJson(profileAuthPath) : null;
-      if (existingAuthJson !== authJson) backupFile(profileAuthPath);
       atomicWrite(profileAuthPath, authJson);
       this.store.updateEncryptedAuthJson(account.id, this.vault.encryptUtf8(authJson));
       this.emitLog(`Restored expired profile auth from the matching active Codex session for ${account.email}.`);
@@ -3455,9 +3751,10 @@ export class AccountManager extends EventEmitter {
       throw new Error("Antigravity quota refresh requires a Google OAuth account. Reauthorize through Google Sign-In.");
     }
 
+    const signal = this.refreshContexts.get(account.id)?.signal;
     const now = Math.floor(Date.now() / 1000);
-    const client = resolveAntigravityOAuthClient({});
-    const clientId = googleOAuth.oauthClientId || client.clientId;
+    const client = resolveAntigravityOAuthClientForAccount(googleOAuth.oauthClientId);
+    const clientId = client.clientId;
     const clientSecret = client.clientSecret;
     const isCurrentlyActive = this.store.list().some((item) => item.platform === "antigravity" && item.isActive && item.id === account.id);
 
@@ -3465,7 +3762,7 @@ export class AccountManager extends EventEmitter {
     if (isCurrentlyActive) {
       try {
         const credReader = this.dependencies.readAntigravityCredentialStorePayload ?? readAntigravityCredentialStorePayload;
-        const credResult = credReader(process.platform);
+        const credResult = await credReader(process.platform);
         if (credResult?.payload) {
           const parsedCred = JSON.parse(credResult.payload) as {
             token?: { refresh_token?: string; access_token?: string; expiry?: string };
@@ -3482,7 +3779,9 @@ export class AccountManager extends EventEmitter {
               googleOAuth.accessToken = credAccessToken;
               if (credRefreshToken) googleOAuth.refreshToken = credRefreshToken;
               if (credExpiresAt) googleOAuth.expiresAt = credExpiresAt;
-              this.store.updateEncryptedAuthJson(account.id, this.vault.encryptUtf8(JSON.stringify(record)));
+              this.ensureRefreshCurrent(account.id);
+              this.persistLocallyObservedAntigravityAuth(account, record);
+              this.acceptOwnCredentialUpdate(account.id);
               this.emitLog(`Refreshed live credentials from Windows Credential Manager for active account ${account.email}.`);
             }
           }
@@ -3499,16 +3798,27 @@ export class AccountManager extends EventEmitter {
       const refreshed = await refreshAntigravityGoogleAccessToken({
         clientId,
         clientSecret,
-        refreshToken: googleOAuth.refreshToken
+        refreshToken: googleOAuth.refreshToken, signal
       });
       googleOAuth.accessToken = refreshed.accessToken;
       googleOAuth.refreshToken = refreshed.refreshToken ?? googleOAuth.refreshToken;
       googleOAuth.expiresAt = refreshed.expiresAt ?? googleOAuth.expiresAt;
       googleOAuth.scope = refreshed.scope.length ? refreshed.scope : googleOAuth.scope;
       googleOAuth.tokenType = refreshed.tokenType ?? googleOAuth.tokenType;
-      this.store.updateEncryptedAuthJson(account.id, this.vault.encryptUtf8(JSON.stringify(record)));
+      this.ensureRefreshCurrent(account.id);
+      this.persistLocallyObservedAntigravityAuth(account, record);
+      this.acceptOwnCredentialUpdate(account.id);
     }
 
+    this.ensureRefreshCurrent(account.id);
+    const user = await (this.dependencies.fetchAntigravityGoogleUserInfo ?? fetchAntigravityGoogleUserInfo)({ accessToken: googleOAuth.accessToken, requestTimeoutMs: 10_000, signal });
+    this.ensureRefreshCurrent(account.id);
+    if (user.email.trim().toLowerCase() !== account.email.trim().toLowerCase()
+      || (user.id && account.providerAccountId && user.id !== account.providerAccountId)) {
+      this.store.setCredentialState(account.id, "needs_review", "Antigravity credential identity mismatch");
+      throw new Error("Antigravity credential identity mismatch");
+    }
+    this.store.markCredentialVerified(account.id);
     const quotaFetcher = this.dependencies.fetchAntigravityQuota ?? fetchAntigravityQuota;
     const targetProject = googleOAuth.googleProjectId ?? account.antigravity?.googleProjectId ?? "aicode-consumers";
     const cachedContext =
@@ -3530,8 +3840,8 @@ export class AccountManager extends EventEmitter {
       (process.env.NODE_ENV !== "test" && !this.dependencies.fetchAntigravityQuota);
     if (isCurrentlyActive && shouldFetchLiveQuota) {
       try {
-        const liveQuota = await liveQuotaFetcher();
-        if (liveQuota?.groups && liveQuota.groups.length > 0) {
+        const liveQuota = await liveQuotaFetcher(this.getAntigravityPathInputForAccount(account));
+        if (liveQuota?.groups && liveQuota.groups.length > 0 && liveQuota.identityEmail?.trim().toLowerCase() === account.email.trim().toLowerCase()) {
           const nowSeconds = Math.floor(Date.now() / 1000);
           const models = parseSummaryGroups(liveQuota, nowSeconds);
           if (models.length > 0) {
@@ -3556,7 +3866,7 @@ export class AccountManager extends EventEmitter {
           accessToken: googleOAuth.accessToken,
           googleProjectId: targetProject,
           accountContext: cachedContext,
-          requestTimeoutMs: 15_000
+          requestTimeoutMs: 15_000, signal
         });
       } catch (firstError) {
         const errStr = String(firstError);
@@ -3564,17 +3874,19 @@ export class AccountManager extends EventEmitter {
           const refreshed = await refreshAntigravityGoogleAccessToken({
             clientId,
             clientSecret,
-            refreshToken: googleOAuth.refreshToken
+            refreshToken: googleOAuth.refreshToken, signal
           });
           googleOAuth.accessToken = refreshed.accessToken;
           googleOAuth.refreshToken = refreshed.refreshToken ?? googleOAuth.refreshToken;
           googleOAuth.expiresAt = refreshed.expiresAt ?? googleOAuth.expiresAt;
-          this.store.updateEncryptedAuthJson(account.id, this.vault.encryptUtf8(JSON.stringify(record)));
+          this.ensureRefreshCurrent(account.id);
+      this.store.updateEncryptedAuthJson(account.id, this.vault.encryptUtf8(JSON.stringify(record)));
+      this.acceptOwnCredentialUpdate(account.id);
           quota = await quotaFetcher({
             accessToken: googleOAuth.accessToken,
             googleProjectId: targetProject,
             accountContext: cachedContext,
-            requestTimeoutMs: 15_000
+            requestTimeoutMs: 15_000, signal
           });
         } else {
           throw firstError;
@@ -3596,9 +3908,12 @@ export class AccountManager extends EventEmitter {
       vaultChanged = true;
     }
     if (vaultChanged) {
+      this.ensureRefreshCurrent(account.id);
       this.store.updateEncryptedAuthJson(account.id, this.vault.encryptUtf8(JSON.stringify(record)));
+      this.acceptOwnCredentialUpdate(account.id);
     }
 
+    this.ensureRefreshCurrent(account.id);
     const safeLimits = sanitizeAntigravityLimits(quota.limits);
     this.store.insertRateLimitSnapshot({
       id: crypto.randomUUID(),
@@ -3623,11 +3938,11 @@ export class AccountManager extends EventEmitter {
   ): Promise<AntigravityCredentialBatchImportResult> {
     const failures: AntigravityCredentialBatchImportResult["failures"] = [];
     const imported: AntigravityCredentialBatchImportResult["imported"] = [];
-    const client = resolveAntigravityOAuthClient({});
     const fetchUserInfo = this.dependencies.fetchAntigravityGoogleUserInfo ?? fetchAntigravityGoogleUserInfo;
 
     for (const credential of parsed) {
       try {
+        const client = resolveAntigravityOAuthClient();
         const refreshed = await refreshAntigravityGoogleAccessToken({
           clientId: client.clientId,
           clientSecret: client.clientSecret,
@@ -3675,14 +3990,6 @@ export class AccountManager extends EventEmitter {
           }
         }, pathInput);
         if (result.account) {
-          const stored = this.store.get(result.account.id);
-          if (stored) {
-            try {
-              await this.refreshAntigravityGoogleQuota(stored);
-            } catch (probeError) {
-              this.emitLog(`Initial Antigravity quota probe after credential import: ${probeError instanceof Error ? probeError.message : String(probeError)}`);
-            }
-          }
           imported.push({
             accountId: result.account.id,
             email: result.account.email,
@@ -3720,172 +4027,65 @@ export class AccountManager extends EventEmitter {
     };
   }
 
-  private scheduleAntigravityGoogleQuotaRefresh(accountId: string, record: AntigravityVaultRecord): void {
-    void (async () => {
-      try {
-        const account = this.store.get(accountId);
-        if (!account || account.platform !== "antigravity") return;
-        await this.refreshAntigravityGoogleQuota(account, record);
-        this.emit("accounts-updated");
-      } catch (error) {
-        const message = redactSensitiveText(error instanceof Error ? error.message : String(error));
-        this.emitLog(`Antigravity quota refresh after Google OAuth failed: ${message}`);
-        const account = this.store.get(accountId);
-        if (account) {
-          this.store.setStatus(accountId, "error", message);
-          this.emit("accounts-updated");
-        }
-      }
-    })();
-  }
-
-  private scheduleAntigravityGoogleCredentialStoreWrite(
-    accountId: string,
-    token: NonNullable<AntigravityVaultRecord["googleOAuth"]>
-  ): void {
-    if (!this.dependencies.writeAntigravityCredentialStoreToken) return;
-    setTimeout(() => {
-      try {
-        const account = this.store.get(accountId);
-        if (!account || account.platform !== "antigravity" || !account.isActive) return;
-        const result = this.writeAntigravityGoogleCredentialStore(token, account);
-        if (result?.applied) {
-          this.emitLog(`Antigravity OS credential store updated for ${account.email}.`);
-        }
-      } catch (error) {
-        const message = redactSensitiveText(error instanceof Error ? error.message : String(error));
-        this.emitLog(`Antigravity OS credential store update failed: ${message}`);
-      }
-    }, 0);
-  }
-
-  private writeAntigravityGoogleCredentialStore(
-    token: NonNullable<AntigravityVaultRecord["googleOAuth"]>,
-    account: ManagedAccount
-  ): AntigravityCredentialStoreWriteResult | null {
-    if (!token.refreshToken) return null;
-    const writer = this.dependencies.writeAntigravityCredentialStoreToken;
-    if (!writer) return null;
-    return writer({
-      accessToken: token.accessToken,
-      refreshToken: token.refreshToken,
-      expiresAt: token.expiresAt
-    }, this.getAntigravityPathInputForAccount(account).platform);
-  }
-
-  private writeAntigravityCredentialPackageStore(
-    credentials: AntigravityCredentialPackage,
-    account: ManagedAccount
-  ): AntigravityCredentialStoreWriteResult | null {
-    if (!credentials.accessToken?.trim() || !credentials.refreshToken.trim()) return null;
-    const writer = this.dependencies.writeAntigravityCredentialStoreToken;
-    if (!writer) return null;
-    return writer({
-      accessToken: credentials.accessToken,
-      refreshToken: credentials.refreshToken,
-      expiresAt: credentials.expiresAt ?? null
-    }, this.getAntigravityPathInputForAccount(account).platform);
-  }
-
-  private quiesceAntigravityRuntime(account: ManagedAccount): AntigravityQuiesceResult {
-    const pathInput = this.getAntigravityPathInputForAccount(account);
-    if (this.dependencies.quiesceAntigravity) {
-      return this.dependencies.quiesceAntigravity({
-        platform: pathInput.platform,
-        env: process.env
-      });
-    }
-    if (this.dependencies.restartAntigravityIntegration) {
-      return { supported: true, attempted: false, wasRunning: false, quiesced: true, reason: "mocked" };
-    }
-    return quiesceAntigravity({
-      platform: pathInput.platform,
-      env: process.env
+  private scheduleAntigravityGoogleQuotaRefresh(accountId: string, _record: AntigravityVaultRecord): void {
+    void this.refreshAccount(accountId).catch((error) => {
+      if (!(error instanceof Error && error.name === "AbortError")) this.emitLog(error);
     });
   }
 
-  private launchAntigravityRuntime(account: ManagedAccount, forceRelaunch = false): AntigravityRestartResult {
-    const pathInput = this.getAntigravityPathInputForAccount(account);
-    if (this.dependencies.launchAntigravity) {
-      return this.dependencies.launchAntigravity({
-        platform: pathInput.platform,
-        env: process.env,
-        forceRelaunch
-      });
-    }
-    if (this.dependencies.restartAntigravityIntegration) {
-      return this.dependencies.restartAntigravityIntegration({
-        platform: pathInput.platform,
-        env: process.env
-      });
-    }
-    return launchAntigravity({
-      platform: pathInput.platform,
-      env: process.env,
-      forceRelaunch
-    });
+  private async quiesceAntigravityRuntime(input: AntigravityAsyncProcessInput): Promise<AntigravityQuiesceResult> {
+    return (this.dependencies.quiesceAntigravity ?? quiesceAntigravityAsync)(input);
   }
 
-  private restartAntigravityRuntime(account: ManagedAccount): AntigravityRestartResult {
-    const restart = this.dependencies.restartAntigravityIntegration ?? restartAntigravityIntegration;
-    const pathInput = this.getAntigravityPathInputForAccount(account);
-    return restart({
-      platform: pathInput.platform,
-      env: process.env
-    });
+  private async launchAntigravityRuntime(
+    input: AntigravityAsyncProcessInput,
+    requireQuiescent = true
+  ): Promise<AntigravityRestartResult> {
+    const launch = this.dependencies.launchAntigravity ?? this.dependencies.restartAntigravityIntegration ?? launchAntigravityAsync;
+    return launch({ ...input, requireQuiescent });
   }
 
-  private async ensureAntigravityGoogleTokenFresh(
-    account: ManagedAccount,
-    record: AntigravityVaultRecord
-  ): Promise<{ token: NonNullable<AntigravityVaultRecord["googleOAuth"]>; record: AntigravityVaultRecord }> {
-    const googleOAuth = record.googleOAuth;
-    if (!googleOAuth) return { token: null as any, record };
-    const now = Math.floor(Date.now() / 1000);
-    if (!googleOAuth.expiresAt || !googleOAuth.accessToken || googleOAuth.expiresAt <= now + antigravityRefreshSkewSeconds) {
-      if (!googleOAuth.refreshToken) {
-        throw new Error("Antigravity Google access token expired and no refresh token is available. Reauthorize through Google Sign-In.");
-      }
-      const client = resolveAntigravityOAuthClient({});
-      const clientId = googleOAuth.oauthClientId || client.clientId;
-      const clientSecret = client.clientSecret;
-      const refreshed = await refreshAntigravityGoogleAccessToken({
-        clientId,
-        clientSecret,
-        refreshToken: googleOAuth.refreshToken
-      });
-      googleOAuth.accessToken = refreshed.accessToken;
-      googleOAuth.refreshToken = refreshed.refreshToken ?? googleOAuth.refreshToken;
-      googleOAuth.expiresAt = refreshed.expiresAt ?? googleOAuth.expiresAt;
-      googleOAuth.scope = refreshed.scope.length ? refreshed.scope : googleOAuth.scope;
-      googleOAuth.tokenType = refreshed.tokenType ?? googleOAuth.tokenType;
-      this.store.updateEncryptedAuthJson(account.id, this.vault.encryptUtf8(JSON.stringify(record)));
+  private async getAntigravitySwitchCredentials(record: AntigravityVaultRecord): Promise<{
+    credentials: AntigravityCredentialPackage & { accessToken: string };
+    refreshed: boolean;
+  }> {
+    const token = record.googleOAuth ?? record.credentials;
+    if (!token?.refreshToken?.trim()) {
+      throw new Error("Antigravity profile has no refresh token. Reauthorize through Google Sign-In.");
     }
-    return { token: googleOAuth, record };
-  }
-
-  regenerateAntigravityFingerprint(accountId: string): ManagedAccount {
-    const account = this.store.get(accountId);
-    if (!account || account.platform !== "antigravity") {
-      throw new Error("Antigravity account not found");
-    }
-    const newPersona = generateAntigravityHardwarePersona();
-    const updated = this.store.updateAntigravityDetails(accountId, {
-      fingerprintId: newPersona.fingerprintPrefix
-    });
-    if (account.isActive) {
-      const record = this.readAntigravityVaultRecord(account);
+    const expiresSoon = token.expiresAt
+      ? token.expiresAt <= Math.floor(Date.now() / 1000) + antigravityRefreshSkewSeconds
+      : Boolean(record.googleOAuth);
+    const refreshed = !token.accessToken || expiresSoon;
+    if (refreshed) {
+      const client = resolveAntigravityOAuthClientForAccount(record.googleOAuth?.oauthClientId);
+      const refresh = this.dependencies.refreshAntigravityGoogleAccessToken ?? refreshAntigravityGoogleAccessToken;
+      const result = await refresh({ clientId: client.clientId, clientSecret: client.clientSecret, refreshToken: token.refreshToken });
+      token.accessToken = result.accessToken;
+      token.refreshToken = result.refreshToken ?? token.refreshToken;
+      token.expiresAt = result.expiresAt;
       if (record.googleOAuth) {
-        this.writeAntigravityGoogleIdeProfile(record.googleOAuth, updated);
+        if (result.scope.length) record.googleOAuth.scope = result.scope;
+        record.googleOAuth.tokenType = result.tokenType ?? record.googleOAuth.tokenType;
       }
     }
-    this.emitLog(`Regenerated Antigravity hardware persona for ${account.email}: ${newPersona.fingerprintPrefix}`);
-    return updated;
+    if (!token.accessToken?.trim()) throw new Error("Antigravity profile has no attachable access token. Sign in first.");
+    return {
+      credentials: { accountId: token.accountId, email: token.email, accessToken: token.accessToken,
+        refreshToken: token.refreshToken, expiresAt: token.expiresAt, googleProjectId: token.googleProjectId },
+      refreshed
+    };
+  }
+
+  regenerateAntigravityFingerprint(_accountId: string): ManagedAccount {
+    throw new Error("Fingerprint manipulation is unavailable in Egoist");
   }
 
   getStore(): AccountStore {
     return this.store;
   }
+
+  setCodexPath(codexPath: string | null): void { this.codexPath = codexPath; }
 
   getCodexPath(): string | null {
     if (this.codexPath && fs.existsSync(this.codexPath)) {
@@ -3908,40 +4108,19 @@ export class AccountManager extends EventEmitter {
     return service.warmupAll();
   }
 
-  private writeAntigravityGoogleIdeProfile(
-    token: NonNullable<AntigravityVaultRecord["googleOAuth"]>,
-    account: ManagedAccount
-  ): AntigravityAccountApplyResult | null {
-    if (!token.refreshToken) return null;
-    const pathInput = this.getAntigravityPathInputForAccount(account);
-    if (!getAntigravityProfileStatus(pathInput).readyForWriteActions) return null;
-    const persona = generateAntigravityHardwarePersona(account.antigravity?.fingerprintId ?? account.id);
-    if (!account.antigravity?.fingerprintId) {
-      this.store.updateAntigravityDetails(account.id, {
-        fingerprintId: persona.fingerprintPrefix
-      });
-    }
-    return applyAntigravityAccountWritePlan({
-      ...pathInput,
-      backupRoot: path.join(this.appDataDir, "antigravity-backups"),
-      credentials: {
-        accountId: token.accountId,
-        email: token.email,
-        refreshToken: token.refreshToken,
-        accessToken: token.accessToken,
-        expiresAt: token.expiresAt,
-        googleProjectId: token.googleProjectId ?? account.antigravity?.googleProjectId ?? null,
-        persona
-      }
-    });
-  }
-
   private getAntigravityPathInputForAccount(account: ManagedAccount): AntigravityPathInput {
-    const appData = path.dirname(account.profileDir);
+    if (this.dependencies.antigravityPathInput) return this.dependencies.antigravityPathInput;
+    if (process.platform === "win32") {
+      return { platform: "win32", appData: process.env.APPDATA, home: process.env.USERPROFILE ?? os.userInfo().homedir };
+    }
+    const managedProfile = path.relative(getProfilesDir(this.appDataDir), account.profileDir);
+    const appData = managedProfile && !managedProfile.startsWith("..") && !path.isAbsolute(managedProfile)
+      ? process.env.APPDATA
+      : path.dirname(account.profileDir);
     return {
       platform: process.platform,
       appData,
-      home: inferHomeFromAppData(appData) ?? process.env.USERPROFILE ?? process.env.HOME
+      home: (appData ? inferHomeFromAppData(appData) : null) ?? process.env.USERPROFILE ?? process.env.HOME
     };
   }
 

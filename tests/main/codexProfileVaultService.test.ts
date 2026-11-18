@@ -59,7 +59,7 @@ describe("CodexProfileVaultService", () => {
       expect(fs.readFileSync(getAuthFilePath(profileDir), "utf8")).toBe(original);
 
       fs.writeFileSync(getAuthFilePath(profileDir), rotated, "utf8");
-      const sealed = service.sealVerified(store.get("acc-1")!);
+      const sealed = service.sealVerified(store.get("acc-1")!, { identityVerified: true });
 
       expect(fs.existsSync(getAuthFilePath(profileDir))).toBe(false);
       expect(vault.decryptUtf8(store.get("acc-1")!.encryptedAuthJson)).toBe(rotated);

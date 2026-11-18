@@ -1,0 +1,4 @@
+caccdd66ae4a3e12bf5a0b9bcfd561c84f58a3878bb8ab61820b41120ec6bf28  Kvesser-Setup-3.2.0-rc.4.exe
+5979d465d3eb259be59ea6c2632f597d085fdf9163856da0312ad492f373a126  Kvesser-3.2.0-rc.4.exe
+df992dd94ba49e7db47cc7a61c69fd02afa91c61cb1b8175df76d2c0e9a1e586  Kvesser-Setup-3.2.0-rc.4.exe.blockmap
+26b2c4dc427d1ee61813da9610949dc3da7299590d44d73320f87c6eed1e8677  latest.yml

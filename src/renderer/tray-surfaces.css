@@ -1,0 +1,146 @@
+html:has(:is(.tray-live, .tray-hover)),
+body:has(:is(.tray-live, .tray-hover)),
+#root:has(:is(.tray-live, .tray-hover)) {
+  background: transparent;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.tray-live,
+.tray-hover {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: min(310px, 100%);
+  padding: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--color-panel);
+  color: var(--quartz);
+  font: 500 12px/16px var(--font-sans);
+  user-select: none;
+}
+
+.tray-summary,
+.tray-brand,
+.tray-identity,
+.tray-limit-timing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tray-summary,
+.tray-identity,
+.tray-limit-timing {
+  justify-content: space-between;
+}
+
+.tray-summary {
+  min-height: 34px;
+}
+
+.tray-brand svg {
+  flex: none;
+}
+
+.tray-brand-text {
+  display: grid;
+  min-width: 0;
+}
+
+.tray-brand-text strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.tray-value {
+  flex: none;
+  font: 700 26px/1 var(--font-display);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tray-status,
+.tray-plan,
+.tray-runtime-message,
+.tray-limit-timing {
+  color: var(--ash);
+}
+
+.tray-brand-text > *,
+.tray-identity > *,
+.tray-runtime-message,
+.tray-limit-timing time {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tray-metadata,
+.tray-limit {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tray-identity strong {
+  font-weight: 650;
+}
+
+.tray-plan {
+  max-width: 44%;
+  text-align: right;
+}
+
+.tray-limit {
+  margin-top: auto;
+}
+
+.tray-limit-timing {
+  font-variant-numeric: tabular-nums;
+}
+.tray-limit-timing span {
+  flex: none;
+}
+
+.tray-progress-track {
+  display: block;
+  height: 7px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--color-border);
+}
+
+.tray-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: currentColor;
+}
+
+[data-status="critical"] :is(.tray-value, .tray-status, .tray-progress-track),
+[data-status="error"] .tray-status {
+  color: var(--danger);
+}
+
+[data-status="stale"] :is(.tray-value, .tray-progress-track),
+[data-status="error"] :is(.tray-value, .tray-progress-track) {
+  color: var(--ash);
+}
+
+@media (forced-colors: active) {
+  .tray-progress-track {
+    border: 1px solid CanvasText;
+    forced-color-adjust: none;
+    background: Canvas;
+    color: CanvasText;
+  }
+
+  .tray-progress-track > span {
+    background: CanvasText;
+  }
+}

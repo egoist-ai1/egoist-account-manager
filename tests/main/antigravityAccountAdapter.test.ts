@@ -14,6 +14,8 @@ import {
 } from "../../src/main/services/antigravityAccountAdapter";
 import { parseAntigravityUnifiedOAuthToken } from "../../src/main/services/antigravityUnifiedState";
 
+import { createMemoryBackupProtection } from "../helpers/safetyFixtures";
+
 const tempDirs: string[] = [];
 
 function tempDir(): string {
@@ -111,6 +113,7 @@ describe("antigravity account adapter", () => {
       appData,
       home: path.dirname(appData),
       backupRoot,
+      ...createMemoryBackupProtection(),
       credentials: {
         accountId: "ag_123",
         email: "user@example.com",
@@ -145,6 +148,7 @@ describe("antigravity account adapter", () => {
       appData,
       home: path.dirname(appData),
       backupRoot,
+      ...createMemoryBackupProtection(),
       credentials: {
         accountId: "ag_123",
         email: "user@example.com",

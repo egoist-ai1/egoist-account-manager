@@ -56,7 +56,7 @@ describe("live tray indicator", () => {
       iconText: "60"
     });
     expect(snapshot.tooltip).toContain("текущий недельный лимит: 60%");
-    expect(snapshot.tooltip).toContain("Account Manager EGO");
+    expect(snapshot.tooltip).toContain("Квессер");
   });
 
   it("does not duplicate one generic weekly quota into a five-hour window", () => {
@@ -99,9 +99,9 @@ describe("live tray indicator", () => {
 
   it("hides the account label in privacy mode and renders a native bitmap", () => {
     const snapshot = buildLiveTraySnapshot([account()], { now: 1_100, privacyMode: true });
-    expect(snapshot.tooltip).toContain("Активный профиль");
+    expect(snapshot.tooltip).toContain("Выбранный профиль");
     expect(snapshot.tooltip).not.toContain("Primary profile");
-    expect(snapshot.tooltip).toContain("Account Manager EGO");
+    expect(snapshot.tooltip).toContain("Квессер");
     const bitmap = renderLiveTrayBitmap(snapshot);
     expect(bitmap).toHaveLength(32 * 32 * 4);
     expect(bitmap.some((channel) => channel > 0)).toBe(true);
@@ -141,40 +141,35 @@ describe("live tray indicator", () => {
     }
   });
 
-  it("keeps a single critical digit compact and readable at every Windows DPI representation", () => {
-    const snapshot: ReturnType<typeof buildLiveTraySnapshot> = {
-      state: "critical",
-      accountId: "fixture",
-      accountLabel: "Fixture",
-      remainingPercent: 1,
-      fiveHourRemaining: null,
-      weeklyRemaining: 1,
-      activeWindowType: "weekly",
-      activeWindowResetAt: null,
-      iconText: "1",
-      tooltip: "",
-      updatedAt: 1
-    };
+  it("renders percentage strokes with smooth edges and a transparent background at every DPI", () => {
+    const snapshot = buildLiveTraySnapshot([account({ fiveHourUsedPercent: 80 })], { now: 1_100 });
+    const empty = buildLiveTraySnapshot([], { now: 1_100 });
     for (const { pixelSize } of LIVE_TRAY_REPRESENTATIONS) {
       const bitmap = renderLiveTrayBitmap(snapshot, pixelSize);
-      const whitePixels: Array<[number, number]> = [];
-      for (let y = 0; y < pixelSize; y += 1) {
-        for (let x = 0; x < pixelSize; x += 1) {
-          const offset = (y * pixelSize + x) * 4;
-          if (bitmap[offset] > 225 && bitmap[offset + 1] > 225 && bitmap[offset + 2] > 225 && bitmap[offset + 3] > 225) {
-            whitePixels.push([x, y]);
-          }
-        }
-      }
-      const xs = whitePixels.map(([x]) => x);
-      const ys = whitePixels.map(([, y]) => y);
-      const glyphWidth = Math.max(...xs) - Math.min(...xs) + 1;
-      const glyphHeight = Math.max(...ys) - Math.min(...ys) + 1;
-      expect(whitePixels.length).toBeGreaterThan(0);
-      expect(glyphWidth / pixelSize).toBeGreaterThanOrEqual(0.18);
-      expect(glyphWidth / pixelSize).toBeLessThanOrEqual(0.42);
-      expect(glyphHeight / pixelSize).toBeGreaterThanOrEqual(0.5);
-      expect(glyphHeight / pixelSize).toBeLessThanOrEqual(0.75);
+      const alphas = bitmap.filter((_, channel) => channel % 4 === 3);
+      const visible = alphas.filter((alpha) => alpha > 0);
+      const emptyVisible = renderLiveTrayBitmap(empty, pixelSize).filter((alpha, channel) => channel % 4 === 3 && alpha > 0);
+      expect(visible.length).toBeLessThan(alphas.length * 0.48);
+      expect(visible.length).toBeGreaterThan(emptyVisible.length * 2);
+      expect(new Set(visible).size).toBeGreaterThan(5);
+      expect(alphas.slice(0, pixelSize).every((alpha) => alpha === 0)).toBe(true);
+      expect(alphas.slice(-pixelSize).every((alpha) => alpha === 0)).toBe(true);
+    }
+  });
+
+  it("uses opposite grayscale ink on light and dark taskbars and reserves red for critical quota", () => {
+    const fresh = buildLiveTraySnapshot([account()], { now: 1_100 });
+    const critical = buildLiveTraySnapshot([account({ fiveHourUsedPercent: 100 })], { now: 1_100 });
+    for (const theme of ["dark", "light"] as const) {
+      const freshBitmap = renderLiveTrayBitmap(fresh, 32, "codex", theme);
+      const criticalBitmap = renderLiveTrayBitmap(critical, 32, "codex", theme);
+      const freshOffset = freshBitmap.findIndex((alpha, channel) => channel % 4 === 3 && alpha === 255) - 3;
+      const criticalOffset = criticalBitmap.findIndex((alpha, channel) => channel % 4 === 3 && alpha === 255) - 3;
+      const [blue, green, red] = freshBitmap.slice(freshOffset, freshOffset + 3);
+      expect(blue).toBe(red);
+      expect(green).toBe(red);
+      expect(theme === "dark" ? red : 255 - red).toBeGreaterThan(200);
+      expect(criticalBitmap[criticalOffset + 2] - criticalBitmap[criticalOffset]).toBeGreaterThan(50);
     }
   });
 
@@ -191,13 +186,54 @@ describe("live tray indicator", () => {
     expect(dual.primary.accountId).toBe("codex-1");
   });
 
-  it("renders distinct emerald bitmap for Antigravity", () => {
+  it("uses the Egoist palette for both providers", () => {
     const snapshot = buildLiveTraySnapshot([account()], { now: 1_100 });
     const codexBitmap = renderLiveTrayBitmap(snapshot, 32, "codex");
     const agBitmap = renderLiveTrayBitmap(snapshot, 32, "antigravity");
     expect(codexBitmap).toHaveLength(32 * 32 * 4);
     expect(agBitmap).toHaveLength(32 * 32 * 4);
-    // Codex accent has higher blue (B in BGRA offset 0), Antigravity has higher green (G in BGRA offset 1)
-    expect(Buffer.from(codexBitmap).toString("hex")).not.toBe(Buffer.from(agBitmap).toString("hex"));
+    expect(Buffer.from(codexBitmap).toString("hex")).toBe(Buffer.from(agBitmap).toString("hex"));
+  });
+
+  it("keeps a positive fraction visible and waits for a new observation after reset", () => {
+    const current = account({ primaryUsedPercent: 99.6, fiveHourUsedPercent: 99.6, primaryResetsAt: 1_150, fiveHourResetsAt: 1_150 });
+    expect(buildLiveTraySnapshot([current], { now: 1_100 })).toMatchObject({ state: "critical", iconText: "<1" });
+    expect(buildLiveTraySnapshot([current], { now: 1_100 }).tooltip).toContain("<1%");
+    expect(buildLiveTraySnapshot([current], { now: 1_160 })).toMatchObject({ state: "stale", iconText: "~" });
+  });
+
+  it("discloses an unconfirmed runtime while showing the selected profile quota", () => {
+    const snapshot = buildLiveTraySnapshot([account()], { now: 1_100 });
+    expect(snapshot.tooltip).toContain("Аккаунт работающей IDE не подтверждён");
+    expect(snapshot.tooltip).not.toContain("Активный профиль");
+    expect(snapshot.remainingPercent).toBe(60);
+  });
+
+  it("does not show ordinary-usage denial as a usable quota percentage", () => {
+    const snapshot = buildLiveTraySnapshot([account({ quotaSnapshot: {
+      limitId: "codex", limitName: "Codex", primary: { usedPercent: 20, windowDurationMins: 300, resetsAt: 1_500 },
+      secondary: null, credits: null, planType: "plus", rateLimitReachedType: null, capturedAt: 1_000, ordinaryUsageAllowed: false
+    } })], { now: 1_100 });
+    expect(snapshot).toMatchObject({ state: "error", iconText: "!", remainingPercent: 80 });
+    expect(snapshot.tooltip).toContain("использование недоступно");
+  });
+
+  it("does not substitute another provider when a platform-specific tray is empty", () => {
+    expect(buildLiveTraySnapshot([account({ platform: "antigravity" })], { now: 1_100 }, "codex"))
+      .toMatchObject({ state: "empty", accountId: null });
+  });
+
+  it("uses the same usable model group as readiness while preserving every observed window", () => {
+    const snapshot = buildLiveTraySnapshot([account({ platform: "antigravity", quotaSnapshot: {
+      limitId: "exhausted", limitName: "Exhausted", primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1_500 },
+      secondary: null, credits: null, planType: "unknown", rateLimitReachedType: null, capturedAt: 1_000,
+      buckets: [
+        { limitId: "exhausted", limitName: "Exhausted", modelId: "model-a", primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1_500 }, secondary: null },
+        { limitId: "available", limitName: "Available", modelId: "model-b", primary: { usedPercent: 20.5, windowDurationMins: 60, resetsAt: 1_500 }, secondary: null }
+      ]
+    } })], { now: 1_100 });
+    expect(snapshot).toMatchObject({ state: "fresh", remainingPercent: 79.5, activeWindowType: "rolling", iconText: "80" });
+    expect(snapshot.tooltip).toContain("1 ч");
+    expect(snapshot.tooltip).toContain("model-b");
   });
 });

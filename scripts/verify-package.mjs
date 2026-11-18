@@ -5,9 +5,11 @@ import path from "node:path";
 import { extractAll } from "@electron/asar";
 
 const projectRoot = process.cwd();
-const asarPath = path.resolve(process.argv[2] ?? path.join("release", "win-unpacked", "resources", "app.asar"));
+const sourcePackage = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf8"));
+const output = sourcePackage.build?.directories?.output ?? "release";
+const asarPath = path.resolve(process.argv[2] ?? path.join(output, "win-unpacked", "resources", "app.asar"));
 const sourceDist = path.join(projectRoot, "dist");
-const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "cam-asar-verify-"));
+const scratch = fs.mkdtempSync(path.join(process.env.CAM_TEST_WORK_DIR ?? os.tmpdir(), "egoist-asar-verify-"));
 
 function listFiles(root) {
   const result = [];
@@ -38,8 +40,11 @@ try {
   const mismatches = [...sourceByRelative].filter(([relative, hash]) => packedByRelative.get(relative) !== hash).map(([relative]) => relative);
   const extras = [...packedByRelative.keys()].filter((relative) => !sourceByRelative.has(relative));
 
-  const sourcePackage = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf8"));
   const packedPackage = JSON.parse(fs.readFileSync(path.join(scratch, "package.json"), "utf8"));
+  const rendererOnlyPackages = ["react", "react-dom", "lucide-react", "clsx", "date-fns", "@fontsource-variable/montserrat", "@fontsource-variable/unbounded"];
+  const rendererPackagesBundled = rendererOnlyPackages.filter((name) => fs.existsSync(path.join(scratch, "node_modules", name)));
+  const allPackedFiles = listFiles(scratch);
+  const packedDependencyFiles = allPackedFiles.filter((file) => path.relative(scratch, file).startsWith(`node_modules${path.sep}`));
   const electronIsDevBundled = Boolean(packedPackage.dependencies?.["electron-is-dev"]);
   const rendererIndex = fs.readFileSync(path.join(sourceDist, "renderer", "index.html"), "utf8");
   const rendererAssets = fs.readdirSync(path.join(sourceDist, "renderer", "assets"));
@@ -55,6 +60,7 @@ try {
     && sourceFiles.length === packedFiles.length
     && packedPackage.version === sourcePackage.version
     && !electronIsDevBundled
+    && rendererPackagesBundled.length === 0
     && rendererEntryAssetSetIsClean;
 
   const report = {
@@ -67,6 +73,11 @@ try {
     sourceVersion: sourcePackage.version,
     packedVersion: packedPackage.version,
     electronIsDevBundled,
+    asarBytes: fs.statSync(asarPath).size,
+    totalPackedFiles: allPackedFiles.length,
+    packedDependencyFiles: packedDependencyFiles.length,
+    packedDependencyBytes: packedDependencyFiles.reduce((total, file) => total + fs.statSync(file).size, 0),
+    rendererPackagesBundled,
     rendererEntryAssets,
     referencedRendererEntryAssets,
     orphanRendererEntryAssets,

@@ -1,20 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchAntigravityQuota, parseSummaryGroups } from "../../src/main/services/antigravityQuotaService";
+import { fetchAntigravityQuota, normalizeAntigravityPlan, parseSummaryGroups } from "../../src/main/services/antigravityQuotaService";
 
+const now = 1_900_000_000;
+const context = { googleProjectId: null, tier: "free" as const, tierId: "free-tier", source: "code_assist" as const, errorReason: null };
+const summary = { groups: [{ displayName: "Gemini", buckets: [
+  { bucketId: "gemini-five", window: "5h", remainingFraction: 0.72, resetTime: new Date((now + 3 * 3600) * 1000).toISOString() },
+  { bucketId: "gemini-weekly", window: "weekly", remainingFraction: 0.79, resetTime: new Date((now + 2 * 86400) * 1000).toISOString() }
+] }] };
+const response = (body: unknown, status = 200, headers?: HeadersInit) => new Response(JSON.stringify(body), { status, headers });
 afterEach(() => vi.useRealTimers());
 
 describe("antigravityQuotaService", () => {
   it.each([null, undefined, "", "  ", false, true, {}, [], "invalid", Infinity, NaN].map(value => [value]))(
-    "does not invent exhausted quota for an unavailable fraction %j",
-    (remainingFraction) => {
-      expect(parseSummaryGroups({ groups: [{ buckets: [{ remainingFraction }] }] }, 0)).toEqual([]);
-    }
-  );
-  it.each([0, "0", 0.25, "0.25"])("preserves valid zero and numeric fractions %j", (remainingFraction) => {
-    const [model] = parseSummaryGroups({ groups: [{ buckets: [{ remainingFraction }] }] }, 0);
-    expect(model.usedPercent).toBe(Math.round((1 - Number(remainingFraction)) * 100));
+    "does not invent exhausted quota for an unavailable fraction %j", (remainingFraction) => {
+      expect(parseSummaryGroups({ groups: [{ buckets: [{ remainingFraction }] }] }, now)).toEqual([]);
+    });
+  it.each([0, "0", 0.25, "0.25", 0.004])("keeps valid numeric fractions %j", (remainingFraction) => {
+    const [model] = parseSummaryGroups({ groups: [{ buckets: [{ remainingFraction }] }] }, now);
+    expect(model.usedPercent).toBeCloseTo((1 - Number(remainingFraction)) * 100);
   });
-  it.each(["headers", "body"])("aborts a stalled quota %s and continues to the next endpoint", async (phase) => {
+
+  it.each(["headers", "body"])("aborts a stalled quota %s before one bounded fallback", async (phase) => {
     vi.useFakeTimers();
     const signals: AbortSignal[] = [];
     const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
@@ -23,654 +29,112 @@ describe("antigravityQuotaService", () => {
         if (phase === "headers") return new Promise<Response>(() => undefined);
         return { text: () => new Promise<string>(() => undefined) } as Response;
       }
-      return new Response(JSON.stringify({ groups: [{ buckets: [
-        { bucketId: "5h", window: "5h", remainingFraction: 0.5 },
-        { bucketId: "week", window: "weekly", remainingFraction: 0.75 }
-      ] }] }));
+      return response(summary);
     });
-    const pending = fetchAntigravityQuota({
-      accessToken: "fixture-token",
-      accountContext: { googleProjectId: null, tier: "unknown", tierId: null, source: "unavailable", errorReason: null },
-      fetchImpl: fetchImpl as typeof fetch,
-      requestTimeoutMs: 100
-    });
+    const pending = fetchAntigravityQuota({ accessToken: "fixture-token", accountContext: context,
+      fetchImpl: fetchImpl as typeof fetch, requestTimeoutMs: 100, now: () => now });
     await vi.advanceTimersByTimeAsync(101);
-    await expect(pending).resolves.toMatchObject({ status: "active", limits: { primary: { usedPercent: 50 } } });
+    const result = await pending;
+    expect(result.status).toBe("active");
+    expect(result.limits.primary?.usedPercent).toBeCloseTo(28);
     expect(signals[0]?.aborted).toBe(true);
-    expect(signals[1]?.aborted).toBe(false);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
   });
-  it("prefers Cockpit-style retrieveUserQuota buckets when a Code Assist project is available", async () => {
-    const calls: Array<{ url: string; body: string; userProject: string | null }> = [];
-    const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
-      const headers = new Headers(init?.headers);
-      calls.push({
-        url: String(url),
-        body: String(init?.body ?? ""),
-        userProject: headers.get("x-goog-user-project")
-      });
-      if (String(url).includes("loadCodeAssist")) {
-        return new Response(JSON.stringify({
-          cloudaicompanionProject: "project-1",
-          currentTier: { id: "free-tier" },
-          paidTier: {
-            id: "google-ai-ultra-x20",
-            name: "Google AI Ultra X20",
-            availableCredits: [{ creditAmount: 2000, minimumCreditAmountForUsage: 50 }]
-          }
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      if (String(url).includes("retrieveUserQuota")) {
-        return new Response(JSON.stringify({
-          buckets: [
-            {
-              modelId: "gemini-3-pro",
-              remainingFraction: 0.28,
-              resetTime: "2026-05-29T22:00:00Z"
-            },
-            {
-              modelId: "gemini-3-flash",
-              remainingFraction: 0.65,
-              resetTime: "2026-06-05T17:00:00Z"
-            }
-          ]
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      throw new Error(`unexpected request ${String(url)}`);
-    };
 
-    const result = await fetchAntigravityQuota({
-      accessToken: "access-secret-value",
-      fetchImpl: fetchImpl as typeof fetch,
-      now: () => Date.parse("2026-05-29T17:00:00Z") / 1000
+  it("preserves explicit periods, scopes and every quota group without rounded usage", async () => {
+    const fetchImpl = vi.fn(async () => response({ groups: [
+      ...summary.groups, { displayName: "Claude", buckets: [
+        { bucketId: "claude-five", window: "5h", remainingFraction: 0.004 },
+        { bucketId: "claude-weekly", window: "weekly", remainingFraction: 1 }
+      ] }
+    ] }));
+    const result = await fetchAntigravityQuota({ accessToken: "fixture", accountContext: context, fetchImpl: fetchImpl as typeof fetch, now: () => now });
+    expect(result.limits.buckets).toHaveLength(4);
+    expect(result.limits.buckets?.find(bucket => bucket.limitId === "claude-five")).toMatchObject({
+      scope: "Claude", primary: { usedPercent: 99.6, windowDurationMins: 300 }
     });
-
-    expect(result.accountContext).toMatchObject({
-      googleProjectId: "project-1",
-      tier: "paid",
-      tierId: "Google AI Ultra X20"
-    });
-    expect(result.limits).toMatchObject({
-      planType: "google-ai-ultra-x20",
-      primary: { usedPercent: 72, windowDurationMins: 300 },
-      secondary: { usedPercent: 35, windowDurationMins: 10080 }
-    });
+    expect(result.limits.capturedAt).toBe(now);
     expect(result.status).toBe("active");
-    expect(calls.some((call) => call.url.includes("retrieveUserQuota"))).toBe(true);
-    expect(calls.some((call) => call.url.includes("fetchAvailableModels"))).toBe(false);
-    expect(calls.find((call) => call.url.includes("retrieveUserQuota"))?.userProject).toBe("project-1");
-    expect(JSON.stringify(result)).not.toContain("access-secret-value");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("fetches Code Assist context and model quota without storing raw secret fields", async () => {
-    const calls: Array<{ url: string; body: string }> = [];
-    const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
-      calls.push({ url: String(url), body: String(init?.body ?? "") });
-      if (String(url).includes("loadCodeAssist")) {
-        return new Response(JSON.stringify({
-          cloudaicompanionProject: "project-1",
-          currentTier: { id: "g1-pro-tier" },
-          paidTier: { id: "g1-pro-tier" }
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      return new Response(JSON.stringify({
-        models: {
-          "gemini-3-pro": {
-            displayName: "Gemini 3 Pro",
-            quotaInfo: {
-              remainingFraction: 0.25,
-              resetTime: "2026-05-23T18:00:00Z"
-            }
-          },
-          "claude-sonnet-4.5": {
-            displayName: "Claude Sonnet 4.5",
-            quotaInfo: {
-              remainingFraction: 0.6,
-              resetTime: "2026-05-24T18:00:00Z"
-            }
-          }
-        }
-      }), { status: 200, headers: { "Content-Type": "application/json" } });
-    };
-
-    const result = await fetchAntigravityQuota({
-      accessToken: "access-secret-value",
-      fetchImpl: fetchImpl as typeof fetch
-    });
-
-    expect(result.accountContext).toMatchObject({
-      googleProjectId: "project-1",
-      tier: "unknown",
-      tierId: null
-    });
-    expect(result.limits).toMatchObject({
-      planType: "unknown",
-      primary: { usedPercent: 75 },
-      secondary: { usedPercent: 40 }
-    });
-    expect(result.status).toBe("active");
-    expect(JSON.stringify(result)).not.toContain("access-secret-value");
-    expect(calls.some((call) => call.url.includes("fetchAvailableModels"))).toBe(true);
-  });
-
-  it("marks quota as forbidden when Google returns 403 after project fallback", async () => {
-    let quotaCalls = 0;
-    const fetchImpl = async (url: string | URL | Request) => {
-      if (String(url).includes("loadCodeAssist")) {
-        return new Response(JSON.stringify({
-          cloudaicompanionProject: "project-1",
-          allowedTiers: [{ id: "free", isDefault: true }]
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      quotaCalls += 1;
-      return new Response(JSON.stringify({ error: "forbidden" }), { status: 403, headers: { "Content-Type": "application/json" } });
-    };
-
-    const result = await fetchAntigravityQuota({
-      accessToken: "access-secret-value",
-      fetchImpl: fetchImpl as typeof fetch
-    });
-
-    expect(result.forbidden).toBe(true);
-    expect(result.status).toBe("active");
-    expect(result.limits.rateLimitReachedType).toBe("forbidden");
-    expect(quotaCalls).toBe(2);
-  });
-
-  it("keeps plan unknown when only a paid offer tier is present", async () => {
-    const fetchImpl = async (url: string | URL | Request) => {
-      if (String(url).includes("loadCodeAssist")) {
-        return new Response(JSON.stringify({
-          cloudaicompanionProject: "project-1",
-          paidTier: { id: "g1-pro-tier" }
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      return new Response(JSON.stringify({
-        models: {
-          "gemini-3-pro": {
-            displayName: "Gemini 3 Pro",
-            quotaInfo: {
-              remainingFraction: 0.25,
-              resetTime: "2026-05-23T18:00:00Z"
-            }
-          }
-        }
-      }), { status: 200, headers: { "Content-Type": "application/json" } });
-    };
-
-    const result = await fetchAntigravityQuota({
-      accessToken: "access-secret-value",
-      fetchImpl: fetchImpl as typeof fetch
-    });
-
-    expect(result.accountContext).toMatchObject({
-      tier: "unknown",
-      tierId: null
-    });
-    expect(result.limits.planType).toBe("unknown");
-    expect(result.limits.primary?.usedPercent).toBe(75);
-  });
-
-  it("maps the live Google AI Pro Code Assist shape with credits and a single returned bucket", async () => {
-    const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
-      const headers = new Headers(init?.headers);
-      if (String(url).includes("loadCodeAssist")) {
-        return new Response(JSON.stringify({
-          cloudaicompanionProject: "project-1",
-          currentTier: { id: "free-tier", name: "Antigravity" },
-          paidTier: {
-            id: "g1-pro-tier",
-            name: "Google AI Pro",
-            availableCredits: [{ creditAmount: 1000, minimumCreditAmountForUsage: 50 }]
-          },
-          allowedTiers: [
-            { id: "free-tier", name: "Antigravity", isDefault: true },
-            { id: "standard-tier", name: "Antigravity" }
-          ]
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      if (String(url).includes("retrieveUserQuota") && headers.get("x-goog-user-project")) {
-        return new Response(JSON.stringify({ error: "forbidden" }), { status: 403, headers: { "Content-Type": "application/json" } });
-      }
-      if (String(url).includes("retrieveUserQuota")) {
-        return new Response(JSON.stringify({
-          buckets: [{
-            modelId: "claude-opus-4-6-thinking",
-            remainingFraction: 1,
-            resetTime: "2026-05-29T22:00:00Z"
-          }]
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      if (String(url).includes("fetchAvailableModels")) {
-        return new Response(JSON.stringify({ models: {} }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      throw new Error(`unexpected request ${String(url)}`);
-    };
-
-    const result = await fetchAntigravityQuota({
-      accessToken: "access-secret-value",
-      fetchImpl: fetchImpl as typeof fetch,
-      now: () => Date.parse("2026-05-29T17:00:00Z") / 1000
-    });
-
-    expect(result.accountContext).toMatchObject({
-      googleProjectId: "project-1",
-      tier: "paid",
-      tierId: "Google AI Pro"
-    });
-    expect(result.limits.planType).toBe("google-ai-pro");
-    expect(result.limits.primary).toMatchObject({ usedPercent: 0, windowDurationMins: 300 });
+  it("keeps a partial successful snapshot instead of seeking an invented second window", async () => {
+    const fetchImpl = vi.fn(async () => fetchImpl.mock.calls.length === 1
+      ? response({ response: { buckets: [{ modelId: "future-model", remainingFraction: 0.4,
+          resetTime: new Date((now + 5 * 3600) * 1000).toISOString() }] } })
+      : response({}, 403));
+    const result = await fetchAntigravityQuota({ accessToken: "fixture", accountContext: context, fetchImpl: fetchImpl as typeof fetch, now: () => now });
+    expect(result.limits.primary?.usedPercent).toBeCloseTo(60);
+    expect(result.limits.primary?.windowDurationMins).toBeNull();
     expect(result.limits.secondary).toBeNull();
+    expect(result.limits.buckets?.[0].modelId).toBe("future-model");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not guess a weekly or five-hour period from the distance to reset", async () => {
+    const body = { models: { "gemini-3-pro": { quotaInfo: { remainingFraction: 0.28, resetTime: new Date((now + 5 * 3600) * 1000).toISOString() } } } };
+    const fetchImpl = async () => response(body);
+    const result = await fetchAntigravityQuota({ accessToken: "fixture", accountContext: context, fetchImpl: fetchImpl as typeof fetch, now: () => now });
+    expect(result.limits.primary?.windowDurationMins).toBeNull();
+    expect(result.limits.planType).toBe("free");
+    expect(result.limits.buckets?.[0].modelId).toBe("gemini-3-pro");
+  });
+
+  it("reports exhaustion per model without excluding a different available model", async () => {
+    const fetchImpl = async () => response({ models: {
+      "claude": { quotaInfo: { remainingFraction: 0 } }, "gemini": { quotaInfo: { remainingFraction: 0.5 } }
+    } });
+    const result = await fetchAntigravityQuota({ accessToken: "fixture", accountContext: context, fetchImpl: fetchImpl as typeof fetch });
     expect(result.status).toBe("active");
+    expect(result.statusReason).toContain("claude");
+    expect(result.limits.buckets?.find(bucket => bucket.modelId === "claude")?.rateLimitReachedType).toBe("quota_exhausted");
   });
 
-  it("keeps same-model five-hour and weekly retrieveUserQuota buckets as separate windows", async () => {
-    const fetchImpl = async (url: string | URL | Request) => {
-      if (String(url).includes("loadCodeAssist")) {
-        return new Response(JSON.stringify({
-          cloudaicompanionProject: "project-1",
-          paidTier: {
-            id: "g1-pro-tier",
-            name: "Google AI Pro",
-            availableCredits: [{ creditAmount: 1000, minimumCreditAmountForUsage: 50 }]
-          }
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      if (String(url).includes("retrieveUserQuota")) {
-        return new Response(JSON.stringify({
-          buckets: [
-            {
-              modelId: "claude-opus-4-6-thinking",
-              remainingFraction: 0.25,
-              resetTime: "2026-05-29T22:00:00Z"
-            },
-            {
-              modelId: "claude-opus-4-6-thinking",
-              remainingFraction: 0.6,
-              resetTime: "2026-06-05T17:00:00Z"
-            }
-          ]
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      throw new Error(`unexpected request ${String(url)}`);
-    };
-
-    const result = await fetchAntigravityQuota({
-      accessToken: "access-secret-value",
-      fetchImpl: fetchImpl as typeof fetch,
-      now: () => Date.parse("2026-05-29T17:00:00Z") / 1000
-    });
-
-    expect(result.limits.primary).toMatchObject({ usedPercent: 75, windowDurationMins: 300 });
-    expect(result.limits.secondary).toMatchObject({ usedPercent: 40, windowDurationMins: 10080 });
-    expect(result.limits.limitName).toBe("5 часов / неделя");
+  it.each([401, 403, 429])("stops on HTTP %s and preserves typed retry/auth evidence", async (status) => {
+    const fetchImpl = vi.fn(async () => response({}, status, { "Retry-After": "600" }));
+    await expect(fetchAntigravityQuota({ accessToken: "fixture", accountContext: { ...context, googleProjectId: "project" },
+      fetchImpl: fetchImpl as typeof fetch, now: () => now }))
+      .rejects.toMatchObject({ statusCode: status, retryAfterSeconds: 600, requiresReauth: status === 401 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("supplements a single retrieveUserQuota window with a weekly fetchAvailableModels window", async () => {
-    const calls: string[] = [];
-    const fetchImpl = async (url: string | URL | Request) => {
-      const target = String(url);
-      calls.push(target);
-      if (target.includes("loadCodeAssist")) {
-        return new Response(JSON.stringify({
-          cloudaicompanionProject: "project-1",
-          paidTier: {
-            id: "g1-pro-tier",
-            name: "Google AI Pro",
-            availableCredits: [{ creditAmount: 1000, minimumCreditAmountForUsage: 50 }]
-          }
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      if (target.includes("retrieveUserQuota")) {
-        return new Response(JSON.stringify({
-          buckets: [{
-            modelId: "claude-opus-4-6-thinking",
-            remainingFraction: 0.2,
-            resetTime: "2026-05-29T22:00:00Z"
-          }]
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      if (target.includes("fetchAvailableModels")) {
-        return new Response(JSON.stringify({
-          models: {
-            "claude-opus-4-6-thinking": {
-              quotaInfo: {
-                remainingFraction: 0.55,
-                resetTime: "2026-06-05T17:00:00Z"
-              }
-            }
-          }
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      throw new Error(`unexpected request ${target}`);
-    };
-
-    const result = await fetchAntigravityQuota({
-      accessToken: "access-secret-value",
-      fetchImpl: fetchImpl as typeof fetch,
-      now: () => Date.parse("2026-05-29T17:00:00Z") / 1000
-    });
-
-    expect(calls.some((url) => url.includes("fetchAvailableModels"))).toBe(true);
-    expect(result.limits.primary).toMatchObject({ usedPercent: 80, windowDurationMins: 300 });
-    expect(result.limits.secondary).toMatchObject({ usedPercent: 45, windowDurationMins: 10080 });
-    expect(result.limits.planType).toBe("google-ai-pro");
+  it.each([401, 403, 429])("does not wait for an error body or retry after HTTP %s headers", async (status) => {
+    const text = vi.fn(() => new Promise<string>(() => undefined));
+    const fetchImpl = vi.fn(async () => ({ status, ok: false, headers: new Headers({ "Retry-After": "600" }), text }) as unknown as Response);
+    await expect(fetchAntigravityQuota({ accessToken: "fixture", accountContext: context, fetchImpl: fetchImpl as typeof fetch }))
+      .rejects.toMatchObject({ statusCode: status, retryAfterSeconds: 600 });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(text).not.toHaveBeenCalled();
   });
 
-  it("continues across fetchAvailableModels endpoints until a weekly window is found", async () => {
-    const calls: string[] = [];
-    const fetchImpl = async (url: string | URL | Request) => {
-      const target = String(url);
-      calls.push(target);
-      if (target.includes("loadCodeAssist")) {
-        return new Response(JSON.stringify({
-          cloudaicompanionProject: "project-1",
-          paidTier: {
-            id: "g1-pro-tier",
-            name: "Google AI Pro",
-            availableCredits: [{ creditAmount: 1000, minimumCreditAmountForUsage: 50 }]
-          }
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      if (target.includes("retrieveUserQuota")) {
-        return new Response(JSON.stringify({
-          buckets: [{
-            modelId: "claude-opus-4-6-thinking",
-            remainingFraction: 1,
-            resetTime: "2026-05-29T22:00:00Z"
-          }]
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      if (target.includes("daily-cloudcode-pa.googleapis.com")) {
-        return new Response(JSON.stringify({
-          models: {
-            "claude-opus-4-6-thinking": {
-              quotaInfo: {
-                remainingFraction: 1,
-                resetTime: "2026-05-29T22:00:00Z"
-              }
-            }
-          }
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      if (target.includes("autopush-cloudcode-pa.sandbox.googleapis.com")) {
-        return new Response(JSON.stringify({
-          models: {
-            "claude-opus-4-6-thinking": {
-              quotaInfo: {
-                remainingFraction: 0.42,
-                resetTime: "2026-06-05T17:00:00Z"
-              }
-            }
-          }
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      throw new Error(`unexpected request ${target}`);
-    };
-
-    const result = await fetchAntigravityQuota({
-      accessToken: "access-secret-value",
-      fetchImpl: fetchImpl as typeof fetch,
-      now: () => Date.parse("2026-05-29T17:00:00Z") / 1000
-    });
-
-    expect(calls.some((url) => url.includes("autopush-cloudcode-pa.sandbox.googleapis.com"))).toBe(true);
-    expect(result.limits.primary).toMatchObject({ usedPercent: 0, windowDurationMins: 300 });
-    expect(result.limits.secondary).toMatchObject({ usedPercent: 58, windowDurationMins: 10080 });
+  it("caps empty fallback attempts and does not visit sandbox environments", async () => {
+    const urls: string[] = [];
+    const fetchImpl = async (url: string | URL | Request) => { urls.push(String(url)); return response({}); };
+    await expect(fetchAntigravityQuota({ accessToken: "fixture", accountContext: context, fetchImpl: fetchImpl as typeof fetch }))
+      .rejects.toThrow(/no known quota/);
+    expect(urls).toHaveLength(4);
+    expect(urls.join(" ")).not.toContain("sandbox");
   });
 
-  it("groups Antigravity model quota into five-hour and weekly windows by reset time", async () => {
-    const fetchImpl = async (url: string | URL | Request) => {
-      if (String(url).includes("loadCodeAssist")) {
-        return new Response(JSON.stringify({
-          allowedTiers: [{ id: "standard-tier", name: "Antigravity Standard", isDefault: true }]
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      return new Response(JSON.stringify({
-        models: {
-          "gemini-3.1-pro-high": {
-            displayName: "Gemini 3.1 Pro (High)",
-            quotaInfo: {
-              remainingFraction: 0.2,
-              resetTime: "2026-05-29T22:00:00Z"
-            }
-          },
-          "gemini-3.1-flash-lite": {
-            displayName: "Gemini 3.1 Flash Lite",
-            quotaInfo: {
-              remainingFraction: 0.75,
-              resetTime: "2026-05-29T20:00:00Z"
-            }
-          },
-          "claude-opus-4-6-thinking": {
-            displayName: "Claude Opus 4.6 (Thinking)",
-            quotaInfo: {
-              remainingFraction: 0.4,
-              resetTime: "2026-06-05T17:00:00Z"
-            }
-          }
-        }
-      }), { status: 200, headers: { "Content-Type": "application/json" } });
+  it("supports request cancellation even when the injected fetch ignores its signal", async () => {
+    const controller = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    const fetchImpl = async (_url: unknown, init?: RequestInit) => {
+      seenSignal = init?.signal as AbortSignal;
+      return new Promise<Response>(() => undefined);
     };
-
-    const result = await fetchAntigravityQuota({
-      accessToken: "access-secret-value",
-      fetchImpl: fetchImpl as typeof fetch,
-      now: () => Date.parse("2026-05-29T17:00:00Z") / 1000
-    });
-
-    expect(result.limits.planType).toBe("unknown");
-    expect(result.limits.primary).toMatchObject({
-      usedPercent: 80,
-      windowDurationMins: 300,
-      resetsAt: Date.parse("2026-05-29T22:00:00Z") / 1000
-    });
-    expect(result.limits.secondary).toMatchObject({
-      usedPercent: 60,
-      windowDurationMins: 10080,
-      resetsAt: Date.parse("2026-06-05T17:00:00Z") / 1000
-    });
+    const pending = fetchAntigravityQuota({ accessToken: "fixture", accountContext: context,
+      fetchImpl: fetchImpl as typeof fetch, signal: controller.signal });
+    controller.abort(new Error("fixture cancelled"));
+    await expect(pending).rejects.toThrow("fixture cancelled");
+    expect(seenSignal?.aborted).toBe(true);
   });
 
-  it("includes GPT and image model families exposed by Code Assist", async () => {
-    const fetchImpl = async (url: string | URL | Request) => {
-      if (String(url).includes("loadCodeAssist")) {
-        return new Response(JSON.stringify({
-          allowedTiers: [{ id: "standard-tier", name: "Antigravity Standard", isDefault: true }]
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      return new Response(JSON.stringify({
-        models: {
-          "gpt-5.1-codex": {
-            quotaInfo: {
-              remainingFraction: 0.5,
-              resetTime: "2026-05-29T22:00:00Z"
-            }
-          },
-          "imagen-4": {
-            quotaInfo: {
-              remainingFraction: 0.9,
-              resetTime: "2026-06-05T17:00:00Z"
-            }
-          }
-        }
-      }), { status: 200, headers: { "Content-Type": "application/json" } });
-    };
-
-    const result = await fetchAntigravityQuota({
-      accessToken: "access-secret-value",
-      fetchImpl: fetchImpl as typeof fetch,
-      now: () => Date.parse("2026-05-29T17:00:00Z") / 1000
-    });
-
-    expect(result.limits.primary).toMatchObject({ usedPercent: 50, windowDurationMins: 300 });
-    expect(result.limits.secondary).toMatchObject({ usedPercent: 10, windowDurationMins: 10080 });
-  });
-
-  it("parses native retrieveUserQuotaSummary with both 5-hour and weekly windows across model groups", async () => {
-    const fetchImpl = async (url: string | URL | Request) => {
-      const target = String(url);
-      if (target.includes("loadCodeAssist")) {
-        return new Response(JSON.stringify({
-          cloudaicompanionProject: "project-1",
-          currentTier: { id: "free-tier", name: "Antigravity" }
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      if (target.includes("retrieveUserQuota")) {
-        return new Response(JSON.stringify({
-          groups: [
-            {
-              displayName: "Gemini Models",
-              buckets: [
-                {
-                  bucketId: "gemini-weekly",
-                  displayName: "Weekly Limit Remaining",
-                  window: "weekly",
-                  resetTime: "2026-06-05T17:00:00Z",
-                  remainingFraction: 0.79
-                },
-                {
-                  bucketId: "gemini-5h",
-                  displayName: "Five Hour Limit Remaining",
-                  window: "5h",
-                  resetTime: "2026-05-29T22:00:00Z",
-                  remainingFraction: 0.72
-                }
-              ]
-            },
-            {
-              displayName: "Claude and GPT models",
-              buckets: [
-                {
-                  bucketId: "3p-weekly",
-                  displayName: "Weekly Limit Remaining",
-                  window: "weekly",
-                  resetTime: "2026-06-05T18:00:00Z",
-                  remainingFraction: 1.0
-                },
-                {
-                  bucketId: "3p-5h",
-                  displayName: "Five Hour Limit Remaining",
-                  window: "5h",
-                  resetTime: "2026-05-29T23:00:00Z",
-                  remainingFraction: 1.0
-                }
-              ]
-            }
-          ]
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      throw new Error(`unexpected request ${target}`);
-    };
-
-    const result = await fetchAntigravityQuota({
-      accessToken: "access-secret-value",
-      fetchImpl: fetchImpl as typeof fetch,
-      now: () => Date.parse("2026-05-29T17:00:00Z") / 1000
-    });
-
-    expect(result.limits.primary).toMatchObject({
-      usedPercent: 28,
-      windowDurationMins: 300,
-      resetsAt: Date.parse("2026-05-29T22:00:00Z") / 1000
-    });
-    expect(result.limits.secondary).toMatchObject({
-      usedPercent: 21,
-      windowDurationMins: 10080,
-      resetsAt: Date.parse("2026-06-05T17:00:00Z") / 1000
-    });
-    expect(result.limits.limitName).toBe("5 часов / неделя");
-    expect(result.status).toBe("active");
-  });
-
-  it("prioritizes daily-cloudcode-pa endpoint and correctly handles 100% used 5h quota", async () => {
-    const requestedUrls: string[] = [];
-    const fetchImpl = async (url: string | URL | Request) => {
-      const target = String(url);
-      requestedUrls.push(target);
-      if (target.includes("loadCodeAssist")) {
-        return new Response(JSON.stringify({
-          cloudaicompanionProject: "aicode-consumers",
-          currentTier: { id: "paid-tier", name: "Google AI Pro" }
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      if (target.startsWith("https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")) {
-        return new Response(JSON.stringify({
-          groups: [
-            {
-              displayName: "Gemini Models",
-              buckets: [
-                {
-                  bucketId: "gemini-weekly",
-                  displayName: "Weekly Limit Remaining",
-                  window: "weekly",
-                  resetTime: "2026-09-28T15:49:41Z",
-                  remainingFraction: 0.82367986
-                },
-                {
-                  bucketId: "gemini-5h",
-                  displayName: "Five Hour Limit Remaining",
-                  window: "5h",
-                  resetTime: "2026-09-21T20:49:41Z",
-                  remainingFraction: 0
-                }
-              ]
-            }
-          ]
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      if (target.startsWith("https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")) {
-        return new Response(JSON.stringify({
-          groups: [
-            {
-              displayName: "Gemini Models",
-              buckets: [
-                {
-                  bucketId: "gemini-weekly",
-                  displayName: "Weekly Limit Remaining",
-                  window: "weekly",
-                  resetTime: "2026-09-28T18:23:41Z",
-                  remainingFraction: 1.0
-                },
-                {
-                  bucketId: "gemini-5h",
-                  displayName: "Five Hour Limit Remaining",
-                  window: "5h",
-                  resetTime: "2026-09-21T23:23:41Z",
-                  remainingFraction: 1.0
-                }
-              ]
-            }
-          ]
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      throw new Error(`unexpected request ${target}`);
-    };
-
-    const result = await fetchAntigravityQuota({
-      accessToken: "access-secret-value",
-      fetchImpl: fetchImpl as typeof fetch,
-      now: () => Date.parse("2026-09-21T18:20:00Z") / 1000
-    });
-
-    // Verify daily-cloudcode-pa was called first
-    expect(requestedUrls[0]).toContain("daily-cloudcode-pa.googleapis.com");
-    expect(requestedUrls.some((u) => u.startsWith("https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"))).toBe(false);
-
-    // Verify 5h limit is 100% used (0% remaining)
-    expect(result.limits.primary).toMatchObject({
-      usedPercent: 100,
-      windowDurationMins: 300,
-      resetsAt: Date.parse("2026-09-21T20:49:41Z") / 1000
-    });
-    // Verify weekly limit is 18% used (82% remaining)
-    expect(result.limits.secondary).toMatchObject({
-      usedPercent: 18,
-      windowDurationMins: 10080,
-      resetsAt: Date.parse("2026-09-28T15:49:41Z") / 1000
-    });
-    expect(result.status).toBe("limited");
-    expect(result.statusReason).toContain("Gemini Models: Five Hour Limit Remaining");
+  it("normalizes only explicit known plan values, independent of accessible model names", () => {
+    expect(normalizeAntigravityPlan("Google AI Pro", "paid")).toBe("google-ai-pro");
+    expect(normalizeAntigravityPlan("Google AI Ultra X20", "paid")).toBe("google-ai-ultra-x20");
+    expect(normalizeAntigravityPlan("g1-pro-tier", "unknown")).toBe("unknown");
+    expect(normalizeAntigravityPlan("model-6.10-pro", "paid")).toBe("unknown");
   });
 });

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity version="3.1.6.0" processorArchitecture="*" name="AccountManagerEGO.ModernInstaller" type="win32"/>
-  <description>Account Manager EGO Setup</description>
+  <assemblyIdentity version="3.2.0.2" processorArchitecture="*" name="AccountManagerEGO.ModernInstaller" type="win32"/>
+  <description>Квессер — установка</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">

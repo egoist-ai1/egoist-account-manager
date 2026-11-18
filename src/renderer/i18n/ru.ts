@@ -1,7 +1,7 @@
 export const uiText = {
   nav: {
     dashboard: "Панель",
-    accounts: "Аккаунты",
+    accounts: "Профили",
     limits: "Лимиты",
     vault: "Перенос",
     health: "Диагностика",

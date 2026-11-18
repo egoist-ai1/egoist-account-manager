@@ -24,7 +24,7 @@ describe("AccountManager transfer", () => {
     const sourceDir = tempDir();
     const targetDir = tempDir();
     const exportPath = path.join(tempDir(), "accounts.cam-export");
-    const authJson = JSON.stringify({ auths: { chatgpt: { accountId: "acc_real", accessToken: "token" } } });
+    const authJson = JSON.stringify({ tokens: { account_id: "acc_real", access_token: "synthetic-access-token" } });
 
     const sourceStore = new AccountStore(sourceDir);
     const targetStore = new AccountStore(targetDir);

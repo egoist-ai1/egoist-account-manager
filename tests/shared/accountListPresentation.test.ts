@@ -114,6 +114,34 @@ describe("account list presentation", () => {
     expect(accountPlanPriority(account("pro5", { planType: "pro-x5" }))).toBeLessThan(accountPlanPriority(account("pro20", { planType: "pro-x20" })));
   });
 
+  it("does not rank an unknown raw plan by model/version numbers embedded in its name", () => {
+    for (const planType of ["model-6.20-pro", "future-plan-10", "version5"]) {
+      expect(accountPlanPriority(account(planType, { planType }))).toBe(accountPlanPriority(account("unknown", { planType: "unknown" })));
+    }
+  });
+
+  it("keeps fresh known readiness above stale, missing or reset observations in smart order", () => {
+    const profiles = [
+      account("stale", { planType: "pro-x20", lastRefreshAt: now - 901, weeklyUsedPercent: 1 }),
+      account("missing", { planType: "pro-x20", weeklyUsedPercent: null }),
+      account("reset", { planType: "pro-x20", weeklyResetsAt: now - 1, weeklyUsedPercent: 1 }),
+      account("ready", { planType: "free", weeklyUsedPercent: 50 })
+    ];
+    expect(sortAccountList(profiles, "smart", now)[0]?.id).toBe("ready");
+  });
+
+  it("uses the same available Antigravity group as the shared readiness result", () => {
+    const window = (usedPercent: number) => ({ usedPercent, resetsAt: now + 3600, windowDurationMins: 60 });
+    const profile = account("ag", { platform: "antigravity", quotaSnapshot: {
+      limitId: "exhausted", limitName: "A", primary: window(100), secondary: null, credits: null,
+      planType: "unknown", rateLimitReachedType: null, buckets: [
+        { limitId: "exhausted", limitName: "A", modelId: "model-a", primary: window(100), secondary: null },
+        { limitId: "available", limitName: "B", modelId: "model-b", primary: window(20.5), secondary: null }
+      ]
+    } });
+    expect(selectAccountListQuota(profile, now)).toMatchObject({ remainingPercent: 79.5, windowType: "rolling" });
+  });
+
   it("uses normalized codepoint names and immutable ids as the final deterministic tie-break", () => {
     const sameLabelB = account("id-b", { label: "Alpha" });
     const sameLabelA = account("id-a", { label: "Alpha" });

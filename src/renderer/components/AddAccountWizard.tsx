@@ -1,0 +1,45 @@
+import { useEffect, useState } from "react";
+import { CheckCircle2, Copy, ExternalLink, KeyRound, Loader2, ShieldCheck, X } from "lucide-react";
+import type { AppDiagnostics, AppSettings, CodexLoginMethodId, CodexLoginRequest, LoginStartResult } from "../../shared/types";
+
+export type LoginWizardState = { open: boolean; phase: "method" | "starting" | "waiting" | "done" | "error"; type: CodexLoginRequest["type"] | null; result: LoginStartResult | null; error: string | null };
+
+const labels = {
+  ru: { title: "Добавление аккаунта", intro: "Выберите официальный способ входа Codex. Сохранённые профили остаются на этом компьютере.", browser: "Браузерный вход", browserHelp: "Открыть официальный вход ChatGPT в браузере.", device: "Код устройства", deviceHelp: "Подтвердить вход одноразовым кодом на официальной странице.", session: "Импортировать текущую сессию", sessionHelp: "Проверить уже сохранённый локальный вход.", apiHelp: "Ввести ключ для официального Codex app-server.", enterpriseHelp: "Ввести токен организации для локального Codex.", local: "Локальные данные входа", secret: "Секрет", show: "Показать", hide: "Скрыть", signIn: "Войти", clear: "Поле очищается после отправки и при закрытии формы.", starting: "Запускаю авторизацию", waiting: "Завершите вход в браузере", enterCode: "Введите код устройства", code: "Одноразовый код", copy: "Копировать", copied: "Скопировано", page: "Открыть страницу входа", handoffError: "Не удалось передать код. Скопируйте его и откройте страницу ещё раз.", waitingHelp: "Форма может быть скрыта. Вход продолжится, а кнопка добавления вернёт к этой попытке.", copiedHelp: "Код скопирован. Вставьте его на официальной странице входа.", done: "Вход завершён", doneHelp: "Профиль проверен и сохранён.", failed: "Вход не завершён", retry: "Повторить через код", close: "Закрыть", ready: "Готово" },
+  en: { title: "Add account", intro: "Choose an official Codex sign-in method. Saved profiles stay on this computer.", browser: "Browser sign-in", browserHelp: "Open the official ChatGPT sign-in page.", device: "Device code", deviceHelp: "Confirm sign-in with a one-time code on the official page.", session: "Import current session", sessionHelp: "Check a locally saved sign-in.", apiHelp: "Enter a key for the official Codex app-server.", enterpriseHelp: "Enter an organization token for local Codex.", local: "Local credentials", secret: "Secret", show: "Show", hide: "Hide", signIn: "Sign in", clear: "The field is cleared after submission and when the form closes.", starting: "Starting sign-in", waiting: "Complete sign-in in your browser", enterCode: "Enter the device code", code: "One-time code", copy: "Copy", copied: "Copied", page: "Open sign-in page", handoffError: "Could not hand off the code. Copy it and open the page again.", waitingHelp: "You can hide this form. Sign-in continues; Add account returns to this attempt.", copiedHelp: "Code copied. Paste it on the official sign-in page.", done: "Sign-in completed", doneHelp: "The profile was checked and saved.", failed: "Sign-in did not complete", retry: "Retry with device code", close: "Close", ready: "Done" }
+};
+
+export function AddAccountWizard({ state, busy, language, capabilities, onStart, onOpen, onCopyDeviceCode, onOpenDeviceLogin, onImportCurrentSession, onClose }: {
+  state: LoginWizardState; busy: string | null; language: AppSettings["language"]; capabilities: AppDiagnostics["codexCapabilities"] | null | undefined;
+  onStart: (input: CodexLoginRequest) => void; onOpen: (url: string) => void; onCopyDeviceCode: (code: string) => Promise<unknown>; onOpenDeviceLogin: (url: string, code: string) => Promise<unknown>; onImportCurrentSession?: () => void; onClose: () => void;
+}) {
+  const t = labels[language];
+  const [credentialType, setCredentialType] = useState<"apiKey" | "enterpriseAccessToken" | null>(null);
+  const [credential, setCredential] = useState("");
+  const [showCredential, setShowCredential] = useState(false);
+  const [codeState, setCodeState] = useState<"idle" | "copying" | "copied" | "opening" | "error">("idle");
+  useEffect(() => { if (!state.open) { setCredential(""); setCredentialType(null); setShowCredential(false); } }, [state.open]);
+  useEffect(() => { setCodeState(state.result?.deviceCodeCopied ? "copied" : "idle"); }, [state.result?.loginId, state.result?.deviceCodeCopied]);
+  if (!state.open) return null;
+  const available = (id: CodexLoginMethodId) => capabilities?.loginMethods.find((method) => method.id === id)?.available !== false;
+  const url = state.result?.authUrl ?? state.result?.verificationUrl ?? "";
+  const code = state.result?.userCode;
+  const submit = () => { if (credentialType && credential.trim()) { onStart({ type: credentialType, credential: credential.trim() }); setCredential(""); setShowCredential(false); } };
+  const copy = async () => { if (!code) return; setCodeState("copying"); try { await onCopyDeviceCode(code); setCodeState("copied"); } catch { setCodeState("error"); } };
+  const open = async () => { if (!url) return; if (!code) { onOpen(url); return; } setCodeState("opening"); try { await onOpenDeviceLogin(url, code); setCodeState("copied"); } catch { setCodeState("error"); } };
+  return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={t.title}><div className="workflow-modal">
+    <div className="modal-head"><div><div className="panel-title">{t.title}</div><p>{t.intro}</p></div><button className="icon-btn" onClick={onClose} aria-label={t.close}><X /></button></div>
+    {state.phase === "method" ? <><div className="codex-login-choice-grid">
+      <button className="choice-card" disabled={busy !== null || !available("chatgpt")} onClick={() => onStart({ type: "chatgpt" })}><ExternalLink /><strong>{t.browser}</strong><span>{t.browserHelp}</span></button>
+      <button className="choice-card" disabled={busy !== null || !available("chatgptDeviceCode")} onClick={() => onStart({ type: "chatgptDeviceCode" })}><KeyRound /><strong>{t.device}</strong><span>{t.deviceHelp}</span></button>
+      {onImportCurrentSession ? <button className="choice-card" disabled={busy !== null} onClick={onImportCurrentSession}><ShieldCheck /><strong>{t.session}</strong><span>{t.sessionHelp}</span></button> : null}
+    </div><div className="codex-section-heading"><strong>{t.local}</strong></div><div className="choice-grid">
+      <button className="choice-card" disabled={busy !== null || !available("apiKey")} onClick={() => setCredentialType("apiKey")}><KeyRound /><strong>OpenAI API key</strong><span>{t.apiHelp}</span></button>
+      <button className="choice-card" disabled={busy !== null || !available("enterpriseAccessToken")} onClick={() => setCredentialType("enterpriseAccessToken")}><ShieldCheck /><strong>Enterprise access token</strong><span>{t.enterpriseHelp}</span></button>
+    </div>{credentialType ? <form className="credential-login-form" onSubmit={(event) => { event.preventDefault(); submit(); }}><label className="field"><span>{t.secret}</span><div className="credential-input-row"><input autoFocus autoComplete="off" spellCheck={false} type={showCredential ? "text" : "password"} value={credential} aria-label={t.secret} onChange={(event) => setCredential(event.target.value)} /><button className="button secondary" type="button" onClick={() => setShowCredential((current) => !current)}>{showCredential ? t.hide : t.show}</button><button className="button" type="submit" disabled={!credential.trim() || busy !== null}>{t.signIn}</button></div><small>{t.clear}</small></label></form> : null}</> : null}
+    {state.phase === "starting" ? <div className="workflow-state" role="status" aria-busy="true"><Loader2 className="spin" /><strong>{t.starting}</strong></div> : null}
+    {state.phase === "waiting" && state.result ? <div className="workflow-state"><strong>{code ? t.enterCode : t.waiting}</strong>{code ? <div className="device-code-panel"><span className="device-code-caption">{t.code}</span><code>{code}</code><button className="button secondary" disabled={codeState === "copying"} onClick={() => void copy()}>{codeState === "copying" ? <Loader2 className="spin" /> : <Copy />}{codeState === "copied" ? t.copied : t.copy}</button></div> : null}<span className={codeState === "error" ? "form-error" : "device-code-guidance"} role="status">{codeState === "error" ? t.handoffError : codeState === "copied" && code ? t.copiedHelp : t.waitingHelp}</span>{url ? <button className="button" disabled={codeState === "opening"} onClick={() => void open()}>{codeState === "opening" ? <Loader2 className="spin" /> : <ExternalLink />}{t.page}</button> : null}</div> : null}
+    {state.phase === "done" ? <div className="workflow-state"><CheckCircle2 /><strong>{t.done}</strong><span>{t.doneHelp}</span><button className="button" onClick={onClose}>{t.ready}</button></div> : null}
+    {state.phase === "error" ? <div className="workflow-state"><strong>{t.failed}</strong><p className="form-error" role="alert">{state.error}</p><button className="button secondary" disabled={busy !== null} onClick={() => onStart({ type: "chatgptDeviceCode" })}>{t.retry}</button></div> : null}
+  </div></div>;
+}

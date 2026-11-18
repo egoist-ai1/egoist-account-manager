@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { assertManagedPath } from "../paths.js";
 
 const manifestFormat = "one.egoist.codex-account-manager.auth-activation";
 const manifestVersion = 1;
@@ -178,10 +179,6 @@ export class DurableAuthBundleService {
         const previousContents = previousExisted ? this.adapter.readUtf8(targetPath) : null;
         const stageFileName = `${index}-${file.relativePath.replace(/[^a-z0-9.-]/gi, "_")}.tmp`;
         const stagePath = path.join(stageDir, stageFileName);
-        this.adapter.writeDurableUtf8(stagePath, file.contents);
-        if (this.adapter.readUtf8(stagePath) !== file.contents) {
-          throw new Error(`Staged auth bytes are unstable for ${file.relativePath}`);
-        }
         manifest.files.push({
           relativePath: file.relativePath,
           targetHash: sha256(file.contents),
@@ -191,6 +188,13 @@ export class DurableAuthBundleService {
           stageFileName,
           replaced: false
         });
+        // Persist rollback evidence before exposing a plaintext stage. A crash
+        // between these writes remains recoverable and cleanup does not need it.
+        manifest = this.writeManifest(transactionDir, manifest);
+        this.adapter.writeDurableUtf8(assertManagedPath(transactionDir, stagePath), file.contents);
+        if (this.adapter.readUtf8(stagePath) !== file.contents) {
+          throw new Error(`Staged auth bytes are unstable for ${file.relativePath}`);
+        }
       }
       manifest = this.writeManifest(transactionDir, { ...manifest, status: "staged" });
       manifest = this.writeManifest(transactionDir, { ...manifest, status: "activating" });
@@ -242,11 +246,7 @@ export class DurableAuthBundleService {
   }
 
   async rollback(backupPath: string): Promise<void> {
-    const transactionDir = path.resolve(backupPath);
-    const expectedRoot = path.resolve(this.transactionRoot());
-    if (!transactionDir.startsWith(`${expectedRoot}${path.sep}`)) {
-      throw new Error("Auth rollback path is outside the transaction root");
-    }
+    const transactionDir = this.validatedTransactionDir(backupPath);
     const manifest = this.readManifest(transactionDir);
     if (!(await this.rollbackManifest(transactionDir, manifest))) {
       throw new Error("Auth rollback bytes could not be verified");
@@ -258,7 +258,7 @@ export class DurableAuthBundleService {
     status: ManifestStatus;
     files: Array<{ relativePath: string; targetHash: string; previousHash: string | null; replaced: boolean }>;
   } {
-    const manifest = this.readManifest(backupPath);
+    const manifest = this.readManifest(this.validatedTransactionDir(backupPath));
     return {
       transactionId: manifest.transactionId,
       status: manifest.status,
@@ -281,10 +281,29 @@ export class DurableAuthBundleService {
     }
   }
 
+  verifyPreviousFiles(backupPath: string): boolean {
+    try {
+      const manifest = this.readManifest(this.validatedTransactionDir(backupPath));
+      for (const file of manifest.files) {
+        const targetPath = this.targetPath(file.relativePath);
+        if (!file.previousExisted) {
+          if (this.adapter.exists(targetPath)) return false;
+          continue;
+        }
+        if (!file.previousHash || !file.sealedPreviousContents || !this.adapter.exists(targetPath)) return false;
+        if (sha256(this.options.unsealBackup(file.sealedPreviousContents)) !== file.previousHash) return false;
+        if (sha256(this.adapter.readUtf8(targetPath)) !== file.previousHash) return false;
+      }
+      return manifest.files.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   cleanupTransientFiles(backupPath: string): void {
     const transactionDir = this.validatedTransactionDir(backupPath);
-    this.adapter.remove(path.join(transactionDir, "stage"), true);
-    this.adapter.remove(path.join(transactionDir, "rollback"), true);
+    this.adapter.remove(assertManagedPath(transactionDir, path.join(transactionDir, "stage")), true);
+    this.adapter.remove(assertManagedPath(transactionDir, path.join(transactionDir, "rollback")), true);
     for (const entry of fs.existsSync(transactionDir) ? fs.readdirSync(transactionDir) : []) {
       if (entry.startsWith("manifest.json.") && entry.endsWith(".tmp")) {
         this.adapter.remove(path.join(transactionDir, entry));
@@ -292,23 +311,39 @@ export class DurableAuthBundleService {
     }
   }
 
+  cleanupOrphanedTransientFiles(): number {
+    const root = this.transactionRoot();
+    if (!fs.existsSync(root)) return 0;
+    assertManagedPath(this.options.codexHome, root);
+    let cleaned = 0;
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.isSymbolicLink() || !/^[a-zA-Z0-9-]{8,120}$/.test(entry.name)) continue;
+      this.cleanupTransientFiles(path.join(root, entry.name));
+      cleaned += 1;
+    }
+    return cleaned;
+  }
+
   private async rollbackManifest(
     transactionDir: string,
     inputManifest: DurableAuthManifest
   ): Promise<boolean> {
+    const previousByPath = new Map<string, string>();
+    for (const file of inputManifest.files) {
+      if (!file.previousExisted) continue;
+      if (!file.sealedPreviousContents || !file.previousHash) throw new Error(`Rollback material is missing for ${file.relativePath}`);
+      const contents = this.options.unsealBackup(file.sealedPreviousContents);
+      if (sha256(contents) !== file.previousHash) throw new Error(`Rollback material hash mismatch for ${file.relativePath}`);
+      previousByPath.set(file.relativePath, contents);
+    }
     let manifest = this.writeManifest(transactionDir, { ...inputManifest, status: "rolling_back" });
     const rollbackDir = path.join(transactionDir, "rollback");
     this.adapter.mkdir(rollbackDir);
     for (const [index, file] of [...manifest.files].reverse().entries()) {
       const targetPath = this.targetPath(file.relativePath);
       if (file.previousExisted) {
-        if (!file.sealedPreviousContents || !file.previousHash) {
-          throw new Error(`Rollback material is missing for ${file.relativePath}`);
-        }
-        const previousContents = this.options.unsealBackup(file.sealedPreviousContents);
-        if (sha256(previousContents) !== file.previousHash) {
-          throw new Error(`Rollback material hash mismatch for ${file.relativePath}`);
-        }
+        const previousContents = previousByPath.get(file.relativePath);
+        if (previousContents === undefined) throw new Error(`Rollback material is missing for ${file.relativePath}`);
         const rollbackPath = path.join(rollbackDir, `${index}.tmp`);
         this.adapter.writeDurableUtf8(rollbackPath, previousContents);
         await this.renameWithRetry(rollbackPath, targetPath);
@@ -349,13 +384,29 @@ export class DurableAuthBundleService {
   }
 
   private readManifest(transactionDir: string): DurableAuthManifest {
-    const manifest = JSON.parse(this.adapter.readUtf8(path.join(transactionDir, "manifest.json"))) as DurableAuthManifest;
+    this.validatedTransactionDir(transactionDir);
+    const manifest = JSON.parse(this.adapter.readUtf8(assertManagedPath(transactionDir, path.join(transactionDir, "manifest.json")))) as DurableAuthManifest;
     if (
       manifest.format !== manifestFormat
       || manifest.version !== manifestVersion
       || !Array.isArray(manifest.files)
     ) {
       throw new Error("Unsupported durable auth activation manifest");
+    }
+    validateTransactionId(manifest.transactionId);
+    if (path.basename(transactionDir) !== manifest.transactionId) throw new Error("Auth manifest transaction does not match its directory");
+    if (manifest.files.length > allowedRelativePaths.size) throw new Error("Auth manifest contains too many files");
+    const seen = new Set<string>();
+    for (const file of manifest.files) {
+      if (!allowedRelativePaths.has(file.relativePath) || seen.has(file.relativePath)
+        || !/^[0-9]+-[a-zA-Z0-9_.-]+\.tmp$/.test(file.stageFileName)
+        || !/^[a-f0-9]{64}$/.test(file.targetHash)
+        || typeof file.previousExisted !== "boolean"
+        || typeof file.replaced !== "boolean") throw new Error("Invalid auth activation manifest entry");
+      seen.add(file.relativePath);
+      if (file.previousExisted && (!file.sealedPreviousContents || !file.previousHash || !/^[a-f0-9]{64}$/.test(file.previousHash))) {
+        throw new Error("Auth rollback evidence is missing");
+      }
     }
     return manifest;
   }
@@ -379,7 +430,7 @@ export class DurableAuthBundleService {
     const targetPath = path.resolve(this.options.codexHome, relativePath);
     const home = path.resolve(this.options.codexHome);
     if (path.dirname(targetPath) !== home) throw new Error("Auth bundle target escaped CODEX_HOME");
-    return targetPath;
+    return assertManagedPath(home, targetPath);
   }
 
   private transactionRoot(): string {
@@ -387,15 +438,13 @@ export class DurableAuthBundleService {
   }
 
   private transactionDir(transactionId: string): string {
-    return path.join(this.transactionRoot(), transactionId);
+    return assertManagedPath(this.transactionRoot(), path.join(this.transactionRoot(), transactionId));
   }
 
   private validatedTransactionDir(backupPath: string): string {
-    const transactionDir = path.resolve(backupPath);
-    const expectedRoot = path.resolve(this.transactionRoot());
-    if (!transactionDir.startsWith(`${expectedRoot}${path.sep}`)) {
-      throw new Error("Auth transaction path is outside the transaction root");
-    }
+    const transactionDir = assertManagedPath(this.transactionRoot(), backupPath);
+    if (path.dirname(transactionDir) !== path.resolve(this.transactionRoot())) throw new Error("Auth transaction must be a direct owned directory");
+    validateTransactionId(path.basename(transactionDir));
     return transactionDir;
   }
 }

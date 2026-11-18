@@ -1,168 +1,61 @@
-<div align="center">
-  <img src="assets/logo.png" width="128" alt="Account Manager EGO Logo" />
-  <h1>Account Manager EGO</h1>
-  <p><strong>Автономный центр управления профилями, балансировки квот и бесшовного переключения аккаунтов для Google Antigravity IDE и OpenAI Codex на Windows 10/11.</strong></p>
-  <p><em>100% локальное шифрование через Windows DPAPI · Атомарный Safe Rollback · Обход SMS-верификации · Нативный инсталлятор</em></p>
+<img src="assets/brand/kvesser-mark.svg" width="72" alt="Знак Квессер" />
 
-  <p>
-    <a href="https://github.com/egoist-ai1/egoist-account-manager/releases/latest"><img alt="Версия 3.1.10" src="https://img.shields.io/badge/Release-v3.1.10-7c3aed?style=for-the-badge&logo=github&logoColor=white" /></a>
-    <img alt="Windows 10/11" src="https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-090a0f?style=for-the-badge&logo=windows11&logoColor=white" />
-    <img alt="Zero Dependencies" src="https://img.shields.io/badge/Setup-Zero--Dependencies-10b981?style=for-the-badge&logo=checkmarx&logoColor=white" />
-    <img alt="Тесты" src="https://img.shields.io/badge/Tests-393%20Passed-22c55e?style=for-the-badge" />
-    <a href="LICENSE"><img alt="Лицензия MIT" src="https://img.shields.io/badge/License-MIT-3b82f6?style=for-the-badge" /></a>
-  </p>
+# Квессер
 
-  <p>
-    <a href="https://github.com/egoist-ai1/egoist-account-manager/releases/latest"><strong>Скачать установщик (Setup .exe)</strong></a>
-    ·
-    <a href="https://github.com/egoist-ai1/egoist-account-manager/releases/latest"><strong>Портативная версия (Portable .exe)</strong></a>
-    ·
-    <a href="CHANGELOG.md">История изменений</a>
-    ·
-    <a href="https://boosty.to/eg01stgames"><strong>Поддержать автора</strong></a>
-  </p>
-</div>
+**Квессер 3.2.0-rc.4** управляет профилями Codex и Antigravity и показывает остаток квоты в трее Windows. Предварительная сборка для Windows x64 распространяется без цифровой подписи. [Изменения и проверка RC4](docs/releases/3.2.0-rc.4.md)
 
----
+Главный экран — плотная таблица **Профиль / Остаток / Свежесть / Состояние / Действия**. Поиск, фильтр провайдера, сортировка и клавиатурный выбор помогают сравнивать профили в одном месте. Карточки остаются дополнительным представлением; подробности и действия открываются через общий inspector. Разделы: **Профили / Обзор / Журнал / Настройки**.
 
-## ⚡ О проекте
+## Возможности
 
-**Account Manager EGO** — инженерный инструмент для разработчиков, ежедневно работающих с ИИ-ассистентами в среде Windows. Приложение решает проблему исчерпания лимитов генерации кода, позволяя объединить несколько аккаунтов в единый пул с автоматическим или ручным переключением в 1 клик, сохранением открытых контекстов и контролем оставшихся квот в реальном времени.
+- Локальные профили Codex и Antigravity, настройки, история и зашифрованный vault. Существующие идентификаторы и совместимые пути хранилища сохраняются при ребрендинге.
+- Квоты с доступными окнами, дробным остатком, источником и временем наблюдения. Неизвестные значения показываются как «—», малый положительный остаток — «<1%»; ошибка обновления отделена от последнего хорошего результата. Длительность окна определяется данными провайдера.
+- Раздельное подтверждение переключения: применение профиля, проверка credentials с указанием метода, запуск процесса и identity работающей IDE. Выбранный профиль и наблюдаемый аккаунт IDE представлены отдельно.
+- Если профиль применён и IDE запущена, но её аккаунт подтвердить нельзя, состояние остаётся **«Аккаунт работающей IDE не подтверждён»**. Доступны повторная проверка и ручной откат, автоматическое переключение блокируется. Отдельный Codex `app-server` подтверждает probe, а не аккаунт Desktop.
+- Snapshot и восстановление при ошибках переключения. Если восстановление не удалось, `recovery_required` блокирует новые изменения соответствующего провайдера и сохраняет диагностику.
+- Импорт форматов 1–3 с расшифровкой и полной проверкой до preview. Новые записи получают внутренние UUID; совпадения по умолчанию пропускаются, credentials существующих профилей не заменяются. Применение новых записей — одна SQLite-транзакция.
+- Установщик с manifest владения файлами. Он принимает выделенную папку либо проверенную установку; деинсталлятор сохраняет посторонние файлы и пользовательское хранилище. Подробности — в [отчёте установщика](docs/implementation/installer.md).
 
-### Поддерживаемые платформы (Dual-Engine)
+Возможности интеграций зависят от версии IDE, режима хранения credentials и доступного протокола. Для Codex файловое переключение совместимо с `file`; `keyring`, `auto` и `ephemeral` требуют другого адаптера и не переключаются автоматически. Для Antigravity подтверждённый runtime email имеет свой уровень доказательства. Условия авторизации и лимиты задаются провайдерами.
 
-1. **Google Antigravity IDE**:
-   - Авторизация через системный доверенный браузер по протоколу **OAuth 2.0 PKCE** — полный обход повторных проверок и блокирующих SMS-челленджей Google (`VALIDATION_REQUIRED`).
-   - Синхронизация сессий в хранилище IDE (`state.vscdb`: бинарный Protobuf `antigravityUnifiedStateSync.oauthToken` + JSON-статус) и Windows Credential Manager (`gemini:antigravity`).
-   - Мониторинг 5-часовых и недельных скользящих окон квот моделей Gemini 3.8 Pro / Flash.
-   - Двухфазная безопасная остановка и чистый перезапуск IDE с авто-очисткой зависших блокировок (`SingletonLock`, `lockfile`).
+## Данные и сеть
 
-2. **OpenAI Codex (CLI & Desktop)**:
-   - Поддержка ChatGPT подписок (Plus, Pro, Team, Enterprise), прямого OpenAI API Key и Enterprise токенов.
-   - Интеграция с официальным JSON-RPC сервером Codex (`app-server v2`).
-   - Мягкая остановка процессов через системные события `WM_CLOSE` с сохранением черновиков кода и истории в SQLite перед сменой пользователя.
-   - Гарантированный атомарный откат (**Safe Rollback**) на предыдущий аккаунт в случае таймаута или ошибки запуска.
+Секреты профилей хранятся в локальном vault с AES-256-GCM; его ключ защищается через Electron `safeStorage` с Windows DPAPI. При недоступном secure storage обычное приложение отказывается открывать секретные данные. При применении профиля credentials записываются в необходимый провайдеру локальный формат, включая `auth.json` или Windows Credential Manager.
 
----
+Авторизация, обновление токенов и чтение квот выполняют запросы к endpoints провайдеров и передают необходимые credentials этим endpoints. Проверка обновлений обращается к GitHub. Обязательная регистрация в Квессер и телеметрия не добавлены. Метаданные и журнал находятся в локальной SQLite с `WAL + FULL`; это настройка хранения, а не гарантия восстановления после любого сбоя.
 
-## 💎 Фирменный стиль «Lagom» и интерфейс
+## Скачать RC4 для Windows
 
-Интерфейс спроектирован по скандинавскому дизайн-стандарту **Lagom** (швед. *«ровно столько, сколько нужно»*):
-- **Строгая триколор-палитра**: Глубокий чёрный фон `#000000`, чистый белый текст `#ffffff` и неоновый королевский фиолетовый акцент `#7c3aed` / `#8b5cf6`.
-- **Чистота и контрастность (Anti-Slop & Zero Emoji)**: Никаких визуальных шумов, маркетинговых шаблонов и эмодзи. Только векторные SVG-иконки Lucide и чистые 4K-графические элементы.
-- **Типографика Unbounded**: Премиальная геометрическая гарнитура `@fontsource-variable/unbounded` для акцентных метрик, статусов и заголовков.
-- **Информативный трей (Live Tray & Hover)**: Компактный значок в Windows Taskbar в реальном времени отражает процент остатка квоты активного аккаунта. При наведении мыши открывается полупрозрачная HUD-панель с таймером сброса.
+Для обновления закройте Квессер через команду «Выход» в трее и запустите установщик. Он подхватит каталог предыдущей установки.
 
----
+| Артефакт | Путь |
+|---|---|
+| Установщик | [Kvesser-Setup-3.2.0-rc.4.exe](https://github.com/egoist-ai1/egoist-account-manager/releases/download/v3.2.0-rc.4/Kvesser-Setup-3.2.0-rc.4.exe) |
+| Portable | [Kvesser-3.2.0-rc.4.exe](https://github.com/egoist-ai1/egoist-account-manager/releases/download/v3.2.0-rc.4/Kvesser-3.2.0-rc.4.exe) |
+| Контрольные суммы | [SHA256SUMS-3.2.0-rc.4.txt](https://github.com/egoist-ai1/egoist-account-manager/releases/download/v3.2.0-rc.4/SHA256SUMS-3.2.0-rc.4.txt) |
 
-## 📦 Дистрибутивы и установка с нуля
+Для нового входа в Google через Квессер приложение использует ваш OAuth-клиент типа Desktop. Перед запуском задайте `CAM_ANTIGRAVITY_OAUTH_CLIENT_ID` и, если Google требует секрет для этого клиента, `CAM_ANTIGRAVITY_OAUTH_CLIENT_SECRET`. Для обновления ранее выданного разрешения нужен клиент, которому Google его выдал. Если он недоступен, войдите через настроенный клиент заново.
 
-Дистрибутив приложения полностью автономен (**Zero Dependencies**). Для установки на чистую Windows 10/11 **не требуются** предварительно установленные Node.js, Git, Python или пакетные менеджеры — все нативные бинарники SQLite, Chromium и среда Electron уже упакованы в исполняемый файл.
+Установщик и portable включают среду приложения; для работы с провайдером нужна соответствующая доступная IDE/CLI. Совместимость конкретной версии Windows и IDE подтверждается отдельными проверками. Native-сравнение с конкурентами и чистый guest lifecycle остаются отдельными этапами; лидерство и численные улучшения без сопоставимых измерений не заявляются.
 
-| Версия | Назначение | Исполняемый файл | Размер | SHA-256 |
-| :--- | :--- | :--- | :--- | :--- |
-| **Setup (Инсталлятор)** | Установка в систему с ярлыками и деинсталлятором | `Account-Manager-EGO-Setup-3.1.10.exe` | ~106 МБ | [SHA256SUMS](https://github.com/egoist-ai1/egoist-account-manager/releases/download/v3.1.10/SHA256SUMS-3.1.10.txt) |
-| **Portable** | Запуск без установки (с флешки или из любой папки) | `Account-Manager-EGO-3.1.10.exe` | ~90 МБ | [SHA256SUMS](https://github.com/egoist-ai1/egoist-account-manager/releases/download/v3.1.10/SHA256SUMS-3.1.10.txt) |
+## Разработка и проверка
 
-### Быстрый старт на новом устройстве
-
-1. Скачайте [`Account-Manager-EGO-Setup-3.1.10.exe`](https://github.com/egoist-ai1/egoist-account-manager/releases/latest).
-2. Запустите файл установки. Откроется нативный инсталлятор на C# WPF со стилем Lagom.
-3. Выберите папку установки (по умолчанию `%LOCALAPPDATA%\Programs\Account Manager EGO`) и параметры ярлыков.
-4. Нажмите **«Установить»** — инсталлятор выполнит распаковку с проверкой целостности, создаст ярлыки в меню «Пуск» / на Рабочем столе и зарегистрирует приложение в Windows.
-5. При первом запуске приложение инициализирует локальное защищённое хранилище и обнаружит установленные среды Codex и Antigravity.
-
----
-
-## 🔒 Безопасность и хранение данных
-
-- **Локальный криптоконтейнер (Windows DPAPI)**: Все авторизационные токены, ключи и сессионные снимки шифруются на аппаратном уровне операционной системы с использованием Windows Data Protection API (`CryptProtectData`) с привязкой к текущему пользователю.
-- **Изоляция данных**: Никакие токены, пароли, куки или ключи API никогда не передаются во внешнюю сеть. Все сетевые вызовы направлены исключительно на официальные endpoints провайдеров (`oauth2.googleapis.com`, `api.openai.com`).
-- **Транзакционность переключений**: База данных SQLite работает в режиме Write-Ahead Logging (WAL) с параметром `synchronous=FULL`, исключая повреждение данных даже при внезапном отключении питания.
-
----
-
-## 🛠️ Сборка из исходников (Для разработчиков)
-
-### Требования к окружению
-- **ОС**: Windows 10 или Windows 11 (x64)
-- **Node.js**: v22+ (рекомендуется v24+)
-- **Пакетный менеджер**: `pnpm` v10+
-- **.NET Framework**: v4.0+ (для сборки C# установщика через `csc.exe`)
+Требуются Windows x64, Node.js 24, **pnpm 11.28.0** и .NET Framework/WPF tooling для установщика. Порядок подготовки собственных временных каталогов и разделения native ABI описан в [руководстве разработчика](docs/development.md).
 
 ```powershell
-# 1. Клонирование репозитория
-git clone https://github.com/egoist-ai1/egoist-account-manager.git
-cd egoist-account-manager
-
-# 2. Установка зависимостей
-pnpm install
-
-# 3. Пересборка нативных модулей SQLite для тестов
-pnpm run rebuild:native:node
-
-# 4. Запуск тестов (380 тестов в 74 наборах)
-pnpm test:run
-
-# 5. Проверка типов и линтинг
+pnpm install --frozen-lockfile
 pnpm run typecheck
 pnpm run lint
-
-# 6. Запуск в режиме разработки
-pnpm run dev
-
-# 7. Сборка продакшен-установщика (Modern Installer + NSIS LZMA)
-pnpm run build:installer
+pnpm run test:node
+pnpm run test:delivery
+pnpm run build
+pnpm run smoke
+pnpm run verify:package
+pnpm run verify:startup
 ```
 
----
+`build` создаёт portable и затем custom Setup с ownership manifest; автоматическая публикация отключена. Перед тестами задайте временный каталог по docs/development.md. Проверки используют синтетические аккаунты; пользовательские credentials и работающие IDE в fixtures не включаются.
 
-## 🧭 Архитектурный обзор
+[Карта приложения](docs/APP_MAP.md) · [Архитектура](docs/ARCHITECTURE.md) · [Исследование](docs/research-3.2.0.md) · [Матрица конкурентов](docs/competitors-3.2.0.json) · [Протокол измерения](docs/benchmark-3.2.0.md) · [Release checklist](docs/release-checklist.md) · [Бренд и лицензии шрифтов](assets/brand/README.md)
 
-```mermaid
-graph TD
-    subgraph UI ["Пользовательский интерфейс (React 19 + TypeScript + Vite)"]
-        Overview["Overview Cockpit (Bento Grid)"]
-        Standby["Standby Pool (Быстрое переключение)"]
-        Tray["Live Tray & Hover HUD"]
-    end
-
-    subgraph Main ["Electron Main Process (Node.js 24+)"]
-        IPC["IPC Dispatcher (Zod Validation)"]
-        Lifecycle["Windows Desktop Lifecycle Service (WM_CLOSE / Trees)"]
-        Rollback["Safe Rollback Transaction Engine"]
-    end
-
-    subgraph Security ["Безопасность и Хранение"]
-        DPAPI["Windows DPAPI Vault (safeStorage)"]
-        SQLite["SQLite3 (better-sqlite3 / WAL Full)"]
-    end
-
-    subgraph Providers ["Интеграции с ИИ-платформами"]
-        Antigravity["Google Antigravity IDE (OAuth PKCE + state.vscdb)"]
-        Codex["OpenAI Codex CLI & Desktop (app-server v2 RPC)"]
-    end
-
-    UI -->|ContextBridge / preload.cjs| Main
-    Main --> Security
-    Main --> Providers
-```
-
----
-
-## 🤝 Поддержать развитие проекта
-
-Если **Account Manager EGO** помогает вам экономить время, эффективно распределять квоты и комфортно программировать, вы можете поддержать независимую разработку:
-
-<p align="center">
-  <a href="https://boosty.to/eg01stgames" title="Поддержать Egoist Ai One на Boosty">
-    <img src="docs/images/boosty-support-banner.svg" alt="Поддержать автора на Boosty" width="760">
-  </a>
-</p>
-
----
-
-## 📄 Лицензия
-
-Проект распространяется под открытой лицензией [MIT](LICENSE).  
-Автор: **Egoist Gorbachev** ([egoist-ai1](https://github.com/egoist-ai1)).
+Код распространяется по [MIT](LICENSE). Автор — Egoist Gorbachev.

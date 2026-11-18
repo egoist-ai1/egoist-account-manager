@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { assertProbeOperationAllowed } from "./probeIsolationService.js";
 
 export interface AntigravityCredentialStoreTokenInput {
   accessToken: string;
@@ -99,6 +100,7 @@ Add-Type -TypeDefinition $source
 }
 
 function readWindowsCredentialManagerSecret(): string | null {
+  assertProbeOperationAllowed("credential-manager");
   const script = buildWindowsCredentialManagerReadScript();
   const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
     encoding: "utf8",
@@ -108,12 +110,22 @@ function readWindowsCredentialManagerSecret(): string | null {
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    const stderr = result.stderr?.trim();
-    throw new Error(`Windows Credential Manager read failed${stderr ? `: ${stderr}` : ""}`);
+    throw new Error(`Windows Credential Manager read failed (exit ${result.status ?? "unknown"})`);
   }
   const encoded = result.stdout.trim();
   if (!encoded) return null;
-  return Buffer.from(encoded, "base64").toString("utf8");
+  return decodeCredentialPayload(encoded);
+}
+
+function decodeCredentialPayload(encoded: string): string {
+  const bytes = Buffer.from(encoded, "base64");
+  const payload = bytes.toString("utf8");
+  const roundtrip = Buffer.from(payload, "utf8");
+  const exact = bytes.equals(roundtrip);
+  bytes.fill(0);
+  roundtrip.fill(0);
+  if (!exact) throw new Error("Antigravity credential encoding cannot be restored exactly; operation aborted");
+  return payload;
 }
 
 export function readAntigravityCredentialStorePayload(
@@ -189,6 +201,7 @@ $payload = [Console]::In.ReadToEnd()
 }
 
 function writeWindowsCredentialManagerSecret(payload: string): void {
+  assertProbeOperationAllowed("credential-manager");
   const script = buildWindowsCredentialManagerWriteScript();
   const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
     input: payload,
@@ -199,8 +212,7 @@ function writeWindowsCredentialManagerSecret(payload: string): void {
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    const stderr = result.stderr?.trim();
-    throw new Error(`Windows Credential Manager write failed${stderr ? `: ${stderr}` : ""}`);
+    throw new Error(`Windows Credential Manager write failed (exit ${result.status ?? "unknown"})`);
   }
 }
 
@@ -213,5 +225,128 @@ export function writeAntigravityCredentialStoreToken(
     return { applied: false, strategy: "unsupported-platform" };
   }
   writeWindowsCredentialManagerSecret(payload);
+  return { applied: true, strategy: "windows-credential-manager" };
+}
+
+export interface CredentialCommandOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  runner?: CredentialCommandRunner;
+}
+
+export type CredentialCommandRunner = (
+  script: string,
+  input: string | undefined,
+  options: Omit<CredentialCommandOptions, "runner">
+) => Promise<string>;
+
+const runCredentialCommand: CredentialCommandRunner = (script, input, options) => new Promise((resolve, reject) => {
+  if (options.signal?.aborted) { reject(options.signal.reason); return; }
+  const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"]
+  });
+  const output: Buffer[] = [];
+  let bytes = 0;
+  let settled = false;
+  const finish = (error?: Error) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", abort);
+    if (error) reject(error);
+    else resolve(Buffer.concat(output).toString("utf8").trim());
+    for (const chunk of output) chunk.fill(0);
+  };
+  const abort = () => {
+    child.kill();
+    const error = new Error("Windows Credential Manager operation cancelled");
+    error.name = "AbortError";
+    finish(error);
+  };
+  const timer = setTimeout(() => {
+    child.kill();
+    finish(new Error("Windows Credential Manager operation timed out"));
+  }, options.timeoutMs ?? 20_000);
+  options.signal?.addEventListener("abort", abort, { once: true });
+  child.stdout.on("data", (chunk: Buffer) => {
+    bytes += chunk.length;
+    if (bytes > 1024 * 1024) {
+      child.kill();
+      chunk.fill(0);
+      finish(new Error("Windows Credential Manager output exceeded its limit"));
+    } else if (settled) chunk.fill(0);
+    else output.push(chunk);
+  });
+  child.stderr.resume();
+  child.on("error", () => finish(new Error("Windows Credential Manager helper could not start")));
+  child.on("close", (code) => finish(code === 0 ? undefined : new Error(`Windows Credential Manager helper failed (exit ${code ?? "unknown"})`)));
+  child.stdin.on("error", () => finish(new Error("Windows Credential Manager helper input failed")));
+  child.stdin.end(input ?? "");
+});
+
+async function credentialCommand(script: string, input: string | undefined, options: CredentialCommandOptions): Promise<string> {
+  assertProbeOperationAllowed("credential-manager");
+  if (options.signal?.aborted) throw options.signal.reason;
+  return (options.runner ?? runCredentialCommand)(script, input, options);
+}
+
+export async function readAntigravityCredentialStorePayloadAsync(
+  platform: NodeJS.Platform = process.platform,
+  options: CredentialCommandOptions = {}
+): Promise<AntigravityCredentialStoreReadResult | null> {
+  if (platform !== "win32") return null;
+  const encoded = await credentialCommand(buildWindowsCredentialManagerReadScript(), undefined, options);
+  if (!encoded) return null;
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    throw new Error("Windows Credential Manager returned invalid encoded data");
+  }
+  return { payload: decodeCredentialPayload(encoded), strategy: "windows-credential-manager" };
+}
+
+export async function writeAntigravityCredentialStoreTokenAsync(
+  input: AntigravityCredentialStoreTokenInput,
+  platform: NodeJS.Platform = process.platform,
+  options: CredentialCommandOptions = {}
+): Promise<AntigravityCredentialStoreWriteResult> {
+  return writeAntigravityCredentialStorePayloadAsync(buildAntigravityCredentialStorePayload(input), platform, options);
+}
+
+export async function writeAntigravityCredentialStorePayloadAsync(
+  payload: string,
+  platform: NodeJS.Platform = process.platform,
+  options: CredentialCommandOptions = {}
+): Promise<AntigravityCredentialStoreWriteResult> {
+  if (!payload.trim()) throw new Error("Antigravity credential payload is missing");
+  if (platform !== "win32") return { applied: false, strategy: "unsupported-platform" };
+  await credentialCommand(buildWindowsCredentialManagerWriteScript(), payload, options);
+  return { applied: true, strategy: "windows-credential-manager" };
+}
+
+export function buildWindowsCredentialManagerDeleteScript(): string {
+  return `$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class EgoistCredentialDelete {
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern bool CredDeleteW(string target, UInt32 type, UInt32 flags);
+  public static void Delete() {
+    if (!CredDeleteW("gemini:antigravity", 1, 0)) {
+      int code = Marshal.GetLastWin32Error();
+      if (code != 1168) throw new System.ComponentModel.Win32Exception(code);
+    }
+  }
+}
+"@
+[EgoistCredentialDelete]::Delete()`;
+}
+
+export async function deleteAntigravityCredentialStorePayloadAsync(
+  platform: NodeJS.Platform = process.platform,
+  options: CredentialCommandOptions = {}
+): Promise<AntigravityCredentialStoreWriteResult> {
+  if (platform !== "win32") return { applied: false, strategy: "unsupported-platform" };
+  await credentialCommand(buildWindowsCredentialManagerDeleteScript(), undefined, options);
   return { applied: true, strategy: "windows-credential-manager" };
 }

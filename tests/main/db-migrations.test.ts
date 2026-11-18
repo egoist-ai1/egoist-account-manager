@@ -102,7 +102,8 @@ describe("database migrations", () => {
         { version: 7, name: "v3_switch_transactions" },
         { version: 8, name: "v3_legacy_identity_review" },
         { version: 9, name: "v3_quota_refresh_health" },
-        { version: 10, name: "v31_storage_invariants" }
+        { version: 10, name: "v31_storage_invariants" },
+        { version: 11, name: "v32_switch_verification" }
       ]);
     } finally {
       store.close();
@@ -124,7 +125,8 @@ describe("database migrations", () => {
       { version: 7, name: "v3_switch_transactions" },
       { version: 8, name: "v3_legacy_identity_review" },
       { version: 9, name: "v3_quota_refresh_health" },
-      { version: 10, name: "v31_storage_invariants" }
+      { version: 10, name: "v31_storage_invariants" },
+        { version: 11, name: "v32_switch_verification" }
     ]);
   });
 
@@ -204,7 +206,8 @@ describe("database migrations", () => {
         { version: 7, name: "v3_switch_transactions" },
         { version: 8, name: "v3_legacy_identity_review" },
         { version: 9, name: "v3_quota_refresh_health" },
-        { version: 10, name: "v31_storage_invariants" }
+        { version: 10, name: "v31_storage_invariants" },
+        { version: 11, name: "v32_switch_verification" }
       ]);
       const backupFiles = fs
         .readdirSync(path.join(dir, "migration-backups"))
@@ -425,7 +428,7 @@ describe("database migrations", () => {
         label: "Antigravity Portable",
         email: "ag-portable@example.com",
         planType: "unknown",
-        profileDir: "portable",
+        profileDir: path.join(dir, "profiles", "ag-portable"),
         encryptedAuthJson: "{\"sealed\":\"none\"}",
         isActive: false,
         createdAt: 1_700_000_000,

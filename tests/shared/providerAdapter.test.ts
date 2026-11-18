@@ -121,4 +121,13 @@ describe("provider adapter metadata", () => {
       lastCheckedAt: 1_800_000_000
     });
   });
+
+  it("distinguishes observed Antigravity provider API data from a local status snapshot", () => {
+    const account = { id: "api-ag", platform: "antigravity", planType: "unknown", quotaSnapshot: {
+      limitId: "model-a", limitName: "A", primary: { usedPercent: 99.6, windowDurationMins: null, resetsAt: null },
+      secondary: null, credits: null, planType: "unknown", rateLimitReachedType: null, source: "antigravity_api", capturedAt: 1_800_000_000
+    } } as ManagedAccount;
+    expect(buildProviderQuotaState(account)).toMatchObject({ source: "provider_api", confidence: "inferred", used: 99.6,
+      lastCheckedAt: 1_800_000_000, windows: [{ source: "provider_api" }] });
+  });
 });

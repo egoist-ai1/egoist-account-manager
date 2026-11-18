@@ -4,7 +4,7 @@ import { getAntigravityDiagnostics } from "./antigravityPaths.js";
 import { extractAntigravityLocalIdentity, inspectAntigravityProfile } from "./antigravityProfileReader.js";
 
 const localProfileReason =
-  "Antigravity Hub применяет аккаунт через OS Credential Manager; старый state.vscdb используется только для legacy IDE-профилей.";
+  "Antigravity использует Windows Credential Manager. Для Antigravity IDE Квессер также проверяет запись локального профиля.";
 
 export function getAntigravityProfileStatus(input: AntigravityPathInput = {}): AntigravityProfileStatus {
   const diagnostics = getAntigravityDiagnostics(input);
@@ -16,20 +16,21 @@ export function getAntigravityProfileStatus(input: AntigravityPathInput = {}): A
     || diagnostics.geminiDataDirExists
     || diagnostics.appStorageExists
     || diagnostics.installationIdExists;
-  const legacyWritableProfile = diagnostics.profileKind !== "hub"
+  const ideWritableProfile = diagnostics.profileKind !== "hub"
     && diagnostics.stateDbExists
     && diagnostics.storageJsonExists
     && diagnostics.machineIdExists;
+  const hubWritableProfile = (input.platform ?? process.platform) === "win32" && diagnostics.appStorageExists;
 
   return {
     detected,
-    readyForWriteActions: legacyWritableProfile,
-    message: diagnostics.profileKind === "hub" && detected
-      ? "Найден Antigravity Hub. Авторизация применяется через Windows Credential Manager и перезапуск Antigravity; запись state.vscdb не требуется."
-      : legacyWritableProfile
-        ? "Локальный legacy-профиль Antigravity IDE найден. Доступна guarded-запись state.vscdb с резервной копией."
+    readyForWriteActions: diagnostics.profileKind === "hub" ? hubWritableProfile : ideWritableProfile,
+    message: diagnostics.profileKind === "hub" && hubWritableProfile
+      ? "Найден Antigravity. Квессер применит аккаунт через Windows Credential Manager и перезапустит приложение."
+      : ideWritableProfile
+        ? "Найден профиль Antigravity IDE. Квессер сохранит снимок и проверит запись перед запуском."
         : detected
-          ? "Профиль Antigravity найден частично. Для Hub достаточно OS Credential Manager; для legacy IDE нужны state.vscdb, storage.json и machineid."
+          ? "Профиль Antigravity найден частично. Откройте приложение и войдите в аккаунт, чтобы завершить настройку профиля."
           : "Профиль Antigravity пока не найден на этой машине.",
     diagnostics,
     inspection,
@@ -43,8 +44,8 @@ export function getAntigravityProfileStatus(input: AntigravityPathInput = {}): A
         reason: detected ? null : "Локальный профиль Antigravity пока не найден"
       },
       switchAccount: {
-        supported: detected,
-        reason: localProfileReason
+        supported: hubWritableProfile || ideWritableProfile,
+        reason: hubWritableProfile || ideWritableProfile ? localProfileReason : "Требуется настроенный профиль Antigravity"
       },
       refreshQuota: {
         supported: true,

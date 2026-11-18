@@ -1,17 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ANTIGRAVITY_GOOGLE_OAUTH_SCOPES,
   buildAntigravityGoogleAuthUrl,
   createAntigravityGoogleOAuthAuthorization,
   createAntigravityPkce,
   exchangeAntigravityGoogleCode,
-  DEFAULT_ANTIGRAVITY_OAUTH_CLIENT_ID,
-  DEFAULT_ANTIGRAVITY_OAUTH_CLIENT_SECRET,
   fetchAntigravityGoogleAccountContext,
   fetchAntigravityGoogleUserInfo,
   resolveAntigravityOAuthClient,
+  resolveAntigravityOAuthClientForAccount,
+  refreshAntigravityGoogleAccessToken,
   runAntigravityGoogleOAuthFlow
 } from "../../src/main/services/antigravityGoogleAuthService";
+
+afterEach(() => vi.useRealTimers());
 
 describe("antigravityGoogleAuthService", () => {
   it("builds a Google OAuth URL with PKCE and Antigravity scopes", () => {
@@ -49,19 +51,14 @@ describe("antigravityGoogleAuthService", () => {
     expect(url.searchParams.get("login_hint")).toBe("test@example.com");
   });
 
-  it("provides official Antigravity OAuth credentials by default and allows custom override", () => {
-    expect(resolveAntigravityOAuthClient({})).toEqual({
-      clientId: DEFAULT_ANTIGRAVITY_OAUTH_CLIENT_ID,
-      clientSecret: DEFAULT_ANTIGRAVITY_OAUTH_CLIENT_SECRET,
-      usesBundledPublicClient: true
-    });
+  it("requires a configured OAuth client for new sign-ins", () => {
+    expect(() => resolveAntigravityOAuthClient({})).toThrow(/CAM_ANTIGRAVITY_OAUTH_CLIENT_ID/);
     expect(resolveAntigravityOAuthClient({
       CAM_ANTIGRAVITY_OAUTH_CLIENT_ID: "client-id",
       CAM_ANTIGRAVITY_OAUTH_CLIENT_SECRET: "client-secret"
     })).toEqual({
       clientId: "client-id",
-      clientSecret: "client-secret",
-      usesBundledPublicClient: false
+      clientSecret: "client-secret"
     });
   });
 
@@ -222,7 +219,7 @@ describe("antigravityGoogleAuthService", () => {
     })).resolves.toEqual({
       googleProjectId: "project-123",
       tier: "unknown",
-      tierId: null,
+      tierId: "g1-pro-tier",
       source: "code_assist",
       errorReason: null
     });
@@ -317,15 +314,15 @@ describe("antigravityGoogleAuthService", () => {
       requestTimeoutMs: 1000
     })).resolves.toEqual({
       googleProjectId: null,
-      tier: "standard",
-      tierId: "standard-tier",
+      tier: "unknown",
+      tierId: null,
       source: "code_assist",
       errorReason: null
     });
     expect(requestBodies.some((body) => !body.includes('"metadata"'))).toBe(true);
   });
 
-  it("onboards a free Antigravity Code Assist project when loadCodeAssist has no project", async () => {
+  it("onboards only after an explicit request without treating eligibility as the active subscription", async () => {
     const requests: Array<{ url: string; body: string }> = [];
     const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
       requests.push({ url: String(url), body: String(init?.body ?? "") });
@@ -348,11 +345,12 @@ describe("antigravityGoogleAuthService", () => {
     await expect(fetchAntigravityGoogleAccountContext({
       accessToken: "access-token-value",
       fetchImpl: fetchImpl as typeof fetch,
-      requestTimeoutMs: 1000
+      requestTimeoutMs: 1000,
+      allowOnboarding: true
     })).resolves.toEqual({
       googleProjectId: "managed-project-1",
-      tier: "free",
-      tierId: "free",
+      tier: "unknown",
+      tierId: null,
       source: "code_assist",
       errorReason: null
     });
@@ -373,8 +371,8 @@ describe("antigravityGoogleAuthService", () => {
       fetchImpl: fetchImpl as typeof fetch
     })).resolves.toEqual({
       googleProjectId: "project-123",
-      tier: "free",
-      tierId: "free",
+      tier: "unknown",
+      tierId: null,
       source: "code_assist",
       errorReason: null
     });
@@ -429,5 +427,98 @@ describe("antigravityGoogleAuthService", () => {
       }
     });
     expect(calls.some((url) => url.includes("loadCodeAssist"))).toBe(false);
+  });
+  it("resolves the same client configuration for background validation and refresh", async () => {
+    const custom = { CAM_ANTIGRAVITY_OAUTH_CLIENT_ID: "custom-client", CAM_ANTIGRAVITY_OAUTH_CLIENT_SECRET: "custom-fixture-secret" };
+    expect(resolveAntigravityOAuthClientForAccount("custom-client", custom)).toEqual(resolveAntigravityOAuthClient(custom));
+    expect(resolveAntigravityOAuthClientForAccount("imported-other-client", custom)).toEqual({
+      clientId: "imported-other-client", clientSecret: null
+    });
+    expect(resolveAntigravityOAuthClientForAccount("saved-public-client", {})).toEqual({
+      clientId: "saved-public-client", clientSecret: null
+    });
+    expect(resolveAntigravityOAuthClient({ CAM_ANTIGRAVITY_OAUTH_CLIENT_ID: "own-client",
+      ANTIGRAVITY_OAUTH_CLIENT_SECRET: "foreign-fixture" }).clientSecret).toBeNull();
+    const client = resolveAntigravityOAuthClientForAccount("custom-client", custom);
+    let body = "";
+    await refreshAntigravityGoogleAccessToken({ ...client, refreshToken: "fixture-refresh",
+      fetchImpl: (async (_url: unknown, init?: RequestInit) => {
+        body = String(init?.body);
+        return new Response(JSON.stringify({ access_token: "fixture-access", expires_in: 3600 }));
+      }) as typeof fetch });
+    expect(new URLSearchParams(body).get("client_id")).toBe("custom-client");
+    expect(new URLSearchParams(body).get("client_secret")).toBe("custom-fixture-secret");
+  });
+
+  it.each([401, 403, 429])("does not repeat userinfo/context probes after HTTP %s", async (status) => {
+    let calls = 0;
+    const fetchImpl = (async () => { calls += 1; return new Response("{}", { status, headers: { "Retry-After": "600" } }); }) as typeof fetch;
+    await expect(fetchAntigravityGoogleUserInfo({ accessToken: "fixture", fetchImpl })).rejects.toMatchObject({ statusCode: status, requiresReauth: status === 401 });
+    expect(calls).toBe(1);
+    calls = 0;
+    await expect(fetchAntigravityGoogleAccountContext({ accessToken: "fixture", fetchImpl })).rejects.toMatchObject({ statusCode: status, retryAfterSeconds: 600 });
+    expect(calls).toBe(1);
+  });
+
+  it.each([400, 401])("preserves the saved sign-in when Google rejects the OAuth client (%i)", async (status) => {
+    await expect(refreshAntigravityGoogleAccessToken({
+      clientId: "fixture", clientSecret: null, refreshToken: "fixture",
+      fetchImpl: async () => new Response(JSON.stringify({ error: "invalid_client" }), { status })
+    })).rejects.toMatchObject({ statusCode: status, requiresReauth: false });
+  });
+
+  it.each([401, 403, 429])("does not wait for error response bodies after HTTP %s headers", async (status) => {
+    const text = vi.fn(() => new Promise<string>(() => undefined));
+    const fetchImpl = vi.fn(async () => ({ status, ok: false, headers: new Headers({ "Retry-After": "600" }), text }) as unknown as Response);
+    await expect(fetchAntigravityGoogleUserInfo({ accessToken: "fixture", fetchImpl: fetchImpl as typeof fetch }))
+      .rejects.toMatchObject({ statusCode: status });
+    await expect(fetchAntigravityGoogleAccountContext({ accessToken: "fixture", fetchImpl: fetchImpl as typeof fetch }))
+      .rejects.toMatchObject({ statusCode: status });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(text).not.toHaveBeenCalled();
+  });
+
+  it.each(["userinfo", "context"])("cancels %s even when the fetch adapter ignores its signal", async (method) => {
+    const controller = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+      seenSignal = init?.signal as AbortSignal;
+      return new Promise<Response>(() => undefined);
+    }) as typeof fetch;
+    const pending = method === "userinfo"
+      ? fetchAntigravityGoogleUserInfo({ accessToken: "fixture", fetchImpl, signal: controller.signal })
+      : fetchAntigravityGoogleAccountContext({ accessToken: "fixture", fetchImpl, signal: controller.signal });
+    controller.abort(new Error("fixture cancelled"));
+    await expect(pending).rejects.toThrow("fixture cancelled");
+    expect(seenSignal?.aborted).toBe(true);
+  });
+
+  it("aborts stalled successful response bodies and clears deadline timers", async () => {
+    vi.useFakeTimers();
+    let seenSignal: AbortSignal | undefined;
+    const pending = fetchAntigravityGoogleUserInfo({ accessToken: "fixture", requestTimeoutMs: 100,
+      fetchImpl: (async (_url: unknown, init?: RequestInit) => {
+        seenSignal = init?.signal as AbortSignal;
+        return { status: 200, ok: true, text: () => new Promise<string>(() => undefined) } as unknown as Response;
+      }) as typeof fetch });
+    const assertion = expect(pending).rejects.toThrow(/timed out/);
+    await vi.advanceTimersByTimeAsync(101);
+    await assertion;
+    expect(seenSignal?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps background context discovery read-only and bounded", async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (url: unknown) => { urls.push(String(url)); return new Response(JSON.stringify({ allowedTiers: [{ id: "free", isDefault: true }] })); }) as typeof fetch;
+    expect((await fetchAntigravityGoogleAccountContext({ accessToken: "fixture", fetchImpl })).tier).toBe("unknown");
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain("loadCodeAssist");
+    expect(urls.join(" ")).not.toContain("onboardUser");
+    urls.length = 0;
+    await fetchAntigravityGoogleAccountContext({ accessToken: "fixture", fetchImpl: (async (url: unknown) => { urls.push(String(url)); return new Response("{}", { status: 500 }); }) as typeof fetch });
+    expect(urls).toHaveLength(4);
+    expect(urls.join(" ")).not.toContain("sandbox");
+    expect(urls[2]).toContain("https://cloudcode-pa.googleapis.com/");
   });
 });

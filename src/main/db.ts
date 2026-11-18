@@ -11,10 +11,13 @@ import type {
   PlanType,
   RateLimitSnapshot,
   SwitchTransaction,
+  SwitchVerificationEvidence,
   SwitchTransactionPhase,
   SwitchTransactionStatus,
   SwitchHistoryItem
 } from "../shared/types.js";
+import { redactSensitiveText } from "../shared/redaction.js";
+import { getProfileDir } from "./paths.js";
 import type { LimitSnapshotRecord } from "./services/limitService.js";
 
 type Row = {
@@ -53,6 +56,7 @@ type Row = {
   last_quota_refresh_at?: number | null;
   forbidden?: 0 | 1;
   ide_state_detected?: 0 | 1;
+  runtime_verification_json?: string | null;
 };
 
 const authDriftReason = "Profile credentials changed outside Egoist Account Manager. Review or reauthenticate this profile.";
@@ -80,6 +84,7 @@ type SwitchTransactionRow = {
   updated_at: number;
   completed_at: number | null;
   version: number;
+  verification_json?: string | null;
 };
 
 export interface AccountExportRecord {
@@ -348,8 +353,47 @@ const migrations: Migration[] = [
           ON switch_transactions(status, created_at ASC);
       `);
     }
+  },
+  {
+    version: 11,
+    name: "v32_switch_verification",
+    run: (db) => {
+      const accountColumns = new Set((db.prepare("PRAGMA table_info(accounts)").all() as Array<{ name: string }>).map((column) => column.name));
+      const switchColumns = new Set((db.prepare("PRAGMA table_info(switch_transactions)").all() as Array<{ name: string }>).map((column) => column.name));
+      if (!accountColumns.has("runtime_verification_json")) db.exec("ALTER TABLE accounts ADD COLUMN runtime_verification_json TEXT");
+      if (!switchColumns.has("verification_json")) db.exec("ALTER TABLE switch_transactions ADD COLUMN verification_json TEXT");
+    }
   }
 ];
+
+function parseVerification(value: string | null | undefined): SwitchVerificationEvidence | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as SwitchVerificationEvidence;
+    if (typeof parsed.profileApplied !== "boolean"
+      || !["not_checked", "material_consistent", "probe_observed", "online_verified"].includes(parsed.credentials)
+      || !["not_requested", "process_started", "window_observed"].includes(parsed.launch)
+      || !["pending", "verified", "unsupported", "mismatch"].includes(parsed.runtime)
+      || typeof parsed.message !== "string") return null;
+    const bounded = (value: unknown, length: number): string | null => typeof value === "string" ? redactSensitiveText(value).slice(0, length) : null;
+    return {
+      profileApplied: parsed.profileApplied,
+      credentials: parsed.credentials,
+      credentialMethod: bounded(parsed.credentialMethod, 160),
+      launch: parsed.launch,
+      runtime: parsed.runtime,
+      runtimeSource: bounded(parsed.runtimeSource, 160),
+      observedEmail: bounded(parsed.observedEmail, 320),
+      observedAccountId: bounded(parsed.observedAccountId, 160),
+      observedAt: typeof parsed.observedAt === "number" && Number.isFinite(parsed.observedAt) ? parsed.observedAt : null,
+      runtimePid: Number.isInteger(parsed.runtimePid) && (parsed.runtimePid ?? 0) > 0 ? parsed.runtimePid : null,
+      runtimeCreationTime: bounded(parsed.runtimeCreationTime, 80),
+      message: redactSensitiveText(parsed.message).slice(0, 480)
+    };
+  } catch {
+    return null;
+  }
+}
 
 function mapSwitchTransaction(row: SwitchTransactionRow): SwitchTransaction {
   return {
@@ -367,7 +411,8 @@ function mapSwitchTransaction(row: SwitchTransactionRow): SwitchTransaction {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
-    version: row.version
+    version: row.version,
+    verification: parseVerification(row.verification_json)
   };
 }
 
@@ -455,16 +500,9 @@ function createVerifiedPreMigrationBackup(db: Database.Database, databasePath: s
 
 function pickWindow(limits: RateLimitSnapshot | null, kind: "five-hour" | "weekly"): { usedPercent: number | null; resetsAt: number | null } {
   const windows = [limits?.primary, limits?.secondary].filter(Boolean) as NonNullable<RateLimitSnapshot["primary"]>[];
-  if (kind === "weekly") {
-    const weekly = windows.find((window) => (window.windowDurationMins ?? 0) >= 7 * 24 * 60 - 60);
-    return { usedPercent: weekly?.usedPercent ?? null, resetsAt: weekly?.resetsAt ?? null };
-  }
-  const fiveHour =
-    windows.find((window) => {
-      const mins = window.windowDurationMins ?? 0;
-      return mins >= 240 && mins <= 360;
-    }) ?? windows.find((window) => (window.windowDurationMins ?? 0) < 24 * 60);
-  return { usedPercent: fiveHour?.usedPercent ?? null, resetsAt: fiveHour?.resetsAt ?? null };
+  const duration = kind === "weekly" ? 10080 : 300;
+  const selected = windows.find((window) => window.windowDurationMins === duration);
+  return { usedPercent: selected?.usedPercent ?? null, resetsAt: selected?.resetsAt ?? null };
 }
 
 function getTags(db: Database.Database, accountId: string): string[] {
@@ -481,7 +519,8 @@ function getTagsByAccount(db: Database.Database): Map<string, string[]> {
 }
 
 function mapRow(row: Row, tags: string[] = []): ManagedAccount {
-  const limits = row.rate_limit_json ? (JSON.parse(row.rate_limit_json) as RateLimitSnapshot) : null;
+  let limits: RateLimitSnapshot | null = null;
+  try { limits = row.rate_limit_json ? JSON.parse(row.rate_limit_json) as RateLimitSnapshot : null; } catch { /* A malformed legacy snapshot is unknown. */ }
   const fiveHour = pickWindow(limits, "five-hour");
   const weekly = pickWindow(limits, "weekly");
   const platform: AccountPlatform = row.platform === "antigravity" ? "antigravity" : "codex";
@@ -541,6 +580,8 @@ function mapRow(row: Row, tags: string[] = []): ManagedAccount {
     tags,
     favorite: row.favorite === 1,
     archived: row.archived === 1,
+    quotaSnapshot: limits,
+    runtimeVerification: parseVerification(row.runtime_verification_json),
     antigravity
   };
 }
@@ -548,7 +589,7 @@ function mapRow(row: Row, tags: string[] = []): ManagedAccount {
 export class AccountStore {
   private readonly db: Database.Database;
 
-  constructor(appDataDir: string) {
+  constructor(private readonly appDataDir: string) {
     fs.mkdirSync(appDataDir, { recursive: true });
     const databasePath = path.join(appDataDir, "accounts.sqlite");
     this.db = new Database(databasePath, { timeout: 5_000 });
@@ -746,6 +787,14 @@ export class AccountStore {
           credential_state = excluded.credential_state,
           last_authenticated_at = excluded.last_authenticated_at,
           expires_at = excluded.expires_at,
+          runtime_verification_json = CASE
+            WHEN accounts.encrypted_auth_json IS NOT excluded.encrypted_auth_json
+              OR accounts.auth_fingerprint IS NOT excluded.auth_fingerprint
+              OR accounts.version IS NOT excluded.version
+              OR accounts.profile_dir IS NOT excluded.profile_dir
+              OR accounts.platform IS NOT excluded.platform THEN NULL
+            ELSE accounts.runtime_verification_json
+          END,
           version = excluded.version`
       )
       .run({
@@ -837,12 +886,13 @@ export class AccountStore {
       .prepare(
         `UPDATE accounts SET
           credential_state = ?,
+          runtime_verification_json = CASE WHEN ? = 'ready' THEN runtime_verification_json ELSE NULL END,
           status = CASE WHEN ? = 'ready' THEN status ELSE 'error' END,
           status_reason = CASE WHEN ? = 'ready' THEN status_reason ELSE ? END,
           updated_at = ?
         WHERE id = ?`
       )
-      .run(state, state, state, reason, now, id);
+      .run(state, state, state, state, reason, now, id);
     const saved = this.get(id);
     if (!saved) throw new Error("Account not found");
     return saved;
@@ -985,8 +1035,68 @@ export class AccountStore {
   updateEncryptedAuthJson(id: string, encryptedAuthJson: string): ManagedAccount {
     const now = Math.floor(Date.now() / 1000);
     this.db
-      .prepare("UPDATE accounts SET encrypted_auth_json = ?, updated_at = ?, status_reason = NULL WHERE id = ?")
+      .prepare("UPDATE accounts SET encrypted_auth_json = ?, updated_at = ?, status_reason = NULL, runtime_verification_json = NULL, version = version + 1 WHERE id = ?")
       .run(encryptedAuthJson, now, id);
+    const saved = this.get(id);
+    if (!saved) throw new Error("Account not found");
+    return saved;
+  }
+
+  markCredentialVerified(id: string): ManagedAccount {
+    const current = this.get(id);
+    if (!current) throw new Error("Account not found");
+    if (this.getRecoveryRequired(current.platform)) throw new Error("Provider recovery is required before credential verification");
+    const now = Math.floor(Date.now() / 1000);
+    const result = this.db.prepare(
+      `UPDATE accounts SET
+        status = CASE WHEN credential_state <> 'ready' AND status = 'error'
+          AND (last_refresh_error IS NULL OR status_reason IS NULL OR status_reason <> last_refresh_error)
+          THEN 'unknown' ELSE status END,
+        status_reason = CASE WHEN credential_state <> 'ready'
+          AND (last_refresh_error IS NULL OR status_reason IS NULL OR status_reason <> last_refresh_error)
+          THEN NULL ELSE status_reason END,
+        credential_state = 'ready',
+        last_authenticated_at = ?,
+        updated_at = ?
+      WHERE id = ? AND NOT EXISTS (
+        SELECT 1 FROM switch_transactions
+        WHERE switch_transactions.platform = accounts.platform AND status = 'recovery_required'
+      )`
+    ).run(now, now, id);
+    if (result.changes !== 1) throw new Error("Provider recovery is required before credential verification");
+    const saved = this.get(id);
+    if (!saved) throw new Error("Account not found");
+    return saved;
+  }
+
+  updateObservedAuthMaterial(id: string, encryptedAuthJson: string, identityVerified = false): ManagedAccount {
+    const current = this.get(id);
+    if (!current) throw new Error("Account not found");
+    if (this.getRecoveryRequired(current.platform)) {
+      throw new Error("Provider recovery is required before changing observed credential material");
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const result = this.db.prepare(
+      `UPDATE accounts SET
+        encrypted_auth_json = @encryptedAuthJson,
+        credential_state = @credentialState,
+        last_authenticated_at = @lastAuthenticatedAt,
+        runtime_verification_json = NULL,
+        version = version + 1,
+        status = 'unknown',
+        status_reason = @statusReason,
+        updated_at = @now
+      WHERE id = @id AND NOT EXISTS (
+        SELECT 1 FROM switch_transactions
+        WHERE switch_transactions.platform = accounts.platform AND status = 'recovery_required'
+      )`
+    ).run({
+      encryptedAuthJson, id, now,
+      credentialState: identityVerified ? "ready" : "needs_review",
+      lastAuthenticatedAt: identityVerified ? now : null,
+      statusReason: identityVerified ? null : "Locally observed credentials require provider identity verification."
+    });
+    if (result.changes !== 1) throw new Error("Provider recovery is required before changing observed credential material");
     const saved = this.get(id);
     if (!saved) throw new Error("Account not found");
     return saved;
@@ -1015,7 +1125,8 @@ export class AccountStore {
           expires_at = @expiresAt,
           auth_mode = COALESCE(@authMode, auth_mode),
           credential_state = @credentialState,
-          last_authenticated_at = COALESCE(@lastAuthenticatedAt, last_authenticated_at),
+          last_authenticated_at = CASE WHEN @hasLastAuthenticatedAt = 1 THEN @lastAuthenticatedAt ELSE last_authenticated_at END,
+          runtime_verification_json = NULL,
           version = version + 1,
           updated_at = @now,
           status = CASE
@@ -1036,6 +1147,7 @@ export class AccountStore {
         authDriftReason,
         credentialState: input.credentialState ?? "ready",
         lastAuthenticatedAt: input.lastAuthenticatedAt ?? null,
+        hasLastAuthenticatedAt: input.lastAuthenticatedAt === undefined ? 0 : 1,
         authMode: input.authMode ?? null,
         now
       });
@@ -1067,6 +1179,7 @@ export class AccountStore {
         .prepare(
           `UPDATE accounts SET
             credential_state = 'drifted',
+            runtime_verification_json = NULL,
             status = 'error',
             status_reason = ?,
             updated_at = ?
@@ -1126,7 +1239,7 @@ export class AccountStore {
   }
 
   clearActive(platform: AccountPlatform): void {
-    this.db.prepare("UPDATE accounts SET is_active = 0 WHERE platform = ?").run(platform);
+    this.db.prepare("UPDATE accounts SET is_active = 0, runtime_verification_json = NULL WHERE platform = ?").run(platform);
   }
 
   setActive(id: string): ManagedAccount {
@@ -1134,8 +1247,8 @@ export class AccountStore {
     if (!target) throw new Error("Account not found");
     const now = Math.floor(Date.now() / 1000);
     const tx = this.db.transaction(() => {
-      this.db.prepare("UPDATE accounts SET is_active = 0 WHERE platform = ?").run(target.platform);
-      this.db.prepare("UPDATE accounts SET is_active = 1, last_used_at = ?, updated_at = ? WHERE id = ?").run(now, now, id);
+      this.db.prepare("UPDATE accounts SET is_active = 0, runtime_verification_json = NULL WHERE platform = ? AND id != ?").run(target.platform, id);
+      this.db.prepare("UPDATE accounts SET runtime_verification_json = CASE WHEN is_active = 1 THEN runtime_verification_json ELSE NULL END, is_active = 1, last_used_at = ?, updated_at = ? WHERE id = ?").run(now, now, id);
     });
     tx();
     const saved = this.get(id);
@@ -1152,6 +1265,7 @@ export class AccountStore {
     previousFingerprint: string | null;
     now?: number;
   }): SwitchTransaction {
+    if (this.getRecoveryRequired(input.platform)) throw new Error("Provider recovery is required before another switch");
     const now = input.now ?? Math.floor(Date.now() / 1000);
     try {
       this.db
@@ -1255,7 +1369,8 @@ export class AccountStore {
       }
 
       const now = Math.floor(Date.now() / 1000);
-      this.db.prepare("UPDATE accounts SET is_active = 0 WHERE platform = ?").run(target.platform);
+      this.db.prepare("UPDATE accounts SET is_active = 0, runtime_verification_json = NULL WHERE platform = ? AND id != ?").run(target.platform, accountId);
+      this.db.prepare("UPDATE accounts SET runtime_verification_json = ? WHERE id = ?").run(input.phase === "committed" && current.verification ? JSON.stringify(current.verification) : null, accountId);
       const accountResult = this.db
         .prepare("UPDATE accounts SET is_active = 1, last_used_at = ?, updated_at = ? WHERE id = ?")
         .run(now, now, accountId);
@@ -1296,6 +1411,39 @@ export class AccountStore {
     return finalize.immediate();
   }
 
+  getRecoveryRequired(platform: AccountPlatform): SwitchTransaction | null {
+    const row = this.db.prepare("SELECT * FROM switch_transactions WHERE platform = ? AND status = 'recovery_required' ORDER BY created_at ASC, rowid ASC LIMIT 1").get(platform) as SwitchTransactionRow | undefined;
+    return row ? mapSwitchTransaction(row) : null;
+  }
+
+  setRuntimeVerification(id: string, evidence: SwitchVerificationEvidence | null): ManagedAccount {
+    const parsed = evidence === null ? null : parseVerification(JSON.stringify(evidence));
+    if (evidence !== null && !parsed) throw new Error("Invalid runtime verification evidence");
+    const result = this.db.prepare("UPDATE accounts SET runtime_verification_json = ? WHERE id = ?").run(parsed === null ? null : JSON.stringify(parsed), id);
+    if (result.changes !== 1) throw new Error("Account not found");
+    const saved = this.get(id);
+    if (!saved) throw new Error("Account not found after runtime verification");
+    return saved;
+  }
+
+  setSwitchVerification(id: string, evidence: SwitchVerificationEvidence): SwitchTransaction {
+    const parsed = parseVerification(JSON.stringify(evidence));
+    if (!parsed) throw new Error("Invalid switch verification evidence");
+    const serialized = JSON.stringify(parsed);
+    const save = this.db.transaction(() => {
+      const current = this.getSwitchTransaction(id);
+      if (!current) throw new Error("Switch transaction not found");
+      this.db.prepare("UPDATE switch_transactions SET verification_json = ?, updated_at = ? WHERE id = ?").run(serialized, Math.floor(Date.now() / 1000), id);
+      if (evidence.profileApplied && !["rolled_back", "aborted", "failed"].includes(current.status)) {
+        this.db.prepare("UPDATE accounts SET runtime_verification_json = ? WHERE id = ? AND platform = ?").run(serialized, current.targetAccountId, current.platform);
+      }
+      const updated = this.getSwitchTransaction(id);
+      if (!updated) throw new Error("Switch transaction not found after verification");
+      return updated;
+    });
+    return save.immediate();
+  }
+
   getSwitchTransaction(id: string): SwitchTransaction | null {
     const row = this.db
       .prepare("SELECT * FROM switch_transactions WHERE id = ?")
@@ -1305,7 +1453,7 @@ export class AccountStore {
 
   listSwitchTransactions(limit = 30): SwitchTransaction[] {
     const rows = this.db
-      .prepare("SELECT * FROM switch_transactions ORDER BY created_at DESC LIMIT ?")
+      .prepare("SELECT * FROM switch_transactions ORDER BY created_at DESC, rowid DESC LIMIT ?")
       .all(limit) as SwitchTransactionRow[];
     return rows.map(mapSwitchTransaction);
   }
@@ -1315,7 +1463,7 @@ export class AccountStore {
       .prepare(
         `SELECT * FROM switch_transactions
         WHERE status IN ('pending', 'running', 'rolling_back')
-        ORDER BY created_at ASC`
+        ORDER BY created_at ASC, rowid ASC`
       )
       .all() as SwitchTransactionRow[];
     const reconciled: SwitchTransaction[] = [];
@@ -1473,6 +1621,24 @@ export class AccountStore {
   }
 
   importPortable(input: AccountExportRecord & { profileDir: string }): ManagedAccount {
+    return this.importPortableBatch([input])[0];
+  }
+
+  importPortableBatch(records: AccountExportRecord[]): ManagedAccount[] {
+    const seen = new Set<string>();
+    for (const record of records) {
+      if (seen.has(record.id) || this.get(record.id)) throw new Error("Imported account id conflicts with an existing profile");
+      seen.add(record.id);
+      const expectedProfileDir = getProfileDir(this.appDataDir, record.id);
+      if (path.resolve(record.profileDir) !== expectedProfileDir) throw new Error("Imported profile directory is not owned by this application");
+      if (this.getRecoveryRequired(record.platform ?? "codex")) throw new Error("Provider recovery is required before importing profiles");
+      if (!record.encryptedAuthJson) throw new Error("Imported encrypted credential material is empty");
+    }
+    const apply = this.db.transaction(() => records.map((record) => this.insertPortable(record)));
+    return apply.immediate();
+  }
+
+  private insertPortable(input: AccountExportRecord): ManagedAccount {
     const now = Math.floor(Date.now() / 1000);
     this.db
       .prepare(
@@ -1489,30 +1655,7 @@ export class AccountStore {
           @workspaceAccountId, @workspaceLabel, @authFingerprint, @credentialState,
           @lastAuthenticatedAt, @expiresAt, @version
         )
-        ON CONFLICT(id) DO UPDATE SET
-          platform = excluded.platform,
-          label = excluded.label,
-          email = excluded.email,
-          plan_type = excluded.plan_type,
-          profile_dir = excluded.profile_dir,
-          encrypted_auth_json = excluded.encrypted_auth_json,
-          updated_at = excluded.updated_at,
-          last_used_at = excluded.last_used_at,
-          last_refresh_at = excluded.last_refresh_at,
-          subscription_ends_at = excluded.subscription_ends_at,
-          status = excluded.status,
-          status_reason = excluded.status_reason,
-          rate_limit_json = excluded.rate_limit_json,
-          notes = excluded.notes,
-          auth_mode = excluded.auth_mode,
-          provider_account_id = excluded.provider_account_id,
-          workspace_account_id = excluded.workspace_account_id,
-          workspace_label = excluded.workspace_label,
-          auth_fingerprint = excluded.auth_fingerprint,
-          credential_state = excluded.credential_state,
-          last_authenticated_at = excluded.last_authenticated_at,
-          expires_at = excluded.expires_at,
-          version = excluded.version`
+`
       )
       .run({
         ...input,

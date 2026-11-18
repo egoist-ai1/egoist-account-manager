@@ -1,13 +1,15 @@
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import { z } from "zod";
 import { fileURLToPath } from "node:url";
-import { BrowserWindow, Menu, Tray, app, clipboard, dialog, ipcMain, nativeImage, powerMonitor, screen, shell, type IpcMainInvokeEvent } from "electron";
+import { BrowserWindow, Menu, Tray, app, clipboard, dialog, ipcMain, nativeImage, nativeTheme, powerMonitor, screen, shell, type IpcMainInvokeEvent } from "electron";
 import { AccountStore } from "./db.js";
 import { Vault } from "./security.js";
 import { getAppDataDir, getDefaultCodexHome } from "./paths.js";
-import { AccountManager, getDiagnostics } from "./accountManager.js";
-import { resolveCodexDesktopPath, resolveCodexPath } from "./processManager.js";
+import { AccountManager } from "./accountManager.js";
+import { discoverCodexRuntime, type CodexRuntimeDiscovery } from "./services/nativeDiscoveryService.js";
+import { inspectCodexCredentialStore } from "./services/codexCredentialStoreService.js";
 import { DiagnosticsService } from "./services/diagnosticsService.js";
 import { CodexCapabilityService } from "./services/codexCapabilityService.js";
 import { SettingsService } from "./services/settingsService.js";
@@ -20,9 +22,6 @@ import {
   antigravityExternalImportInputSchema,
   antigravityOAuthCancelInputSchema,
   antigravityOAuthFinishInputSchema,
-  antigravitySetGodModeInputSchema,
-  antigravityRegenerateFingerprintInputSchema,
-  warmupAccountInputSchema,
   accountActionInputSchema,
   deviceCodeActionInputSchema,
   deviceCodeOpenInputSchema,
@@ -39,17 +38,19 @@ import {
 import { redactSensitiveText } from "../shared/redaction.js";
 import { selectSmartAccount } from "../shared/smartSelection.js";
 import { buildTrayAccountLabel } from "../shared/trayLabel.js";
+import { toRendererDto } from "./services/rendererDtoService.js";
 import { LIVE_TRAY_REPRESENTATIONS, buildLiveTraySnapshot, renderLiveTrayBitmap } from "../shared/liveTray.js";
 import { calculateTraySurfacePosition } from "../shared/traySurfacePosition.js";
 import { appVersion } from "../shared/releaseNotes.js";
+import { productName, productLatinName } from "../shared/branding.js";
+import { resolveStoredUserData } from "./services/storageIdentityService.js";
 import { ReleaseService } from "./services/releaseService.js";
 import { getCrashReportsDir, writeCrashReport } from "./services/crashReportService.js";
 import { UpdaterService } from "./services/updaterService.js";
-import { syncWindowsShortcutIcon } from "./services/windowsShortcutIconService.js";
+import { syncWindowsShortcutIconAsync } from "./services/windowsShortcutIconService.js";
 import { getAntigravityDiagnostics } from "./services/antigravityPaths.js";
 import { inspectAntigravityProfile } from "./services/antigravityProfileReader.js";
 import { getAntigravityProfileStatus } from "./services/antigravityProfileService.js";
-import { getAntigravityGodModeStatus, setAntigravityGodMode } from "./services/antigravityGodModeService.js";
 import { performAntigravityHygiene } from "./services/antigravityHygieneService.js";
 import {
   createAntigravityGoogleOAuthAuthorization,
@@ -58,8 +59,10 @@ import {
   runAntigravityGoogleOAuthFlow,
   type AntigravityGoogleOAuthAuthorization
 } from "./services/antigravityGoogleAuthService.js";
-import { readAntigravityCredentialStorePayload, writeAntigravityCredentialStoreToken } from "./services/antigravityCredentialStore.js";
-import { restartAntigravityIntegration } from "./services/antigravityProcessService.js";
+import { readAntigravityCredentialStorePayloadAsync, writeAntigravityCredentialStoreTokenAsync,
+  writeAntigravityCredentialStorePayloadAsync, deleteAntigravityCredentialStorePayloadAsync } from "./services/antigravityCredentialStore.js";
+import { initializeProbeIsolation, assertProbeOperationAllowed, installProbeNetworkGuards } from "./services/probeIsolationService.js";
+import { quiesceAntigravityAsync, launchAntigravityAsync, resolveAntigravitySwitchTarget } from "./services/antigravityProcessService.js";
 import { createProviderRuntimeAdapters } from "./services/providerRuntimeAdapter.js";
 import { WindowsDesktopLifecycleService } from "./services/windowsDesktopLifecycleService.js";
 import { QuotaAlertService } from "./services/quotaAlertService.js";
@@ -72,6 +75,8 @@ import {
   buildUpdateNotification
 } from "./services/inAppNotificationService.js";
 
+const probeIsolation = initializeProbeIsolation();
+installProbeNetworkGuards(probeIsolation, !app.isPackaged ? "http://127.0.0.1:5173" : undefined);
 let mainWindow: BrowserWindow | null = null;
 let manager: AccountManager | null = null;
 let vault: Vault | null = null;
@@ -84,6 +89,7 @@ let currentPopoverPlatform: "codex" | "antigravity" = "codex";
 let currentHoverPlatform: "codex" | "antigravity" = "codex";
 let isQuitting = false;
 let startupError: string | null = null;
+let servicesReady = false;
 let settingsService: SettingsService | null = null;
 let logPath: string | null = null;
 let autoRefreshTimer: NodeJS.Timeout | null = null;
@@ -96,7 +102,10 @@ let autoRefreshInFlight = false;
 let trayRefreshInFlight = false;
 let updaterService: UpdaterService | null = null;
 let codexCapabilityService: CodexCapabilityService | null = null;
+let cachedCodexQuotaReadOptions: { excludeResetCreditDetails?: boolean } | undefined;
 let desktopLifecycleService: WindowsDesktopLifecycleService | null = null;
+let runtimeDiscoveryReady: Promise<void> | null = null;
+let runtimeDiscovery: CodexRuntimeDiscovery = { codexPath: null, codexDesktopPath: null, codexAppUserModelId: null };
 let quotaAlertService: QuotaAlertService | null = null;
 let antigravityGoogleLoginInFlight: Promise<unknown> | null = null;
 const deviceCodeHandoff = new DeviceCodeHandoffService(clipboard);
@@ -108,10 +117,8 @@ const antigravityGoogleOAuthSessions = new Map<string, {
 }>();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const productName = "Account Manager EGO";
-const publisherName = "Egoist AI";
-const previousProductName = "Egoist Account Manager";
-const legacyProductName = "Codex Account Manager";
+
+const publisherName = "Egoist";
 const appUserModelId = "one.egoist.codex-account-manager";
 // Packaged code must never trust an environment flag to enable a localhost
 // renderer with privileged preload IPC.
@@ -181,7 +188,7 @@ function createReleaseService(): ReleaseService {
   return new ReleaseService({
     projectRoot: process.cwd(),
     version: appVersion,
-    productName,
+    productName: productLatinName,
     packageConfig: readPackageConfig(),
     env: process.env
   });
@@ -203,8 +210,8 @@ async function buildDiagnosticReport(appDataDir: string) {
     appDataDir,
     codexHome: getDefaultCodexHome(),
     logPath,
-    resolveCodexPath: async () => resolveCodexPath(),
-    resolveCodexDesktopPath,
+    resolveCodexPath: async () => runtimeDiscovery.codexPath,
+    resolveCodexDesktopPath: () => runtimeDiscovery.codexDesktopPath,
     getSchemaVersion: () => manager?.getSchemaVersion() ?? 0,
     isVaultDegraded: () => false
   }).getHealth();
@@ -244,7 +251,9 @@ async function buildDiagnosticReport(appDataDir: string) {
 }
 
 async function getCurrentDiagnostics(appDataDir: string): Promise<AppDiagnostics> {
-  const base = getDiagnostics(appDataDir);
+  await runtimeDiscoveryReady;
+  const base = { ...runtimeDiscovery, activeCodexHome: getDefaultCodexHome(), appDataDir,
+    workspacePath: manager?.getWorkspacePath(), credentialStore: inspectCodexCredentialStore(getDefaultCodexHome()) };
   const [codexCapabilities, desktopLifecycle] = await Promise.all([
     codexCapabilityService
       ? codexCapabilityService.getReport().catch((error) => {
@@ -259,6 +268,8 @@ async function getCurrentDiagnostics(appDataDir: string): Promise<AppDiagnostics
       })
       : Promise.resolve(null)
   ]);
+  cachedCodexQuotaReadOptions = codexCapabilities?.features?.excludeResetCreditDetails.available
+    ? { excludeResetCreditDetails: true } : undefined;
   return {
     ...base,
     workspacePath: manager?.getWorkspacePath() ?? base.workspacePath,
@@ -331,6 +342,14 @@ function createWindow(): BrowserWindow {
     }
   });
 
+  if (probeIsolation.enabled) {
+    window.webContents.session.webRequest.onBeforeRequest((details, callback) => {
+      const url = new URL(details.url);
+      const localFile = url.protocol === "file:" || url.protocol === "data:" || url.protocol === "devtools:";
+      const renderer = isDevelopmentRuntime && url.origin === "http://127.0.0.1:5173";
+      callback({ cancel: !localFile && !renderer });
+    });
+  }
   let saveTimer: NodeJS.Timeout | null = null;
   const debouncedSave = () => {
     if (saveTimer) clearTimeout(saveTimer);
@@ -370,8 +389,19 @@ function createWindow(): BrowserWindow {
   window.webContents.on("render-process-gone", (_event, details) => {
     log(`Renderer process gone: ${details.reason}`);
   });
-  window.webContents.on("did-finish-load", () => {
+  window.webContents.once("did-finish-load", () => {
     log("Renderer loaded");
+    if (probeIsolation.enabled && process.env.CAM_PROBE_READY_FILE && probeIsolation.root) {
+      const target = path.resolve(process.env.CAM_PROBE_READY_FILE);
+      const relative = path.relative(probeIsolation.root, target);
+      if (!relative || relative.startsWith("..") || path.isAbsolute(relative) || fs.existsSync(target)) {
+        throw new Error("Invalid or already used probe readiness path");
+      }
+      fs.writeFileSync(target, JSON.stringify({ schemaVersion: 1, token: process.env.CAM_PROBE_TOKEN,
+        pid: process.pid, version: app.getVersion(), rendererReadyAtUnixMs: Date.now(),
+        processUptimeMs: process.uptime() * 1000,
+        guards: { credentialManager: true, autostart: true, externalLaunch: true, providerNetwork: true } }), { flag: "wx" });
+    }
   });
   window.webContents.on("will-navigate", (event, url) => {
     if (url !== window.webContents.getURL()) {
@@ -418,6 +448,7 @@ function requireManager(): AccountManager {
 }
 
 async function openExternalUrl(url: string, reason: string): Promise<void> {
+  assertProbeOperationAllowed("external-url", probeIsolation);
   const parsed = new URL(url);
   if (parsed.protocol !== "https:" || !allowedExternalHosts.has(parsed.hostname)) {
     throw new Error("External URL is not allowlisted");
@@ -553,7 +584,7 @@ async function startAntigravityGoogleOAuthSession() {
 
 function emitAntigravityOAuthResult(result: AntigravityImportResult): void {
   mainWindow?.webContents.send("accounts:updated");
-  mainWindow?.webContents.send("antigravity:oauth-result", result);
+  mainWindow?.webContents.send("antigravity:oauth-result", toRendererDto(result));
   updateTrayMenu();
 }
 
@@ -659,7 +690,15 @@ function registerIpc(appDataDir: string): void {
     ipcMain.handle(channel, async (event, ...args: Args) => {
       assertTrustedSender(event);
       try {
-        return await listener(event, ...args);
+        const readOrWindow = [
+          "accounts:list", "app:getInfo", "app:diagnostics", "workspace:getBinding", "switch:history", "switch:transactions",
+          "limits:history", "logs:tail", "profiles:integrity", "accounts:quota:state", "accounts:update",
+          "antigravity:diagnostics", "antigravity:profileStatus", "antigravity:inspectProfile",
+          "window:minimize", "window:toggleMaximize", "window:close", "window:showMain", "tray:hidePopover", "tray:getPlatform"
+        ].includes(channel);
+        if (!servicesReady && !readOrWindow) throw new Error(startupError ?? "Квессер is preparing recovery. Try again after initialization.");
+        if (probeIsolation.enabled && !readOrWindow) assertProbeOperationAllowed("external-app", probeIsolation);
+        return toRendererDto(await listener(event, ...args));
       } catch (error) {
         log(`IPC ${channel} failed`, error);
         throw error;
@@ -672,8 +711,8 @@ function registerIpc(appDataDir: string): void {
       appDataDir,
       codexHome: getDefaultCodexHome(),
       logPath,
-      resolveCodexPath: async () => resolveCodexPath(),
-      resolveCodexDesktopPath,
+      resolveCodexPath: async () => runtimeDiscovery.codexPath,
+      resolveCodexDesktopPath: () => runtimeDiscovery.codexDesktopPath,
       getSchemaVersion: () => manager?.getSchemaVersion() ?? 0,
       isVaultDegraded: () => vault?.isDegraded() ?? true
     }),
@@ -757,27 +796,14 @@ function registerIpc(appDataDir: string): void {
     return createProviderRuntimeAdapters(activeManager)[account.platform].getQuotaState(parsed.accountId);
   });
   handle("accounts:refreshAll", () => refreshAllRateLimits("manual"));
-  handle("accounts:warmupAll", async () => {
-    log("Warming up all accounts to trigger quota reset countdown timers");
-    const result = await requireManager().warmupAllQuotaTimers();
-    broadcastAccountsUpdated();
-    updateTrayMenu();
-    return result;
-  });
-  handle("accounts:warmup", async (_event, input) => {
-    const parsed = warmupAccountInputSchema.parse(input);
-    log(`Warming up account ${parsed.accountId} to trigger quota reset countdown timer`);
-    const result = await requireManager().warmupAccountQuotaTimer(parsed.accountId);
-    broadcastAccountsUpdated();
-    updateTrayMenu();
-    return result;
-  });
+  handle("accounts:warmupAll", () => { throw new Error("Quota refresh does not run inference"); });
+  handle("accounts:warmup", () => { throw new Error("Quota refresh does not run inference"); });
   handle("accounts:export", async (_event, passphrase: string) => {
     const stamp = new Date().toISOString().slice(0, 10);
     const options: Electron.SaveDialogOptions = {
       title: "Export ChatGPT accounts",
       defaultPath: `egoist-account-manager-accounts-${stamp}.cam-export`,
-      filters: [{ name: "Account Manager EGO export", extensions: ["cam-export"] }]
+      filters: [{ name: "Квессер export", extensions: ["cam-export"] }]
     };
     const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
     if (result.canceled || !result.filePath) return { exportedCount: 0, filePath: "" };
@@ -785,18 +811,28 @@ function registerIpc(appDataDir: string): void {
     log(`Exported ${exported.exportedCount} account(s) to ${exported.filePath}`);
     return exported;
   });
-  handle("accounts:import", async (_event, passphrase: string) => {
-    const options: Electron.OpenDialogOptions = {
-      title: "Import ChatGPT accounts",
-      properties: ["openFile"],
-      filters: [{ name: "Account Manager EGO export", extensions: ["cam-export", "json"] }]
-    };
+  const previewImportFile = async (passphrase: string) => {
+    z.string().min(12).max(4096).parse(passphrase);
+    const options: Electron.OpenDialogOptions = { title: "Импорт профилей Квессер",
+      properties: ["openFile"], filters: [{ name: "Квессер export", extensions: ["cam-export", "json"] }] };
     const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
-    if (result.canceled || !result.filePaths[0]) return { importedCount: 0, accounts: requireManager().list() };
-    const imported = await requireManager().importAccounts(result.filePaths[0], passphrase);
-    log(`Imported ${imported.importedCount} account(s) from ${result.filePaths[0]}`);
-    mainWindow?.webContents.send("accounts:updated");
+    return result.canceled || !result.filePaths[0] ? null : requireManager().previewImport(result.filePaths[0], passphrase);
+  };
+  handle("accounts:import:preview", (_event, passphrase: string) => previewImportFile(passphrase));
+  handle("accounts:import:apply", async (_event, input) => {
+    const parsed = z.object({ previewId: z.string().uuid() }).strict().parse(input);
+    const imported = await requireManager().applyImport(parsed.previewId);
+    broadcastAccountsUpdated();
     return imported;
+  });
+  handle("accounts:import", async (_event, passphrase: string) => {
+    const preview = await previewImportFile(passphrase);
+    if (!preview) return { importedCount: 0, skippedCount: 0, accounts: requireManager().list() };
+    return requireManager().applyImport(preview.previewId);
+  });
+  handle("accounts:runtime:verify", (_event, input) => {
+    const parsed = accountActionInputSchema.parse(input);
+    return requireManager().verifyRuntimeAccount(parsed.accountId);
   });
   handle("accounts:profileFolder:open", async (_event, input) => {
     const parsed = accountActionInputSchema.parse(input);
@@ -991,28 +1027,9 @@ function registerIpc(appDataDir: string): void {
       return result;
     });
   });
-  handle("antigravity:godMode:get", () => getAntigravityGodModeStatus({
-    platform: process.platform,
-    appData: process.env.APPDATA,
-    home: process.env.USERPROFILE
-  }));
-  handle("antigravity:godMode:set", (_event, input) => {
-    const parsed = antigravitySetGodModeInputSchema.parse(input);
-    const result = setAntigravityGodMode(parsed.enabled, {
-      platform: process.platform,
-      appData: process.env.APPDATA,
-      home: process.env.USERPROFILE
-    });
-    log(`Antigravity God Mode (Zero Confirmations) ${parsed.enabled ? "enabled" : "disabled"}`);
-    return result;
-  });
-  handle("antigravity:fingerprint:regenerate", (_event, input) => {
-    const parsed = antigravityRegenerateFingerprintInputSchema.parse(input);
-    const updated = requireManager().regenerateAntigravityFingerprint(parsed.accountId);
-    broadcastAccountsUpdated();
-    updateTrayMenu();
-    return updated;
-  });
+  handle("antigravity:godMode:get", () => ({ supported: false, enabled: false, reason: "Unavailable in Egoist" }));
+  handle("antigravity:godMode:set", () => { throw new Error("GodMode is unavailable in Egoist"); });
+  handle("antigravity:fingerprint:regenerate", () => { throw new Error("Fingerprint manipulation is unavailable in Egoist"); });
   handle("antigravity:hygiene:clean", () => {
     const result = performAntigravityHygiene({
       platform: process.platform,
@@ -1110,12 +1127,13 @@ function createLiveTrayImage(platform?: "codex" | "antigravity"): Electron.Nativ
     language: settings?.language
   }, platform);
   const image = nativeImage.createEmpty();
+  const theme = nativeTheme.shouldUseDarkColorsForSystemIntegratedUI ? "dark" : "light";
   for (const representation of LIVE_TRAY_REPRESENTATIONS) {
     image.addRepresentation({
       width: representation.pixelSize,
       height: representation.pixelSize,
       scaleFactor: representation.scaleFactor,
-      buffer: Buffer.from(renderLiveTrayBitmap(snapshot, representation.pixelSize, platform))
+      buffer: Buffer.from(renderLiveTrayBitmap(snapshot, representation.pixelSize, platform, theme))
     });
   }
   return image.isEmpty() ? nativeImage.createFromPath(getWindowIconPath()) : image;
@@ -1351,15 +1369,15 @@ function updateTrayMenu(): void {
     tray.setImage(createLiveTrayImage("codex"));
     tray.setToolTip("");
     const activeCodex = codexAccounts.find((a) => a.isActive);
-    const recCodex = selectSmartAccount(codexAccounts, manager.getWorkspaceBinding());
+    const recCodex = selectSmartAccount(codexAccounts, manager.getWorkspaceBinding(), { provider: "codex" });
     const bestCodex = recCodex ? codexAccounts.find((a) => a.id === recCodex.accountId) : null;
 
     tray.setContextMenu(
       Menu.buildFromTemplate([
         {
           label: activeCodex
-            ? (privacyMode ? (isEnglish ? "Active Codex profile selected" : "Активный профиль Codex") : `Codex: ${activeCodex.label}`)
-            : (isEnglish ? "No active Codex account" : "Активный аккаунт Codex не выбран"),
+            ? (privacyMode ? (isEnglish ? "Codex profile selected" : "Выбранный профиль Codex") : `Codex: ${activeCodex.label}`)
+            : (isEnglish ? "No Codex profile selected" : "Профиль Codex не выбран"),
           enabled: false
         },
         { type: "separator" },
@@ -1374,8 +1392,8 @@ function updateTrayMenu(): void {
           label: isEnglish ? "Codex Accounts" : "Аккаунты Codex",
           enabled: codexAccounts.length > 0,
           submenu: codexAccounts.slice(0, 12).map((account) => ({
-            label: buildTrayAccountLabel(account, privacyMode),
-            enabled: !account.isActive,
+            label: buildTrayAccountLabel(account, privacyMode, settingsService?.get().language ?? "ru"),
+            enabled: account.credentialState === "ready" && (!account.isActive || account.runtimeVerification?.runtime !== "verified"),
             click: () => void manager?.switchAccount(account.id).finally(() => updateTrayMenu())
           }))
         },
@@ -1419,15 +1437,15 @@ function updateTrayMenu(): void {
     antigravityTray.setImage(createLiveTrayImage("antigravity"));
     antigravityTray.setToolTip("");
     const activeAg = antigravityAccounts.find((a) => a.isActive);
-    const recAg = selectSmartAccount(antigravityAccounts, manager.getWorkspaceBinding());
+    const recAg = selectSmartAccount(antigravityAccounts, manager.getWorkspaceBinding(), { provider: "antigravity" });
     const bestAg = recAg ? antigravityAccounts.find((a) => a.id === recAg.accountId) : null;
 
     antigravityTray.setContextMenu(
       Menu.buildFromTemplate([
         {
           label: activeAg
-            ? (privacyMode ? (isEnglish ? "Active Antigravity profile" : "Активный профиль Antigravity") : `Antigravity: ${activeAg.label}`)
-            : (isEnglish ? "No active Antigravity account" : "Активный аккаунт Antigravity не выбран"),
+            ? (privacyMode ? (isEnglish ? "Antigravity profile selected" : "Выбранный профиль Antigravity") : `Antigravity: ${activeAg.label}`)
+            : (isEnglish ? "No Antigravity profile selected" : "Профиль Antigravity не выбран"),
           enabled: false
         },
         { type: "separator" },
@@ -1435,16 +1453,16 @@ function updateTrayMenu(): void {
           label: bestAg ? (isEnglish ? `Smart Switch: ${privacyMode ? "Antigravity profile" : bestAg.label}` : `Умный выбор: ${privacyMode ? "профиль Antigravity" : bestAg.label}`) : (isEnglish ? "Smart switch unavailable" : "Умный выбор недоступен"),
           enabled: Boolean(bestAg && !bestAg.isActive),
           click: () => {
-            if (bestAg) void manager?.switchAccount(bestAg.id).finally(() => updateTrayMenu());
+            if (bestAg) void manager?.switchAccount(bestAg.id).catch((error) => log("Antigravity switch failed", error)).finally(() => updateTrayMenu());
           }
         },
         {
           label: isEnglish ? "Antigravity Accounts" : "Аккаунты Antigravity",
           enabled: antigravityAccounts.length > 0,
           submenu: antigravityAccounts.slice(0, 12).map((account) => ({
-            label: buildTrayAccountLabel(account, privacyMode),
-            enabled: !account.isActive,
-            click: () => void manager?.switchAccount(account.id).finally(() => updateTrayMenu())
+            label: buildTrayAccountLabel(account, privacyMode, settingsService?.get().language ?? "ru"),
+            enabled: account.credentialState === "ready" && (!account.isActive || account.runtimeVerification?.runtime !== "verified"),
+            click: () => void manager?.switchAccount(account.id).catch((error) => log("Antigravity switch failed", error)).finally(() => updateTrayMenu())
           }))
         },
         { type: "separator" },
@@ -1513,11 +1531,11 @@ function applyDesktopIntegrationSettings(settings: AppSettings): void {
     }
   }
 
-  if (process.platform === "win32" && app.isPackaged) {
-    app.setLoginItemSettings({
-      openAtLogin: settings.autostartEnabled,
-      path: process.execPath
-    });
+  if (!probeIsolation.enabled && process.platform === "win32" && app.isPackaged) {
+    const current = app.getLoginItemSettings({ path: process.execPath });
+    if (current.openAtLogin !== settings.autostartEnabled) {
+      app.setLoginItemSettings({ openAtLogin: settings.autostartEnabled, path: process.execPath });
+    }
   }
 }
 
@@ -1525,6 +1543,7 @@ function startAutoRefresh(intervalMs: AppSettings["autoRefreshIntervalMs"] = cur
   currentRateLimitRefreshIntervalMs = intervalMs;
   if (autoRefreshTimer) clearInterval(autoRefreshTimer);
   autoRefreshTimer = null;
+  if (probeIsolation.enabled) return;
   if (currentRateLimitRefreshIntervalMs <= 0) {
     log("Auto-refresh disabled");
     return;
@@ -1538,6 +1557,7 @@ function startTrayRefresh(intervalMs: AppSettings["trayRefreshIntervalMs"] = cur
   currentTrayRefreshIntervalMs = intervalMs;
   if (trayRefreshTimer) clearInterval(trayRefreshTimer);
   trayRefreshTimer = null;
+  if (probeIsolation.enabled) return;
   updateTrayMenu();
   if (settingsService?.get().trayEnabled !== true || intervalMs <= 0) {
     log("Live tray refresh disabled");
@@ -1550,6 +1570,7 @@ function startTrayRefresh(intervalMs: AppSettings["trayRefreshIntervalMs"] = cur
 }
 
 async function refreshActiveTrayAccount(reason: "timer" | "resume" | "manual"): Promise<void> {
+  if (probeIsolation.enabled) return;
   if (!manager || trayRefreshInFlight || autoRefreshInFlight) return;
   const minimumAgeSeconds = Math.max(15, Math.floor(currentTrayRefreshIntervalMs / 1000) - 5);
   const due = manager.list().filter((account) => account.isActive && (
@@ -1614,6 +1635,7 @@ async function syncActiveAntigravitySession(reason: string): Promise<void> {
 }
 
 async function syncActiveSessions(reason: string): Promise<void> {
+  if (probeIsolation.enabled) return;
   syncActiveCodexSession(reason);
   await syncActiveAntigravitySession(reason);
 }
@@ -1622,6 +1644,7 @@ let stateDbWatcher: fs.FSWatcher | null = null;
 let agLogsWatcher: fs.FSWatcher | null = null;
 
 function startSessionSnapshotSync(): void {
+  if (probeIsolation.enabled) return;
   if (sessionSnapshotTimer) clearInterval(sessionSnapshotTimer);
   void syncActiveSessions("startup");
   sessionSnapshotTimer = setInterval(() => {
@@ -1669,6 +1692,7 @@ async function runAutoRefresh(): Promise<void> {
 }
 
 async function refreshAllRateLimits(reason: "auto" | "manual") {
+  assertProbeOperationAllowed("provider-network", probeIsolation);
   if (!manager) return [];
   if (autoRefreshInFlight) {
     log(`Rate-limit refresh skipped because another refresh is already running: ${reason}`);
@@ -1701,7 +1725,7 @@ async function refreshAllRateLimits(reason: "auto" | "manual") {
     const skippedCount = Math.max(0, refreshed.length - failedCount - updatedCount);
     log(`${reason === "auto" ? "Auto-refresh" : "Manual refresh"} completed: updated=${updatedCount}, failed=${failedCount}, deferred=${skippedCount}`);
     const settings = settingsService?.get();
-    const recommendation = selectSmartAccount(refreshed, manager.getWorkspaceBinding(), { staleAfterSeconds: 15 * 60 });
+    const recommendation = selectSmartAccount(refreshed, manager.getWorkspaceBinding(), { staleAfterSeconds: 15 * 60, provider: "codex" });
     if (settings?.smartSwitchMode !== "off" && recommendation) {
       log(`Smart suggestion: ${recommendation.accountEmail}. Reason=${recommendation.reason}`);
     }
@@ -1727,26 +1751,14 @@ if (!gotLock) {
 
   if (process.env.CAM_USER_DATA_DIR) {
     app.setPath("userData", process.env.CAM_USER_DATA_DIR);
-  } else {
-    const previousUserDataDir = path.join(app.getPath("appData"), previousProductName);
-    const legacyUserDataDir = path.join(app.getPath("appData"), legacyProductName);
-    const currentUserDataDir = path.join(app.getPath("appData"), productName);
-    const previousDbPath = path.join(previousUserDataDir, "accounts.sqlite");
-    const legacyDbPath = path.join(legacyUserDataDir, "accounts.sqlite");
-    const currentDbPath = path.join(currentUserDataDir, "accounts.sqlite");
-    const currentDbSize = fs.existsSync(currentDbPath) ? fs.statSync(currentDbPath).size : 0;
-    const previousDbSize = fs.existsSync(previousDbPath) ? fs.statSync(previousDbPath).size : 0;
-    if (currentDbSize > 4096 || (currentDbSize > 0 && previousDbSize <= 4096)) {
-      app.setPath("userData", currentUserDataDir);
-    } else if (previousDbSize > 4096) {
-      app.setPath("userData", previousUserDataDir);
-    } else if (fs.existsSync(currentDbPath)) {
-      app.setPath("userData", currentUserDataDir);
-    } else if (fs.existsSync(previousDbPath)) {
-      app.setPath("userData", previousUserDataDir);
-    } else if (fs.existsSync(legacyDbPath)) {
-      app.setPath("userData", legacyUserDataDir);
+    if (probeIsolation.enabled) {
+      app.setPath("sessionData", process.env.CAM_USER_DATA_DIR);
+      const crashes = path.join(process.env.CAM_USER_DATA_DIR, "crash-dumps");
+      fs.mkdirSync(crashes, { recursive: true });
+      app.setPath("crashDumps", crashes);
     }
+  } else {
+    app.setPath("userData", resolveStoredUserData(app.getPath("appData")));
   }
 
   app.on("second-instance", () => {
@@ -1760,16 +1772,15 @@ if (!gotLock) {
   });
 
   app.whenReady().then(async () => {
+    let darkTray = nativeTheme.shouldUseDarkColorsForSystemIntegratedUI;
+    nativeTheme.on("updated", () => {
+      if (darkTray === nativeTheme.shouldUseDarkColorsForSystemIntegratedUI) return;
+      darkTray = nativeTheme.shouldUseDarkColorsForSystemIntegratedUI;
+      tray?.setImage(createLiveTrayImage("codex"));
+      antigravityTray?.setImage(createLiveTrayImage("antigravity"));
+    });
     const appDataDir = getAppDataDir();
     logPath = path.join(appDataDir, "logs", "main.log");
-    syncWindowsShortcutIcon({
-      env: process.env,
-      platform: process.platform,
-      productName,
-      sourceIcoPath: getWindowsShortcutIconSourcePath(),
-      version: appVersion,
-      log
-    });
     updaterService = new UpdaterService(
       () => mainWindow,
       log,
@@ -1788,36 +1799,40 @@ if (!gotLock) {
     try {
       const store = new AccountStore(appDataDir);
       vault = new Vault(appDataDir);
-      const codexPath = resolveCodexPath();
+      const codexPath = null;
       log(`Resolved Codex CLI: ${codexPath ?? "not found"}`);
-      codexCapabilityService = new CodexCapabilityService({
-        appDataDir,
-        codexHome: getDefaultCodexHome(),
-        codexPath
-      });
       settingsService = new SettingsService(store);
       quotaAlertService = new QuotaAlertService({
         readState: () => store.getSetting("quotaAlertState.v1"),
         writeState: (value) => store.setSetting("quotaAlertState.v1", value)
       });
-      desktopLifecycleService = new WindowsDesktopLifecycleService();
+      desktopLifecycleService = probeIsolation.enabled ? null : new WindowsDesktopLifecycleService();
       manager = new AccountManager(store, vault, appDataDir, codexPath, {
-        readAntigravityCredentialStorePayload,
-        writeAntigravityCredentialStoreToken,
-        restartAntigravityIntegration,
-        desktopLifecycle: desktopLifecycleService,
+        readAntigravityCredentialStorePayload: readAntigravityCredentialStorePayloadAsync,
+        writeAntigravityCredentialStoreToken: writeAntigravityCredentialStoreTokenAsync,
+        restoreAntigravityCredentialStorePayload: async (snapshot) => {
+          if (snapshot.existed) await writeAntigravityCredentialStorePayloadAsync(snapshot.value!);
+          else await deleteAntigravityCredentialStorePayloadAsync();
+          const actual = await readAntigravityCredentialStorePayloadAsync();
+          if ((actual?.payload ?? null) !== (snapshot.existed ? snapshot.value : null)) throw new Error("Credential Manager rollback verification failed");
+        },
+        quiesceAntigravity: quiesceAntigravityAsync, launchAntigravity: launchAntigravityAsync,
+        resolveAntigravitySwitchTarget,
+        desktopLifecycle: desktopLifecycleService ?? undefined,
+        getCodexQuotaReadOptions: () => cachedCodexQuotaReadOptions,
         getDesktopClosePolicy: () => settingsService?.get().desktopClosePolicy ?? "exact-tree-fallback"
       });
       currentRateLimitRefreshIntervalMs = settingsService.get().autoRefreshIntervalMs;
       currentTrayRefreshIntervalMs = settingsService.get().trayRefreshIntervalMs;
       registerSettingsIpc(settingsService, (settings) => {
+        if (!servicesReady) return;
         startAutoRefresh(settings.autoRefreshIntervalMs);
         applyDesktopIntegrationSettings(settings);
         startTrayRefresh(settings.trayRefreshIntervalMs);
         log(`Auto-refresh interval updated: ${settings.autoRefreshIntervalMs}ms`);
       }, assertTrustedSender);
       manager.on("auth-event", (event) => {
-        mainWindow?.webContents.send("auth:event", event);
+        mainWindow?.webContents.send("auth:event", toRendererDto(event));
         const payload = inAppNotificationService.take(buildAuthNotification(event, settingsService?.get().language === "en"));
         if (payload) publishInAppNotification(payload);
       });
@@ -1826,7 +1841,7 @@ if (!gotLock) {
         updateTrayMenu();
       });
       manager.on("switch-transaction", (event) => {
-        mainWindow?.webContents.send("switch:transaction", event);
+        mainWindow?.webContents.send("switch:transaction", toRendererDto(event));
         const targetLabel = manager?.list().find((account) => account.id === event.transaction.targetAccountId)?.label ?? null;
         const payload = inAppNotificationService.take(buildSwitchNotification(
           event.transaction,
@@ -1836,7 +1851,14 @@ if (!gotLock) {
         if (payload) publishInAppNotification(payload);
       });
       manager.on("log", (message) => log(String(message)));
-      const reconciledSwitches = await manager.recoverInterruptedSwitches();
+      runtimeDiscoveryReady = probeIsolation.enabled ? Promise.resolve() : discoverCodexRuntime().then((result) => {
+        runtimeDiscovery = result;
+        manager?.setCodexPath(result.codexPath);
+        codexCapabilityService = new CodexCapabilityService({ appDataDir, codexHome: getDefaultCodexHome(), codexPath: result.codexPath });
+      }).catch((error) => log("Native discovery unavailable", error));
+      mainWindow = createWindow();
+      await runtimeDiscoveryReady;
+      const reconciledSwitches = probeIsolation.enabled ? [] : await manager.recoverInterruptedSwitches();
       if (reconciledSwitches.length > 0) {
         log(`Reconciled ${reconciledSwitches.length} interrupted switch transaction(s)`);
       }
@@ -1848,6 +1870,12 @@ if (!gotLock) {
       if (repairedAuths > 0) log(`Recovered encrypted auth cache for ${repairedAuths} account profile(s)`);
       const repairedQuotaStates = manager.repairLegacyQuotaRefreshState();
       if (repairedQuotaStates > 0) log(`Separated ${repairedQuotaStates} legacy quota failure(s) from account authorization state`);
+      servicesReady = true;
+      if (!probeIsolation.enabled) void syncWindowsShortcutIconAsync({
+        env: process.env, platform: process.platform, productName,
+        sourceIcoPath: getWindowsShortcutIconSourcePath(), version: appVersion,
+        executablePath: process.execPath, iconDirectory: path.join(appDataDir, "icons"), log
+      }).catch((error) => log("Shortcut integration skipped", error));
       startSessionSnapshotSync();
       startAutoRefresh(currentRateLimitRefreshIntervalMs);
       applyDesktopIntegrationSettings(settingsService.get());
@@ -1858,8 +1886,8 @@ if (!gotLock) {
       log("Failed to initialize application services", error);
     }
 
-    mainWindow = createWindow();
-    if (app.isPackaged && process.env.CAM_DISABLE_AUTO_UPDATE !== "1") {
+    mainWindow ??= createWindow();
+    if (!probeIsolation.enabled && app.isPackaged && process.env.CAM_DISABLE_AUTO_UPDATE !== "1") {
       setTimeout(() => {
         void updaterService?.checkForUpdates();
       }, 8_000);

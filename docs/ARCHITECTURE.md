@@ -1,38 +1,50 @@
-# Egoist Account Manager — architecture
+# Архитектура Egoist 3.2.0 RC
 
-## Scope
+## Слои
 
-Локальное Windows-приложение управляет разрешёнными Codex/Anti-Gravity профилями, показывает квоты и выполняет проверяемое переключение с rollback.
+Renderer (React) получает безопасные DTO через context-isolated preload. Main проверяет trusted sender, readiness startup и разрешённость операции. AccountManager координирует provider adapters, vault, SQLite, scheduler, write locks и recovery. Секретные столбцы AccountStore и вложенные токены исключаются на общем IPC/event boundary (`rendererDtoService`).
 
-## Verified boundaries
+Electron сохранён: доказательства необходимости смены стека нет. Native discovery вынесено в worker; Credential Manager и остановка/запуск Antigravity имеют async adapters. Оболочка загружается из локального состояния до необязательной native discovery; изменения не принимаются до startup recovery.
 
-- Electron main process владеет профилями, lifecycle, транзакциями, локальным хранилищем и интеграцией с Codex.
-- Preload предоставляет renderer только узкий IPC-контракт; React renderer показывает состояние и запускает разрешённые операции.
-- Vault и rollback-материал защищаются через Electron `safeStorage`/Windows DPAPI; SQLite хранит durable journal и metadata.
-- Ротация распознанной активной сессии сохраняется в vault локальным snapshot-путём без запуска Codex app-server; неоднозначная или внешняя identity не может перезаписать управляемый профиль.
-- Успешный quota snapshot и ошибка его обновления хранятся раздельно; трёхминутный quota probe использует bounded timeout/backoff и не форсирует credential rotation. Только подтверждённая official identity может заменить last-good vault.
-- Успешный reauth после подтверждённой provider identity атомарно очищает предыдущие `last_refresh_error*` даже при временном сбое первой quota; потребители считают ошибку актуальной только если её timestamp не старше последнего успешного snapshot.
-- Device-code handoff проходит через отдельный typed IPC: main повторно валидирует код, записывает его в системный clipboard до открытия allowlisted HTTPS URL и условно очищает неизменённое значение через 15 минут или при shutdown. Слепая эмуляция клавиатуры во внешнем браузере не используется.
-- Публичный auth-контракт принимает только официальные login flows Codex app-server/CLI. Импорт текущей сессии и произвольного `auth.json` отсутствует в renderer, preload и IPC; `keyring`, `auto` и `ephemeral` не извлекаются недокументированным способом.
-- Каждая управляемая авторизация живёт в отдельном manager-owned `CODEX_HOME`, а last-known-good auth bundle запечатан DPAPI. Stable-read защищает snapshot/rotation от частично перезаписанного `auth.json`; временный sign-out Codex Desktop не понижает сохранённый профиль до `needs_reauth`, пока официальный app-server не отверг сам vault credential.
-- Notification policy работает через типизированные auth/switch/quota/update события и отправляет их только в ограниченную renderer-очередь. Payload проходит redaction, повторные phase/window/release события дедуплицируются, progress остаётся бесшумным, а короткий WebAudio-сигнал допускается только для результата, предупреждения или ошибки при видимом Manager; Windows toast/XML полностью отсутствуют.
-- Live tray имеет отдельный active-only polling interval `1/3/5/10/15/off`, не дублирует свежий общий трёхминутный snapshot и не запускает credential refresh. Один logical NativeImage содержит BGRA-представления 16/20/24/32 px для DPI 100/125/150/200%; крупные точные цифры показывают остаток фактически ограничивающего подтверждённого provider window, а `!`, `~`, `—` отделяют error/stale/unknown от фактического `0`. Single-digit glyph не использует периметральную state-рамку: цифра стоит на тёмной плитке, а состояние кодируется коротким нижним rail. Generic primary/secondary данные классифицируются по duration и dedupe до выбора окна: отсутствующая 5h-квота не заполняется недельным процентом. Нативная Windows tooltip намеренно пуста: после короткой hover-задержки показывается отдельное прозрачное, click-through, non-focusable окно 252×144 px с активным Codex-профилем, одной шкалой и reset-time; CSS делает `html/body/#root` прозрачными только для этой surface, исключает внешний box-shadow/backdrop-filter и оставляет нулевую alpha за rounded border. Click/context popup остаётся независимым. Позиционирование ограничивается work area ближайшего дисплея и учитывает все края taskbar. Windows может поместить значок в overflow — принудительное pinning не поддерживается.
-- Assisted continuation не подменяет safety transaction: UI ранжирует только fresh protected candidates, но switch остаётся подтверждаемым, атомарным, identity-verified и rollback-capable. Переключение посреди активного turn и автоматическая subscription rotation не входят в поддерживаемый контракт.
-- Fleet reset summary и account list используют нормализованные provider windows. Overview рассматривает только будущие reset timestamps защищённых, неархивных Codex-профилей и явно сообщает fresh/saved source coverage; compact list показывает наиболее ограничивающее известное окно. UI-сортировка не меняет switch-кандидата или auth state: active закрепляется первым только в smart-mode, затем unusable profiles отделяются, тариф сравнивается до remaining quota, а reset/freshness выступают стабильными tie-breakers. Выбранный вид и сортировка сохраняются только как renderer `localStorage` preferences.
-- Antigravity остаётся видимым серым coming-soon entry с `aria-disabled` и tooltip; rail click и command palette не переводят продукт из Codex-focus. Provider backend не удалён, но недоступный UI-путь не участвует в Overview или smart switch targets.
-- Подготовленная switch-транзакция не может пережить отказ до записи auth bundle: target reauth, provider/cross-process conflict и IPC-visible commit failure переводят её в terminal state. Reauth блокирует только свой целевой профиль; повторный reauth атомарно заменяет прежний manager-owned login session, а provider lock сериализует его сохранение со switch/refresh.
-- Production renderer определяется только через `app.isPackaged`: environment-переключатель не может направить packaged preload на localhost, а package-конфигурация не читается из текущей рабочей папки.
-- Live release verification fail-closed защищает host-сессию: экспортирует только inactive `ready` профили во временный encrypted bundle, подтверждает две личности подписанным официальным OpenAI app-server внутри disposable Windows Sandbox, до запуска фиксирует protected host root PID и `auth.json` hash/timestamp, а stage удаляет только после повторной проверки того же invariant. UI actions используют UI Automation patterns и никогда не двигают physical pointer.
-- Windows package строится как NSIS installer и portable artifact. При запуске main process проверяет фиксированный GitHub Releases endpoint через Chromium networking, принимает только стабильный semver и строит allowlisted URL нашего репозитория. Установка остаётся ручной: неподписанный EXE не скачивается и не запускается приложением.
-- Видимый бренд, EXE, installer и shortcut называются `Egoist Account Manager`, но compatibility identifiers `codex-account-manager`, `one.egoist.codex-account-manager` и schema formats остаются неизменными. При наличии прежней `%APPDATA%\Codex Account Manager\accounts.sqlite` новая сборка продолжает использовать это хранилище, поэтому rebrand не разделяет базу и не сбрасывает сохранённые входы.
+## Хранение
 
-## Source of truth
+```mermaid
+erDiagram
+  ACCOUNT ||--o{ QUOTA_OBSERVATION : has
+  ACCOUNT ||--o{ SWITCH_TRANSACTION : target
+  ACCOUNT ||--o{ SWITCH_EVENT : history
+  ACCOUNT ||--o| ANTIGRAVITY_DETAILS : provider
+  ACCOUNT ||--o| AUTH_DRIFT_CANDIDATE : review
+  SWITCH_TRANSACTION ||--o| SEALED_SNAPSHOT : restores
+```
 
-- [`README.md`](../README.md) — observable behavior, security boundary и build commands.
-- [`docs/product-3.0-spec-2026-07-29.md`](./product-3.0-spec-2026-07-29.md) — approved product contract.
-- [`docs/product-3.0-progress.md`](./product-3.0-progress.md) — latest verified handoff.
+SQLite сохраняет WAL + synchronous=FULL. Миграция 11 добавочная: quota/evidence не требуют сброса существующих профилей, IDs или настроек. Основной encryptedAuthJson остаётся в main; `ManagedAccount` содержит только публичные поля. Snapshot квот сохраняет исходные buckets и дробную точность; legacy five-hour/week aliases доступны только при фактических длительностях 300/10080 минут.
 
-## Unknowns
+Технический appId `one.egoist.codex-account-manager`, repository name и существующий каталог данных отделены от видимого Egoist. Экспорт v1/v2/v3 сохраняется; новые записи импорта получают UUID и owned profileDir. Preview хранит encrypted records только в памяти, имеет срок действия и проверку revision; apply использует одну SQLite transaction, а каталоги создаются при hydration.
 
-- Любая деталь, не подтверждённая указанными источниками или свежей проверкой,
-  считается `not verified` и не должна достраиваться по предположению.
+## Транзакция переключения
+
+Provider keyed lock и общий cross-process lock используются применением, ручным откатом и startup recovery. Применение AG останавливает целевой owned процесс до записи. Sealed snapshot включает полный статический write-set, SQLite consistent image, исходное отсутствие файлов и Credential Manager. Manifest integrity связывает метаданные и присутствие credential snapshot.
+
+Readback проверяет файловые bytes/SQLite значения и Credential Manager. Сбой записи, запуска или достоверный runtime mismatch вызывает восстановление. Неудачный readback/restore переводит транзакцию в recovery_required и блокирует новые изменения этого провайдера. Отдельные plaintext stages принадлежат transaction ID и удаляются ограниченной owned-cleanup, в том числе без manifest.
+
+| Evidence | Codex | Antigravity |
+|---|---|---|
+| Профиль применён | Durable bundle/readback | Full profile writer/readback |
+| Credentials | Официальный app-server probe | Google userinfo email + известный subject |
+| Запуск | Проверенный lifecycle result | Quiesce/launch adapter |
+| Runtime account | Desktop binding не подтверждён этой версией адаптера | GetUserStatus после OS binding и повторной проверки |
+
+Отсутствие последнего уровня не маскируется: выбранный профиль остаётся применённым, sealed backup сохраняется, UI показывает неполное подтверждение, auto-switch запрещён. Runtime email не выдаётся за неизменяемую идентичность workspace.
+
+## Scheduler и отмена
+
+Единый RefreshScheduler имеет deduplication, AbortSignal, приоритет и concurrency=2. Provider lock обеспечивает одного владельца credential writes. Ответ принимается только для account ID, credential version и operation epoch; после await повторяется recovery gate. Последняя ошибка не заменяет last-good snapshot. Retry-After сохраняется; повтор ограничен. Google/AG transport ограничивает и headers, и body, отличает 401/403/429 и отменяет настоящий fetch.
+
+## Test isolation и доставка
+
+Isolated shipping probe требует UUID marker, token и шесть canonical contained directories. Guards блокируют общий Credential Manager, autostart, host discovery, provider network, внешние приложения/URL и desktop process control. Разрешённый development origin не может redirect к провайдеру. Результат readiness содержит version/nonce/PID и факт загрузки renderer.
+
+Node и Electron SQLite ABI проверяются раздельно. Production package включает только необходимые main dependencies; renderer libraries остаются build-time. Canonical build создаёт portable и custom owned installer, а не default NSIS Setup. Installer manifest/hash preflight отвергает постороннюю папку/reparse/hardlink; uninstall удаляет лишь unchanged owned files.
+
+RC локальный и unsigned. Публичная stable готовность требует Authenticode и применимых native guest checks. Live identity/конкурентные замеры невозможно заменить synthetic fixtures. Подробности: [release result](releases/3.2.0-rc.1.md), [verification protocol](benchmark-3.2.0.md).

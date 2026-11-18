@@ -16,7 +16,8 @@ import {
   type CodexCapabilityStability,
   type CodexLoginCapability,
   type CodexLoginMethodId,
-  type CodexRuntimeIdentity
+  type CodexRuntimeIdentity,
+  type CodexFeatureCapabilities
 } from "../../shared/codexCapabilities.js";
 import { redactSensitiveText } from "../../shared/redaction.js";
 
@@ -134,9 +135,8 @@ export class CodexCapabilityService {
   constructor(private readonly options: CodexCapabilityServiceOptions) {}
 
   async getReport(force = false): Promise<CodexCapabilityReport> {
-    if (!force && this.cached) return structuredClone(this.cached);
-    if (!force && this.inFlight) return structuredClone(await this.inFlight);
-    this.inFlight = this.probe();
+    if (this.inFlight) return structuredClone(await this.inFlight);
+    this.inFlight = this.probe(force);
     try {
       this.cached = await this.inFlight;
       return structuredClone(this.cached);
@@ -149,7 +149,7 @@ export class CodexCapabilityService {
     this.cached = null;
   }
 
-  private async probe(): Promise<CodexCapabilityReport> {
+  private async probe(force: boolean): Promise<CodexCapabilityReport> {
     const generatedAt = Math.floor((this.options.now?.() ?? Date.now()) / 1000);
     const codexPath = (this.options.codexPath && fs.existsSync(this.options.codexPath))
       ? this.options.codexPath
@@ -166,14 +166,20 @@ export class CodexCapabilityService {
     }
     const cliVersion = versionResult.stdout.trim().split(/\r?\n/, 1)[0]?.slice(0, 120) || null;
     if (!cliVersion) return unavailableCodexCapabilityReport("Codex version probe returned no version.", generatedAt);
+    const versionKey = schemaCacheKey(codexPath, cliVersion);
+    if (!force && this.cached?.protocol.schemaVersionKey === versionKey && generatedAt - this.cached.generatedAt < 5 * 60) {
+      return this.cached;
+    }
 
     let loginMethods: CodexLoginCapability[];
     let schemaVersionKey: string | null = null;
     let schemaError: string | null = null;
+    let features = this.readFeatures(versionKey);
     try {
       schemaVersionKey = schemaCacheKey(codexPath, cliVersion);
       const schema = await this.loadLoginSchema(run, codexPath, schemaVersionKey);
       loginMethods = extractLoginCapabilities(schema);
+      features = this.readFeatures(schemaVersionKey);
     } catch (error) {
       schemaError = safeError(error);
       loginMethods = CODEX_LOGIN_METHODS.map((id) => ({
@@ -214,21 +220,16 @@ export class CodexCapabilityService {
     try {
       await client.start();
       initialize = client.getInitializeResponse();
-      identity = identityFromAccount(await client.readAccount(false));
+      if (features.accountRead.available) identity = identityFromAccount(await client.readAccount(false));
+      else identity.error = features.accountRead.reason;
     } catch (error) {
       identity.error = safeError(error);
     } finally {
       await client.stop().catch(() => undefined);
     }
 
-    const stableMethods = new Set(
-      loginMethods.filter((method) => method.available && method.stability === "stable").map((method) => method.id)
-    );
-    const compatible = !schemaError
-      && stableMethods.has("chatgpt")
-      && stableMethods.has("chatgptDeviceCode")
-      && stableMethods.has("apiKey")
-      && Boolean(initialize);
+    features.initialize = { available: Boolean(initialize), reason: initialize ? null : identity.error ?? "Initialization failed." };
+    const compatible = !schemaError && features.initialize.available;
 
     return {
       generatedAt,
@@ -243,7 +244,40 @@ export class CodexCapabilityService {
         error: schemaError ?? identity.error
       },
       loginMethods,
-      identity
+      identity,
+      features
+    };
+  }
+
+  private readFeatures(key: string): CodexFeatureCapabilities {
+    const root = path.join(this.options.appDataDir, "protocol-cache", key);
+    const read = (name: string): Record<string, unknown> | null => {
+      try { return JSON.parse(fs.readFileSync(path.join(root, name), "utf8")) as Record<string, unknown>; }
+      catch { return null; }
+    };
+    const request = read("ClientRequest.json");
+    const variants = Array.isArray(request?.oneOf) ? request.oneOf : [];
+    const supports = (method: string): boolean => variants.some((variant: unknown) => {
+      if (!variant || typeof variant !== "object") return false;
+      const record = variant as { properties?: { method?: { enum?: unknown[] } } };
+      return record.properties?.method?.enum?.includes(method) === true;
+    });
+    const feature = (available: boolean, reason: string) => ({ available, reason: available ? null : reason });
+    const responseHas = (name: string, field: string) => {
+      const schema = read(name) as { properties?: Record<string, unknown> } | null;
+      return Boolean(schema?.properties && field in schema.properties);
+    };
+    const accountRead = supports("account/read") && responseHas("v2/GetAccountResponse.json", "account");
+    const quotaRead = supports("account/rateLimits/read") && responseHas("v2/GetAccountRateLimitsResponse.json", "rateLimits");
+    const quotaParams = read("v2/NullableGetAccountRateLimitsParams.json") as {
+      definitions?: { GetAccountRateLimitsParams?: { properties?: Record<string, unknown> } }
+    } | null;
+    return {
+      initialize: feature(false, "Initialization has not been observed."),
+      accountRead: feature(accountRead, "Installed schema does not advertise account/read."),
+      quotaRead: feature(quotaRead, "Installed schema does not advertise account/rateLimits/read."),
+      excludeResetCreditDetails: feature(quotaRead && Boolean(quotaParams?.definitions?.GetAccountRateLimitsParams?.properties?.excludeResetCreditDetails),
+        "Installed schema does not advertise excludeResetCreditDetails.")
     };
   }
 

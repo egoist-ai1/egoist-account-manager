@@ -112,9 +112,7 @@ function isInsideCompanionRoot(
 
   const prefixes = [
     localAppData ? `${localAppData}\\openai\\${productName}` : null,
-    localAppData ? `${localAppData}\\openai` : null,
-    appData ? `${appData}\\openai\\${productName}` : null,
-    appData ? `${appData}\\openai` : null
+    appData ? `${appData}\\openai\\${productName}` : null
   ].filter(Boolean) as string[];
 
   for (const prefix of prefixes) {
@@ -126,7 +124,6 @@ function isInsideCompanionRoot(
   if (
     executablePath.includes(`\\appdata\\local\\openai\\${productName}\\`)
     || executablePath.includes(`\\appdata\\roaming\\openai\\${productName}\\`)
-    || (productName === "codex" && executablePath.includes("\\appdata\\local\\openai\\codex\\"))
   ) {
     return true;
   }
@@ -163,21 +160,22 @@ function descendantsOf(
   identity: OpenAiDesktopIdentity
 ): WindowsProcessSnapshot[] {
   const eligibleProcesses = processes.filter((process) => isPackageOrCompanionProcess(process, identity));
-  const selected = new Map<number, WindowsProcessSnapshot>();
-  const pending = roots.map((root) => root.pid);
-  roots.forEach((root) => selected.set(root.pid, root));
+  const livePids = new Set(processes.map((process) => process.pid));
+  const orphanedServers = eligibleProcesses.filter((process) =>
+    identity.product === "codex"
+    && !livePids.has(process.parentPid)
+    && normalized(process.processName) === "codex.exe"
+    && /(^|\s)app-server(\s|$)/i.test(process.commandLine ?? "")
+    && isInsideCompanionRoot(process, identity)
+  );
+  const selected = new Map([...roots, ...orphanedServers].map((process) => [process.pid, process]));
+  const pending = [...selected.keys()];
   while (pending.length > 0) {
     const parentPid = pending.shift();
     for (const process of eligibleProcesses) {
       if (process.parentPid !== parentPid || selected.has(process.pid)) continue;
       selected.set(process.pid, process);
       pending.push(process.pid);
-    }
-  }
-  for (const process of eligibleProcesses) {
-    if (selected.has(process.pid)) continue;
-    if (isInsideCompanionRoot(process, identity)) {
-      selected.set(process.pid, process);
     }
   }
   return [...selected.values()];
@@ -273,14 +271,6 @@ export class DesktopLaunchError extends Error {
   constructor(message: string, readonly identity: OpenAiDesktopIdentity) {
     super(message);
   }
-}
-
-function aliveCapturedProcesses(
-  captured: WindowsProcessSnapshot[],
-  current: WindowsProcessSnapshot[]
-): WindowsProcessSnapshot[] {
-  const identities = new Map(current.map((process) => [processIdentityKey(process), process]));
-  return captured.filter((process) => identities.has(processIdentityKey(process)));
 }
 
 function toArray<T>(value: T | T[] | null | undefined): T[] {
@@ -383,32 +373,39 @@ function decodeBase64PowerShell(value: string): string {
   return `[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(value, "utf8").toString("base64")}'))`;
 }
 
-function exactProcessGuard(process: WindowsProcessSnapshot): string {
-  const creationDate = decodeBase64PowerShell(process.creationDate);
-  const executablePath = decodeBase64PowerShell(process.executablePath ?? "");
-  const processName = decodeBase64PowerShell(process.processName);
-  return `
-$expectedCreationDate = ${creationDate}
-$expectedExecutablePath = ${executablePath}
-$expectedProcessName = ${processName}
-$target = Get-CimInstance Win32_Process -Filter "ProcessId = ${process.pid}" -ErrorAction SilentlyContinue
-if (-not $target) {
-  [PSCustomObject]@{ status = 'vanished' } | ConvertTo-Json -Compress
-  exit 0
+const exactProcessGuard = `
+function Get-ExactDesktopProcess($expected) {
+  $proc = Get-Process -Id $expected.pid -ErrorAction SilentlyContinue
+  if (-not $proc) { return @{ status = 'vanished' } }
+  try { $null = $proc.Handle } catch { return @{ status = 'refused' } }
+  $target = Get-CimInstance Win32_Process -Filter "ProcessId = $($expected.pid)" -ErrorAction Stop
+  if (-not $target) { return @{ status = 'vanished' } }
+  $actualCreationDate = if ($target.CreationDate) { $target.CreationDate.ToUniversalTime().ToString('o') } else { '' }
+  $nameMatches = $expected.processName -and ($target.Name -ieq $expected.processName)
+  $pathMatches = $expected.executablePath -and ($target.ExecutablePath -ieq $expected.executablePath)
+  $dateMatches = $expected.creationDate -and ($actualCreationDate -ieq $expected.creationDate)
+  if ($nameMatches -and $pathMatches -and $dateMatches) {
+    return @{ status = 'matched'; process = $proc }
+  }
+  return @{ status = 'mismatch' }
 }
-$actualCreationDate = if ($target.CreationDate) {
-  try { $target.CreationDate.ToUniversalTime().ToString('o') } catch { '' }
-} else { '' }
-$actualPath = [string]$target.ExecutablePath
-$actualName = [string]$target.Name
-$nameMatches = $actualName -ieq $expectedProcessName
-$pathMatches = [string]::IsNullOrEmpty($expectedExecutablePath) -or ($actualPath -ieq $expectedExecutablePath) -or ($actualPath.EndsWith($expectedProcessName, [System.StringComparison]::OrdinalIgnoreCase))
-$dateMatches = [string]::IsNullOrEmpty($expectedCreationDate) -or [string]::IsNullOrEmpty($actualCreationDate) -or ($actualCreationDate -ieq $expectedCreationDate)
-if (-not ($nameMatches -and ($pathMatches -or $dateMatches))) {
-  [PSCustomObject]@{ status = 'mismatch' } | ConvertTo-Json -Compress
-  exit 0
+
+function Stop-ExactDesktopProcess($expected) {
+  $target = Get-ExactDesktopProcess $expected
+  if ($target.status -ne 'matched') { return $target.status }
+  try {
+    if ($target.process.HasExited) { return 'vanished' }
+    if ($target.process.MainWindowHandle -ne 0) { return 'refused' }
+    Stop-Process -InputObject $target.process -Force -ErrorAction Stop
+    return 'terminated'
+  } catch { return 'refused' }
 }
-`.trim();
+`;
+
+function encodeProcessTargets(processes: WindowsProcessSnapshot[]): string {
+  return decodeBase64PowerShell(JSON.stringify(processes.map(({ pid, creationDate, executablePath, processName }) => ({
+    pid, creationDate, executablePath, processName
+  }))));
 }
 
 export function createWindowsDesktopLifecycleAdapter(
@@ -452,7 +449,7 @@ $startApps = @(Get-StartApps -ErrorAction SilentlyContinue |
   ForEach-Object {
     [PSCustomObject]@{ name = [string]$_.Name; appId = [string]$_.AppID }
   })
-$processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+$processes = @(Get-CimInstance Win32_Process -ErrorAction Stop |
   ForEach-Object {
     $mainWindowHandle = 0
     if ($_.Name -ieq 'ChatGPT.exe' -or $_.Name -ieq 'Codex.exe') {
@@ -478,7 +475,7 @@ $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
   ConvertTo-Json -Compress -Depth 5
 ` : `
 $ErrorActionPreference = 'Stop'
-$processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+$processes = @(Get-CimInstance Win32_Process -ErrorAction Stop |
   ForEach-Object {
     $mainWindowHandle = 0
     if ($_.Name -ieq 'ChatGPT.exe' -or $_.Name -ieq 'Codex.exe') {
@@ -521,15 +518,17 @@ $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
       if (platform !== "win32") return "vanished";
       const output = await runPowerShell(`
 $ErrorActionPreference = 'Stop'
-${exactProcessGuard(process)}
-$accepted = $false
-try {
-  $proc = Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue
-  if ($proc) {
-    $accepted = [bool]$proc.CloseMainWindow()
-  }
-} catch {}
-[PSCustomObject]@{ status = $(if ($accepted) { 'accepted' } else { 'refused' }) } | ConvertTo-Json -Compress
+${exactProcessGuard}
+$expected = ConvertFrom-Json -InputObject (${encodeProcessTargets([process])})
+$target = Get-ExactDesktopProcess $expected
+$status = $target.status
+if ($status -eq 'matched') {
+  $status = 'refused'
+  try {
+    if ($target.process.CloseMainWindow()) { $status = 'accepted' }
+  } catch {}
+}
+[PSCustomObject]@{ status = $status } | ConvertTo-Json -Compress
 `);
       const status = (JSON.parse(output) as { status?: string }).status;
       return status === "accepted" || status === "refused" || status === "mismatch" || status === "vanished"
@@ -540,16 +539,9 @@ try {
       if (platform !== "win32") return "vanished";
       const output = await runPowerShell(`
 $ErrorActionPreference = 'Stop'
-${exactProcessGuard(process)}
-try {
-  Stop-Process -Id ${process.pid} -Force -ErrorAction SilentlyContinue
-  if (Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue) {
-    taskkill.exe /F /PID ${process.pid} 2>$null | Out-Null
-  }
-  [PSCustomObject]@{ status = 'terminated' } | ConvertTo-Json -Compress
-} catch {
-  [PSCustomObject]@{ status = 'vanished' } | ConvertTo-Json -Compress
-}
+${exactProcessGuard}
+$expected = ConvertFrom-Json -InputObject (${encodeProcessTargets([process])})
+[PSCustomObject]@{ status = (Stop-ExactDesktopProcess $expected) } | ConvertTo-Json -Compress
 `);
       const status = (JSON.parse(output) as { status?: string }).status;
       return status === "terminated" || status === "vanished" || status === "mismatch"
@@ -558,35 +550,12 @@ try {
     },
     async terminateExactBatch(processes) {
       if (platform !== "win32" || processes.length === 0) return;
-      const targetsJson = JSON.stringify(processes.map((p) => ({
-        pid: p.pid,
-        creationDate: p.creationDate,
-        executablePath: p.executablePath ?? "",
-        processName: p.processName
-      })));
       const script = `
-$ErrorActionPreference = 'SilentlyContinue'
-$raw = ${decodeBase64PowerShell(targetsJson)}
-[object[]]$targets = ConvertFrom-Json -InputObject $raw
-foreach ($t in $targets) {
-  $target = Get-CimInstance Win32_Process -Filter "ProcessId = $($t.pid)" -ErrorAction SilentlyContinue
-  if ($target) {
-    $actualCreationDate = ''
-    if ($target.CreationDate) {
-      try { $actualCreationDate = $target.CreationDate.ToUniversalTime().ToString('o') } catch {}
-    }
-    $actualPath = [string]$target.ExecutablePath
-    $actualName = [string]$target.Name
-    $nameMatches = $actualName -ieq $t.processName
-    $pathMatches = [string]::IsNullOrEmpty($t.executablePath) -or ($actualPath -ieq $t.executablePath) -or ($actualPath.EndsWith($t.processName, [System.StringComparison]::OrdinalIgnoreCase))
-    $dateMatches = [string]::IsNullOrEmpty($t.creationDate) -or [string]::IsNullOrEmpty($actualCreationDate) -or ($actualCreationDate -ieq $t.creationDate)
-    if ($nameMatches -and ($pathMatches -or $dateMatches)) {
-      Stop-Process -Id $t.pid -Force -ErrorAction SilentlyContinue
-      if (Get-Process -Id $t.pid -ErrorAction SilentlyContinue) {
-        taskkill.exe /F /PID $t.pid 2>$null | Out-Null
-      }
-    }
-  }
+$ErrorActionPreference = 'Stop'
+${exactProcessGuard}
+$targets = ConvertFrom-Json -InputObject (${encodeProcessTargets(processes)})
+foreach ($expected in $targets) {
+  $null = Stop-ExactDesktopProcess $expected
 }
 `;
       await runPowerShell(script);
@@ -743,16 +712,23 @@ export class WindowsDesktopLifecycleService {
     }
 
     const captured = resolved.tree;
+    const selected = resolved.selected;
+    const capturedKeys = new Set(captured.map(processIdentityKey));
+    const inspect = async () => {
+      const { processes } = await this.adapter.snapshot();
+      const roots = processes.filter((process) => isRootProcess(process, selected));
+      const currentTree = new Set(descendantsOf(roots, processes, selected).map(processIdentityKey));
+      return processes.filter((process) => {
+        const key = processIdentityKey(process);
+        return capturedKeys.has(key) || currentTree.has(key);
+      });
+    };
     const closeResults = await Promise.all(
       resolved.roots.map((root) => this.adapter.requestGracefulClose(root))
     );
     const gracefulCloseAccepted = closeResults.some((result) => result === "accepted");
-    const gracefulWaitMs = resolved.roots.length === 0
-      ? 0
-      : (gracefulCloseAccepted || policy === "graceful-only" || policy === "exact-tree-fallback"
-        ? this.options.gracefulTimeoutMs
-        : Math.min(this.options.gracefulTimeoutMs, 1000));
-    let alive = await this.waitForExit(captured, gracefulWaitMs);
+    const gracefulWaitMs = resolved.roots.length === 0 ? 0 : this.options.gracefulTimeoutMs;
+    let alive = await this.waitForExit(inspect, gracefulWaitMs);
     if (alive.length === 0) {
       return {
         status: "quiesced",
@@ -764,7 +740,12 @@ export class WindowsDesktopLifecycleService {
         message: "The exact OpenAI desktop process tree exited gracefully."
       };
     }
-    if (policy === "graceful-only") {
+    const hasVisibleWindow = alive.some((process) => (process.mainWindowHandle ?? 0) > 0);
+    const hasNewProcess = alive.some((process) => !capturedKeys.has(processIdentityKey(process)));
+    if (policy === "graceful-only" || hasVisibleWindow || hasNewProcess) {
+      let message = `The exact desktop process tree did not exit before the timeout (${alive.length} process(es) remain).`;
+      if (hasNewProcess) message = "The selected desktop started new processes during shutdown.";
+      else if (hasVisibleWindow) message = "The selected desktop still has an open window. Close it in the desktop app before switching.";
       return {
         status: "blocked",
         identity: resolved.selected,
@@ -772,20 +753,19 @@ export class WindowsDesktopLifecycleService {
         remainingProcessCount: alive.length,
         gracefulCloseAccepted,
         usedExactTreeFallback: false,
-        message: `The exact desktop process tree did not exit before the timeout (${alive.length} process(es) remain).`
+        message
       };
     }
 
-    const current = await this.adapter.snapshot();
-    alive = aliveCapturedProcesses(alive, current.processes);
+    const fallbackTargets = [...alive].sort((left, right) => right.pid - left.pid);
     if (this.adapter.terminateExactBatch) {
-      await this.adapter.terminateExactBatch([...alive].sort((left, right) => right.pid - left.pid));
+      await this.adapter.terminateExactBatch(fallbackTargets);
     } else {
-      for (const process of [...alive].sort((left, right) => right.pid - left.pid)) {
+      for (const process of fallbackTargets) {
         await this.adapter.terminateExact(process);
       }
     }
-    alive = await this.waitForExit(captured, this.options.forceTimeoutMs);
+    alive = await this.waitForExit(inspect, this.options.forceTimeoutMs);
     return {
       status: alive.length === 0 ? "quiesced" : "blocked",
       identity: resolved.selected,
@@ -800,20 +780,36 @@ export class WindowsDesktopLifecycleService {
   }
 
   async launch(identity?: OpenAiDesktopIdentity | null): Promise<OpenAiDesktopIdentity> {
-    const resolved = resolveWindowsDesktopSnapshot(await this.adapter.snapshot(), this.options);
+    const { target } = await this.launchWithBaseline(identity);
+    return target;
+  }
+
+  private async launchWithBaseline(identity?: OpenAiDesktopIdentity | null) {
+    const snapshot = await this.adapter.snapshot();
+    const resolved = resolveWindowsDesktopSnapshot(snapshot, this.options);
     if (resolved.ambiguity) throw new Error(resolved.ambiguity);
     const target = identity
       ? resolved.candidates.find((candidate) => candidate.packageFullName === identity.packageFullName)
       : resolved.selected;
     if (!target) throw new Error("The exact OpenAI desktop package is no longer installed");
+    const creationTimesByPid = new Map(snapshot.processes.map((process) => [process.pid, normalized(process.creationDate)]));
     await this.adapter.launch(target);
-    return target;
+    return { target, creationTimesByPid };
   }
 
   async launchAndWaitReady(
-    identity?: OpenAiDesktopIdentity | null
+    identity?: OpenAiDesktopIdentity | null,
+    { allowExistingRoot = false }: { allowExistingRoot?: boolean } = {}
   ): Promise<DesktopLaunchReadiness> {
-    const target = await this.launch(identity);
+    const { target, creationTimesByPid } = await this.launchWithBaseline(identity);
+    const confirmsLaunch = (root: WindowsProcessSnapshot): boolean => {
+      if ((root.mainWindowHandle ?? 0) <= 0) return false;
+      if (allowExistingRoot) return true;
+      const creationTime = normalized(root.creationDate);
+      const previousCreationTime = creationTimesByPid.get(root.pid);
+      // Пустое время для уже известного PID не позволяет подтвердить новый процесс.
+      return Boolean(creationTime) && previousCreationTime !== "" && previousCreationTime !== creationTime;
+    };
     const deadline = Date.now() + this.options.launchReadinessTimeoutMs;
     let previousRootKey: string | null = null;
     let stableSamples = 0;
@@ -822,7 +818,7 @@ export class WindowsDesktopLifecycleService {
       if (resolved.ambiguity) throw new DesktopLaunchError(resolved.ambiguity, target);
       const selectedMatches = resolved.selected?.packageFullName === target.packageFullName;
       const visibleRoot = selectedMatches
-        ? resolved.roots.find((root) => (root.mainWindowHandle ?? 0) > 0)
+        ? resolved.roots.find(confirmsLaunch)
         : null;
       if (visibleRoot) {
         const key = processIdentityKey(visibleRoot);
@@ -844,23 +840,22 @@ export class WindowsDesktopLifecycleService {
       if (Date.now() >= deadline) break;
       await this.adapter.sleep(Math.min(this.options.pollIntervalMs, Math.max(1, deadline - Date.now())));
     } while (Date.now() <= deadline);
+    const expectedWindow = allowExistingRoot ? "a stable visible window" : "a stable visible window from a new process";
     throw new DesktopLaunchError(
-      `The exact desktop package ${target.packageFullName} did not expose a stable visible window before the readiness timeout.`,
+      `The exact desktop package ${target.packageFullName} did not expose ${expectedWindow} before the readiness timeout.`,
       target
     );
   }
 
   private async waitForExit(
-    captured: WindowsProcessSnapshot[],
+    inspect: () => Promise<WindowsProcessSnapshot[]>,
     timeoutMs: number
   ): Promise<WindowsProcessSnapshot[]> {
     const deadline = Date.now() + timeoutMs;
-    let alive = captured;
+    let alive: WindowsProcessSnapshot[];
     do {
-      const current = await this.adapter.snapshot();
-      alive = aliveCapturedProcesses(captured, current.processes);
-      if (alive.length === 0) return [];
-      if (Date.now() >= deadline) return alive;
+      alive = await inspect();
+      if (alive.length === 0 || Date.now() >= deadline) return alive;
       await this.adapter.sleep(Math.min(this.options.pollIntervalMs, Math.max(1, deadline - Date.now())));
     } while (Date.now() <= deadline);
     return alive;

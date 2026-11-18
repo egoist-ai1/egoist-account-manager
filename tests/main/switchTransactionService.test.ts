@@ -201,4 +201,21 @@ describe("SwitchTransactionService", () => {
       store.close();
     }
   });
+  it("retains freshly recorded evidence on commit and begins a coordinated manual rollback", async () => {
+    const store = tempStore(); const service = new SwitchTransactionService(store);
+    try {
+      addAccount(store, "previous"); addAccount(store, "target"); store.setActive("previous");
+      const prepared = await service.prepare({ platform: "codex", targetAccountId: "target", previousAccountId: "previous", targetFingerprint: "target-fingerprint", previousFingerprint: "previous-fingerprint", validatePrevious: () => [], validateTarget: () => [] });
+      service.begin(prepared.transaction.id, "target");
+      service.advanceById(prepared.transaction.id, "activating", { backupPath: "sealed-snapshot" });
+      service.advanceById(prepared.transaction.id, "launching"); service.advanceById(prepared.transaction.id, "verifying");
+      service.setVerification(prepared.transaction.id, { profileApplied: true, credentials: "probe_observed", credentialMethod: "separate probe", launch: "process_started", runtime: "unsupported", runtimeSource: null, observedEmail: null, observedAt: null, runtimePid: null, message: "Desktop account unconfirmed" });
+      service.finalizeWithActiveAccount(prepared.transaction.id, "committed", "target");
+      expect(store.get("target")?.runtimeVerification).toMatchObject({ profileApplied: true, runtime: "unsupported" });
+      expect(service.beginRollback(prepared.transaction.id)).toMatchObject({ status: "rolling_back", phase: "rolling_back", completedAt: null });
+      service.finalizeWithActiveAccount(prepared.transaction.id, "rolled_back", "previous");
+      expect(store.get("previous")?.isActive).toBe(true); expect(store.get("previous")?.runtimeVerification).toBeNull(); expect(store.get("target")?.runtimeVerification).toBeNull();
+    } finally { store.close(); }
+  });
+
 });

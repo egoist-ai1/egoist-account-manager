@@ -1,3 +1,4 @@
+import type { AntigravityBackupProtection } from "./antigravityProfileBackup.js";
 import type { AntigravityPathInput } from "./antigravityPaths.js";
 import {
   writePreparedAntigravityProfile,
@@ -18,7 +19,6 @@ export const ANTIGRAVITY_AUTH_STATUS_STATE_KEY = "antigravityAuthStatus";
 export const ANTIGRAVITY_ONBOARDING_STATE_KEY = "antigravityOnboarding";
 export const ANTIGRAVITY_LEGACY_GOOGLE_STATE_KEY = "google.antigravity";
 import {
-  injectAntigravitySecondaryPersona,
   type AntigravityHardwarePersona
 } from "./antigravityHardwarePersonaService.js";
 
@@ -56,7 +56,7 @@ export interface AntigravityAccountWritePlan {
   summary: AntigravityAccountWriteSummary;
 }
 
-export interface AntigravityAccountApplyInput extends AntigravityPathInput {
+export interface AntigravityAccountApplyInput extends AntigravityPathInput, AntigravityBackupProtection {
   backupRoot: string;
   credentials: AntigravityCredentialPackage;
 }
@@ -201,6 +201,7 @@ function sanitizeWriterResult(plan: AntigravityAccountWritePlan, result: Antigra
 }
 
 export function applyAntigravityAccountWritePlan(input: AntigravityAccountApplyInput): AntigravityAccountApplyResult {
+  if (input.credentials.persona) throw new Error("Hardware persona writes are unavailable in the supported switching flow");
   const plan = createAntigravityAccountWritePlan(input.credentials);
   const writerInput: AntigravityProfileWriteInput = {
     ...input,
@@ -213,8 +214,5 @@ export function applyAntigravityAccountWritePlan(input: AntigravityAccountApplyI
     allowMachineIdWrite: plan.allowMachineIdWrite
   };
   const result = writePreparedAntigravityProfile(writerInput);
-  if (input.credentials.persona) {
-    injectAntigravitySecondaryPersona(input.credentials.persona, input);
-  }
   return sanitizeWriterResult(plan, result);
 }

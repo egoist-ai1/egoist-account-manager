@@ -4,7 +4,7 @@ import path from "node:path";
 import type { ManagedAccount } from "../../shared/types.js";
 import type { AccountStore } from "../db.js";
 import { getAuthFilePath } from "../codexRpc.js";
-import { getProfilesDir } from "../paths.js";
+import { assertManagedPath, getProfilesDir } from "../paths.js";
 import type { Vault } from "../security.js";
 
 export interface CodexAuthMaterialMetadata {
@@ -80,11 +80,6 @@ export function inspectCodexAuthJson(authJson: string): CodexAuthMaterialMetadat
   };
 }
 
-function isInside(parentDir: string, targetDir: string): boolean {
-  const relative = path.relative(path.resolve(parentDir), path.resolve(targetDir));
-  return relative !== "" && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
-}
-
 function readStableAuthFile(filePath: string): string {
   const firstInfo = fs.statSync(filePath);
   const first = fs.readFileSync(filePath);
@@ -114,7 +109,7 @@ export class CodexProfileVaultService {
 
   hydrate(account: ManagedAccount & { encryptedAuthJson: string }): void {
     this.assertManagedProfile(account.profileDir);
-    const authPath = getAuthFilePath(account.profileDir);
+    const authPath = assertManagedPath(this.profilesDir, getAuthFilePath(account.profileDir));
     if (fs.existsSync(authPath)) {
       const plaintext = readStableAuthFile(authPath);
       const plaintextMetadata = inspectCodexAuthJson(plaintext);
@@ -131,9 +126,9 @@ export class CodexProfileVaultService {
     this.atomicWrite(authPath, this.vault.decryptUtf8(account.encryptedAuthJson));
   }
 
-  sealVerified(account: ManagedAccount & { encryptedAuthJson: string }): ManagedAccount {
+  sealVerified(account: ManagedAccount & { encryptedAuthJson: string }, options: { identityVerified?: boolean } = {}): ManagedAccount {
     this.assertManagedProfile(account.profileDir);
-    const authPath = getAuthFilePath(account.profileDir);
+    const authPath = assertManagedPath(this.profilesDir, getAuthFilePath(account.profileDir));
     if (!fs.existsSync(authPath)) return account;
     const authJson = readStableAuthFile(authPath);
     const metadata = inspectCodexAuthJson(authJson);
@@ -147,8 +142,8 @@ export class CodexProfileVaultService {
         workspaceAccountId: metadata.workspaceAccountId,
         workspaceLabel: metadata.workspaceLabel,
         expiresAt: metadata.expiresAt,
-        credentialState: "ready",
-        lastAuthenticatedAt: Math.floor(Date.now() / 1000)
+        credentialState: options.identityVerified ? "ready" : "needs_review",
+        lastAuthenticatedAt: options.identityVerified ? Math.floor(Date.now() / 1000) : null
       });
     }
     this.removePlaintext(account.profileDir);
@@ -160,7 +155,7 @@ export class CodexProfileVaultService {
     let drifted = 0;
     for (const account of this.store.listForExport()) {
       if (account.platform !== "codex" || !this.isManagedProfile(account.profileDir)) continue;
-      const authPath = getAuthFilePath(account.profileDir);
+      const authPath = assertManagedPath(this.profilesDir, getAuthFilePath(account.profileDir));
       if (!fs.existsSync(authPath)) continue;
       const plaintext = readStableAuthFile(authPath);
       try {
@@ -189,19 +184,24 @@ export class CodexProfileVaultService {
 
   removePlaintext(profileDir: string): void {
     this.assertManagedProfile(profileDir);
-    const authPath = getAuthFilePath(profileDir);
+    const authPath = assertManagedPath(this.profilesDir, getAuthFilePath(profileDir));
     fs.rmSync(authPath, { force: true });
     if (!fs.existsSync(profileDir)) return;
     const prefix = `${path.basename(authPath)}.cam-backup-`;
     for (const entry of fs.readdirSync(profileDir, { withFileTypes: true })) {
       if (entry.isFile() && (entry.name.startsWith(prefix) || entry.name.startsWith(`${path.basename(authPath)}.`) && entry.name.endsWith(".tmp"))) {
-        fs.rmSync(path.join(profileDir, entry.name), { force: true });
+        fs.rmSync(assertManagedPath(this.profilesDir, path.join(profileDir, entry.name)), { force: true });
       }
     }
   }
 
   isManagedProfile(profileDir: string): boolean {
-    return isInside(this.profilesDir, profileDir);
+    try {
+      const checked = assertManagedPath(this.profilesDir, profileDir);
+      return path.dirname(checked) === path.resolve(this.profilesDir);
+    } catch {
+      return false;
+    }
   }
 
   private captureDrift(
@@ -223,8 +223,14 @@ export class CodexProfileVaultService {
   }
 
   private atomicWrite(filePath: string, data: string): void {
-    const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tempPath, data, { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(tempPath, filePath);
+    assertManagedPath(this.profilesDir, filePath);
+    const tempPath = assertManagedPath(this.profilesDir, `${filePath}.${process.pid}.${Date.now()}.tmp`);
+    try {
+      fs.writeFileSync(tempPath, data, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      assertManagedPath(this.profilesDir, filePath);
+      fs.renameSync(tempPath, filePath);
+    } finally {
+      fs.rmSync(assertManagedPath(this.profilesDir, tempPath), { force: true });
+    }
   }
 }

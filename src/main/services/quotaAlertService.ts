@@ -1,6 +1,6 @@
 import type { ManagedAccount } from "../../shared/types.js";
 import { buildProviderQuotaState, type ProviderQuotaWindow } from "../../shared/providerAdapter.js";
-import { selectAutoSwitchAccount } from "../../shared/smartSelection.js";
+import { getAccountQuotaSelection, getAccountReadiness, selectAutoSwitchAccount } from "../../shared/smartSelection.js";
 
 interface PersistedQuotaAlertState {
   version: 1;
@@ -46,6 +46,7 @@ function parseState(raw: string | null): PersistedQuotaAlertState {
 
 function alertableWindows(account: ManagedAccount, now: number, staleAfterSeconds: number): ProviderQuotaWindow[] {
   const quota = buildProviderQuotaState(account);
+  const readiness = getAccountReadiness(account, { now, staleAfterSeconds });
   if (
     !account.isActive ||
     account.archived ||
@@ -53,13 +54,14 @@ function alertableWindows(account: ManagedAccount, now: number, staleAfterSecond
     account.status === "unknown" ||
     quota.source !== "official_api" ||
     quota.confidence !== "confirmed" ||
-    !quota.lastCheckedAt ||
-    now - quota.lastCheckedAt > staleAfterSeconds
+    readiness.state === "needs_refresh" || readiness.state === "needs_reauth"
   ) {
     return [];
   }
 
+  const windowIds = new Set(getAccountQuotaSelection(account).windows.map(window => window.id));
   return quota.windows.filter((window) =>
+    windowIds.has(window.id) &&
     window.source === "official_api" &&
     window.confidence === "confirmed" &&
     typeof window.remaining === "number" &&
@@ -85,14 +87,11 @@ export class QuotaAlertService {
       Object.entries(state.notifiedWindows).filter(([, resetAt]) => resetAt > now)
     );
 
-    const recommendation = selectAutoSwitchAccount(accounts, {
-      now,
-      staleAfterSeconds: this.staleAfterSeconds,
-      thresholdPercent: threshold
-    });
     const alerts: QuotaAlert[] = [];
 
     for (const account of accounts) {
+      const recommendation = selectAutoSwitchAccount(accounts, { now, provider: account.platform,
+        staleAfterSeconds: this.staleAfterSeconds, thresholdPercent: threshold });
       for (const window of alertableWindows(account, now, this.staleAfterSeconds)) {
         if ((window.remaining ?? 100) > threshold || window.resetAt === null || window.remaining === null) continue;
         const key = `${account.id}:${window.id}:${window.resetAt}`;

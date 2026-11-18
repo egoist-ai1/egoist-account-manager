@@ -6,6 +6,9 @@ export default defineConfig({
   plugins: [react()],
   root: ".",
   base: "./",
+  server: {
+    watch: { ignored: ["**/release/**", "**/artifacts/**", "**/docs/**"] }
+  },
   build: {
     outDir: "dist/renderer",
     // Renderer chunks are content-addressed. Keeping previous builds here makes

@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { buildSync } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   DurableAuthActivationError,
@@ -247,4 +249,59 @@ describe("DurableAuthBundleService", () => {
     expect(fs.readFileSync(path.join(codexHome, "auth.json"), "utf8")).toBe(previousAuth);
     expect(fs.readFileSync(path.join(codexHome, ".codex-global-state.json"), "utf8")).toBe(previousState);
   });
+  it("cleans orphaned plaintext without a manifest and rejects redirected cleanup", () => {
+    const codexHome = tempDir(); const foreign = tempDir();
+    const owned = path.join(codexHome, ".codex-account-manager", "transactions", "tx-orphan-stage");
+    fs.mkdirSync(path.join(owned, "stage"), { recursive: true }); fs.mkdirSync(path.join(owned, "rollback"));
+    fs.writeFileSync(path.join(owned, "stage", "auth.tmp"), "stage-secret");
+    fs.writeFileSync(path.join(owned, "rollback", "previous.tmp"), "previous-secret");
+    fs.writeFileSync(path.join(owned, "manifest.json.42.tmp"), "temporary");
+    fs.writeFileSync(path.join(foreign, "sentinel"), "foreign");
+    fs.symlinkSync(foreign, path.join(codexHome, ".codex-account-manager", "transactions", "tx-linked-stage"), "junction");
+    const { service } = createService(codexHome);
+    expect(service.cleanupOrphanedTransientFiles()).toBe(1);
+    expect(fs.readdirSync(owned)).toEqual([]);
+    expect(() => service.cleanupTransientFiles(path.join(codexHome, ".codex-account-manager", "transactions", "tx-linked-stage"))).toThrow(/reparse/);
+    expect(fs.readFileSync(path.join(foreign, "sentinel"), "utf8")).toBe("foreign");
+  });
+
+  it.each(["stage-write", "first-target-rename", "second-target-rename"])("recovers after a real child-process exit at %s", async (boundary) => {
+    const codexHome = tempDir();
+    const previousAuth = JSON.stringify({ account_id: "previous", token: "original-secret" });
+    const previousState = JSON.stringify({ creator_id: "previous" });
+    fs.writeFileSync(path.join(codexHome, "auth.json"), previousAuth); fs.writeFileSync(path.join(codexHome, ".codex-global-state.json"), previousState);
+    const transactionId = "tx-process-crash";
+    const built = buildSync({ entryPoints: [path.resolve("src/main/services/durableAuthBundleService.ts")], write: false, bundle: true, platform: "node", format: "cjs", alias: { electron: path.resolve("tests/helpers/electronSafetyStub.ts") } }).outputFiles[0].text;
+    const childPath = path.join(codexHome, "crash-fixture.cjs");
+    const child = `${built}
+const crashFs = require("node:fs"); const crashPath = require("node:path");
+const boundary = ${JSON.stringify(boundary)};
+const home = process.argv[2];
+const adapter = { exists: crashFs.existsSync, readUtf8: p => crashFs.readFileSync(p,"utf8"), mkdir: p => crashFs.mkdirSync(p,{recursive:true}), remove: (p,recursive=false) => crashFs.rmSync(p,{force:true,recursive}), writeDurableUtf8(p,s) { crashFs.mkdirSync(crashPath.dirname(p),{recursive:true}); crashFs.writeFileSync(p,s); if(boundary==='stage-write' && p.includes(crashPath.sep+'stage'+crashPath.sep)) process.exit(87); }, rename(a,b) { crashFs.renameSync(a,b); if(a.includes(crashPath.sep+'stage'+crashPath.sep) && ((boundary==='first-target-rename' && b.endsWith(crashPath.sep+'auth.json')) || (boundary==='second-target-rename' && b.endsWith(crashPath.sep+'.codex-global-state.json')))) process.exit(87); } };
+const service = new module.exports.DurableAuthBundleService({codexHome:home,sealBackup:s=>'sealed:'+Buffer.from(s).toString('base64'),unsealBackup:s=>Buffer.from(s.slice(7),'base64').toString(),adapter,stableCheckIntervalMs:0});
+service.activate({transactionId:${JSON.stringify(transactionId)},files:[{relativePath:'auth.json',contents:'target-secret'},{relativePath:'.codex-global-state.json',contents:'target-state'}]}).then(()=>process.exit(0)).catch(()=>process.exit(88));`;
+    fs.writeFileSync(childPath, child);
+    const result = spawnSync(process.execPath, [childPath, codexHome], { encoding: "utf8", timeout: 15_000, windowsHide: true });
+    expect(result.error).toBeUndefined(); expect(result.status, result.stderr).toBe(87);
+    const { service } = createService(codexHome);
+    await service.rollback(path.join(codexHome, ".codex-account-manager", "transactions", transactionId));
+    service.cleanupOrphanedTransientFiles();
+    expect(fs.readFileSync(path.join(codexHome, "auth.json"), "utf8")).toBe(previousAuth);
+    expect(fs.readFileSync(path.join(codexHome, ".codex-global-state.json"), "utf8")).toBe(previousState);
+    const transactionDir = path.join(codexHome, ".codex-account-manager", "transactions", transactionId);
+    expect(fs.existsSync(path.join(transactionDir, "stage"))).toBe(false); expect(fs.existsSync(path.join(transactionDir, "rollback"))).toBe(false);
+  });
+
+  it("does not consider the previous auth fingerprint a verified multi-file rollback", async () => {
+    const codexHome = tempDir(); const previousAuth = JSON.stringify({ account_id: "previous" });
+    fs.writeFileSync(path.join(codexHome, "auth.json"), previousAuth);
+    fs.writeFileSync(path.join(codexHome, ".codex-global-state.json"), '{"creator_id":"previous"}');
+    const { service } = createService(codexHome);
+    const result = await service.activate({ transactionId: "tx-mixed-previous", files: bundle() });
+    fs.writeFileSync(path.join(codexHome, "auth.json"), previousAuth);
+    expect(service.verifyPreviousFiles(result.backupPath)).toBe(false);
+    await service.rollback(result.backupPath);
+    expect(service.verifyPreviousFiles(result.backupPath)).toBe(true);
+  });
+
 });

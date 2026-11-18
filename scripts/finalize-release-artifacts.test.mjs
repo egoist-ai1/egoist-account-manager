@@ -12,26 +12,28 @@ if (!work) throw new Error('CAM_RELEASE_TEST_WORK must identify this task fixtur
 const hash = (bytes, algorithm = 'sha256', encoding = 'hex') => crypto.createHash(algorithm).update(bytes).digest(encoding);
 const date = new Date('2026-10-04T12:00:00.000Z');
 
-async function fixture(t) {
+async function fixture(t, rc = false) {
   await fs.mkdir(work, { recursive: true });
   const root = await fs.mkdtemp(path.join(work, 'release-finalizer-'));
   t.after(async () => { uncacheAll(); await fs.rm(root, { recursive: true, force: true }); });
-  const pkg = { name: 'codex-account-manager', productName: 'Account Manager EGO', version: '3.1.10', main: 'dist/main/main.js' };
-  const payload = path.join(root, 'release', 'win-unpacked');
+  const pkg = { name: 'codex-account-manager', productName: rc ? 'Egoist' : 'Account Manager EGO', version: rc ? '3.2.0-rc.1' : '3.1.10', main: 'dist/main/main.js' };
+  if (rc) pkg.build = { directories: { output: 'release/3.2.0-rc.1' }, nsis: { artifactName: 'Egoist-Setup-${version}.${ext}' }, portable: { artifactName: 'Egoist-${version}.${ext}' } };
+  const output = pkg.build?.directories.output ?? 'release';
+  const payload = path.join(root, output, 'win-unpacked');
   const staged = path.join(root, 'packed-source');
-  for (const directory of ['dist/main', 'assets', 'release/win-unpacked/resources', 'packed-source/dist/main', 'packed-source/assets']) {
+  for (const directory of ['dist/main', 'assets', `${output}/win-unpacked/resources`, 'packed-source/dist/main', 'packed-source/assets']) {
     await fs.mkdir(path.join(root, directory), { recursive: true });
   }
   for (const relative of ['package.json', 'packed-source/package.json']) await fs.writeFile(path.join(root, relative), JSON.stringify(pkg));
   for (const relative of ['dist/main/main.js', 'packed-source/dist/main/main.js']) await fs.writeFile(path.join(root, relative), 'console.log("built");');
-  for (const relative of ['assets/icon.ico', 'packed-source/assets/icon.ico', 'assets/icon.png', 'release/win-unpacked/resources/icon.png']) await fs.writeFile(path.join(root, relative), Buffer.from([1, 2, 3]));
+  for (const relative of ['assets/icon.ico', 'packed-source/assets/icon.ico', 'assets/icon.png', `${output}/win-unpacked/resources/icon.png`]) await fs.writeFile(path.join(root, relative), Buffer.from([1, 2, 3]));
   await fs.writeFile(path.join(payload, `${pkg.productName}.exe`), 'fake application executable');
   await createPackage(staged, path.join(payload, 'resources', 'app.asar'));
-  const setup = path.join(root, 'release', `Account-Manager-EGO-Setup-${pkg.version}.exe`);
-  const portable = path.join(root, 'release', `Account-Manager-EGO-${pkg.version}.exe`);
+  const setup = path.join(root, output, `${rc ? 'Egoist' : 'Account-Manager-EGO'}-Setup-${pkg.version}.exe`);
+  const portable = path.join(root, output, `${rc ? 'Egoist' : 'Account-Manager-EGO'}-${pkg.version}.exe`);
   await fs.writeFile(setup, Buffer.alloc(8192, 33));
   await fs.writeFile(portable, 'fake portable executable');
-  await fs.writeFile(path.join(root, 'release', 'latest.yml'), 'stale metadata');
+  await fs.writeFile(path.join(root, output, 'latest.yml'), 'stale metadata');
   const builder = async (file, format, output) => {
     assert.equal(file, setup);
     assert.equal(format, 'gzip');
@@ -42,6 +44,17 @@ async function fixture(t) {
   };
   return { root, setup, portable, builder, payload };
 }
+
+test('finalizes the configured Egoist prerelease without modifying the historical release', async (t) => {
+  const f = await fixture(t, true);
+  await fs.writeFile(path.join(f.root, 'release', 'historical-sentinel.txt'), 'keep old release');
+  const result = await finalizeReleaseArtifacts(f.root, { buildBlockMap: f.builder, releaseDate: date });
+  assert.equal(result.version, '3.2.0-rc.1');
+  assert.equal(result.setupName, 'Egoist-Setup-3.2.0-rc.1.exe');
+  const latest = await fs.readFile(path.join(f.root, 'release', '3.2.0-rc.1', 'latest.yml'), 'utf8');
+  assert.match(latest, /version: 3\.2\.0-rc\.1/);
+  assert.equal(await fs.readFile(path.join(f.root, 'release', 'historical-sentinel.txt'), 'utf8'), 'keep old release');
+});
 
 test('finalizes exact five assets without changing installer and synchronizes existing root manifest', async (t) => {
   const f = await fixture(t);

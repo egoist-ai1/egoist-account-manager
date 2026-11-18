@@ -1,4 +1,5 @@
 import type { AccountPlatform, ManagedAccount, PlanType } from "./types.js";
+import { getAccountQuotaSelection, getAccountQuotaWindows } from "./smartSelection.js";
 
 export type ProviderCapabilityConfidence = "confirmed" | "inferred" | "estimated" | "unknown";
 export type ProviderCapabilitySource =
@@ -9,7 +10,7 @@ export type ProviderCapabilitySource =
   | "manual"
   | "unknown";
 export type ProviderLimitWindowType = "daily" | "weekly" | "rolling" | "5h" | "unknown";
-export type ProviderQuotaSource = "official_api" | "local_status" | "error_response" | "manual" | "unknown";
+export type ProviderQuotaSource = "official_api" | "provider_api" | "local_status" | "error_response" | "manual" | "unknown";
 
 export interface ProviderCapability {
   supported: boolean;
@@ -66,6 +67,10 @@ export interface ProviderQuotaWindow {
   windowType: ProviderLimitWindowType;
   confidence: ProviderCapabilityConfidence;
   source: ProviderQuotaSource;
+  windowDurationMins?: number | null;
+  label?: string | null;
+  modelId?: string | null;
+  scope?: string | null;
 }
 
 const confirmedAppServer: Pick<ProviderCapability, "confidence" | "source"> = {
@@ -93,7 +98,7 @@ export const knownProviderAdapterMetadata: ProviderAdapterMetadata[] = [
       detectActiveAccount: {
         supported: true,
         ...localInferred,
-        reason: "Active account is detected from local Codex auth state and app-server account/read."
+        reason: "Local auth identifies the selected profile; a separate app-server account/read probe identifies that probe, not the running Desktop account."
       },
       validateAuth: {
         supported: true,
@@ -118,7 +123,7 @@ export const knownProviderAdapterMetadata: ProviderAdapterMetadata[] = [
       getHistory: {
         supported: true,
         ...localInferred,
-        reason: "Local switch and limit history are recorded by Egoist Account Manager."
+        reason: "Local switch and limit history are recorded by Квессер."
       }
     },
     knownLimitWindows: [
@@ -154,7 +159,8 @@ export const knownProviderAdapterMetadata: ProviderAdapterMetadata[] = [
     accountKind: "Google account",
     docsSource: [
       "https://www.antigravity.google/docs/cli-getting-started",
-      "https://antigravity.google/docs/plans"
+      "https://antigravity.google/docs/plans",
+      "https://developers.google.com/identity/protocols/oauth2/native-app"
     ],
     supportsEncryptedExport: true,
     supportsSessionTransfer: false,
@@ -165,10 +171,10 @@ export const knownProviderAdapterMetadata: ProviderAdapterMetadata[] = [
         reason: "Local IDE profile files can be inspected without reading secret values."
       },
       validateAuth: {
-        supported: false,
-        confidence: "unknown",
-        source: "official_cli",
-        reason: "Official Antigravity CLI docs describe OS secure keyring and browser sign-in; no portable local validation API is documented."
+        supported: true,
+        confidence: "confirmed",
+        source: "official_docs",
+        reason: "Google OAuth userinfo validates the token's account; a separate OS-bound IDE check is required to confirm the running runtime. Legacy IDE keyring material alone is not online proof."
       },
       getQuotaState: {
         supported: true,
@@ -185,12 +191,12 @@ export const knownProviderAdapterMetadata: ProviderAdapterMetadata[] = [
         supported: true,
         confidence: "inferred",
         source: "local_status",
-        reason: "On Windows, Egoist Account Manager can restart Antigravity.exe/language_server so the Hub reloads OS Credential Manager state."
+        reason: "On Windows, Квессер can restart Antigravity.exe/language_server; launch and runtime identity are checked separately."
       },
       getHistory: {
         supported: true,
         ...localInferred,
-        reason: "Local switch/import history can be recorded by Egoist Account Manager."
+        reason: "Local switch/import history can be recorded by Квессер."
       }
     },
     knownLimitWindows: [
@@ -219,7 +225,23 @@ export function providerDisplayName(providerId: AccountPlatform): string {
 }
 
 function clampPercent(value: number): number {
-  return Math.min(100, Math.max(0, Math.round(value)));
+  return Math.min(100, Math.max(0, value));
+}
+
+export function formatQuotaRemaining(remaining: number | null, locale: "ru" | "en" = "ru"): string {
+  if (remaining === null || !Number.isFinite(remaining)) return "—";
+  const percent = clampPercent(remaining);
+  if (percent > 0 && percent < 1) return "<1%";
+  return `${Math.round(percent).toLocaleString(locale)}%`;
+}
+
+export function quotaWindowLabel(durationMins: number | null, locale: "ru" | "en" = "ru"): string {
+  if (!durationMins || !Number.isFinite(durationMins)) return locale === "ru" ? "Период неизвестен" : "Unknown window";
+  if (durationMins === 300) return locale === "ru" ? "5 часов" : "5 hours";
+  if (durationMins === 1440) return locale === "ru" ? "сутки" : "daily";
+  if (durationMins === 10_080) return locale === "ru" ? "неделя" : "weekly";
+  if (durationMins % 60 === 0) return `${durationMins / 60} ${locale === "ru" ? "ч" : "h"}`;
+  return `${durationMins} ${locale === "ru" ? "мин" : "min"}`;
 }
 
 function classifyWindow(durationMins: number | null): ProviderLimitWindowType {
@@ -229,71 +251,29 @@ function classifyWindow(durationMins: number | null): ProviderLimitWindowType {
   return durationMins ? "rolling" : "unknown";
 }
 
-function strongestKnownCodexWindow(account: ManagedAccount): {
-  used: number | null;
-  resetAt: number | null;
-  windowType: ProviderLimitWindowType;
-} {
-  if (account.primaryUsedPercent !== null) {
-    return {
-      used: clampPercent(account.primaryUsedPercent),
-      resetAt: account.primaryResetsAt ?? null,
-      windowType: classifyWindow(account.primaryWindowDurationMins)
-    };
-  }
-  if (account.fiveHourUsedPercent !== null) {
-    return {
-      used: clampPercent(account.fiveHourUsedPercent),
-      resetAt: account.fiveHourResetsAt,
-      windowType: "5h"
-    };
-  }
-  if (account.weeklyUsedPercent !== null) {
-    return {
-      used: clampPercent(account.weeklyUsedPercent),
-      resetAt: account.weeklyResetsAt,
-      windowType: "weekly"
-    };
-  }
-  return { used: null, resetAt: null, windowType: "unknown" };
-}
-
 export function buildProviderQuotaState(account: ManagedAccount): ProviderQuotaState {
-  if (account.platform === "antigravity") {
-    const used = typeof account.primaryUsedPercent === "number" && Number.isFinite(account.primaryUsedPercent)
-      ? clampPercent(account.primaryUsedPercent)
-      : null;
-    return {
-      provider: account.platform,
-      accountId: account.id,
-      planType: account.planType,
-      remaining: used === null ? null : 100 - used,
-      used,
-      resetAt: account.primaryResetsAt ?? null,
-      windowType: classifyWindow(account.primaryWindowDurationMins),
-      confidence: used === null ? "unknown" : "inferred",
-      source: used === null ? "unknown" : "local_status",
-      lastCheckedAt: account.antigravity?.lastQuotaRefreshAt ?? null,
-      errorReason: account.lastRefreshError ?? (account.status === "error" ? account.statusReason : null),
-      windows: buildAccountQuotaWindows(account, "inferred", used === null ? "unknown" : "local_status")
-    };
-  }
-
-  const known = strongestKnownCodexWindow(account);
-  const hasQuota = known.used !== null;
+  const confidence = account.platform === "codex" ? "confirmed" : "inferred";
+  const source = account.platform === "codex" ? "official_api"
+    : account.quotaSnapshot?.source === "antigravity_api" ? "provider_api" : "local_status";
+  const windows = buildAccountQuotaWindows(account, confidence, source);
+  const selection = getAccountQuotaSelection(account);
+  const selectionIds = new Set(selection.windows.map(window => window.id));
+  const representative = windows.filter(window => selectionIds.has(window.id))
+    .sort((left, right) => (right.used ?? -1) - (left.used ?? -1))[0];
+  const hasQuota = Boolean(representative);
   return {
     provider: account.platform,
     accountId: account.id,
     planType: account.planType,
-    remaining: known.used === null ? null : 100 - known.used,
-    used: known.used,
-    resetAt: known.resetAt,
-    windowType: known.windowType,
-    confidence: hasQuota ? "confirmed" : "unknown",
-    source: hasQuota ? "official_api" : "unknown",
-    lastCheckedAt: account.lastRefreshAt,
+    remaining: representative?.remaining ?? null,
+    used: representative?.used ?? null,
+    resetAt: representative?.resetAt ?? null,
+    windowType: representative?.windowType ?? "unknown",
+    confidence: hasQuota ? confidence : "unknown",
+    source: hasQuota ? source : "unknown",
+    lastCheckedAt: account.quotaSnapshot?.capturedAt ?? account.lastRefreshAt ?? account.antigravity?.lastQuotaRefreshAt ?? null,
     errorReason: account.lastRefreshError ?? (account.status === "error" ? account.statusReason : null),
-    windows: buildAccountQuotaWindows(account, hasQuota ? "confirmed" : "unknown", hasQuota ? "official_api" : "unknown")
+    windows
   };
 }
 
@@ -302,28 +282,20 @@ function buildAccountQuotaWindows(
   confidence: ProviderCapabilityConfidence,
   source: ProviderQuotaSource
 ): ProviderQuotaWindow[] {
-  const candidates: Array<{ id: string; used: number | null; resetAt: number | null; duration: number | null }> = [
-    { id: "primary", used: account.primaryUsedPercent, resetAt: account.primaryResetsAt, duration: account.primaryWindowDurationMins },
-    { id: "secondary", used: account.secondaryUsedPercent, resetAt: account.secondaryResetsAt, duration: account.secondaryWindowDurationMins },
-    { id: "five-hour", used: account.fiveHourUsedPercent, resetAt: account.fiveHourResetsAt, duration: 300 },
-    { id: "weekly", used: account.weeklyUsedPercent, resetAt: account.weeklyResetsAt, duration: 10_080 }
-  ];
-  const seen = new Set<string>();
-  return candidates.flatMap((candidate) => {
-    if (candidate.used === null || !Number.isFinite(candidate.used)) return [];
-    const windowType = classifyWindow(candidate.duration);
-    const key = `${windowType}:${candidate.resetAt ?? "none"}:${candidate.used}`;
-    if (seen.has(key)) return [];
-    seen.add(key);
-    const used = clampPercent(candidate.used);
-    return [{
+  return getAccountQuotaWindows(account).map((candidate) => {
+    const used = clampPercent(candidate.usedPercent);
+    return {
       id: candidate.id,
       used,
       remaining: 100 - used,
-      resetAt: candidate.resetAt,
-      windowType,
+      resetAt: candidate.resetsAt,
+      windowType: classifyWindow(candidate.windowDurationMins),
+      windowDurationMins: candidate.windowDurationMins,
+      label: candidate.label,
+      modelId: candidate.modelId,
+      scope: candidate.scope,
       confidence,
       source
-    }];
+    };
   });
 }

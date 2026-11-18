@@ -42,9 +42,16 @@ export async function finalizeReleaseArtifacts(root = defaultRoot, options = {})
   root = path.resolve(root);
   const pkg = JSON.parse((await fs.readFile(path.join(root, 'package.json'), 'utf8')).replace(/^\uFEFF/, ''));
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pkg.version ?? '')) throw new Error('Invalid release version');
-  const releaseDir = path.join(root, 'release');
-  const setupName = `Account-Manager-EGO-Setup-${pkg.version}.exe`;
-  const portableName = `Account-Manager-EGO-${pkg.version}.exe`;
+  const releaseDir = path.resolve(root, pkg.build?.directories?.output ?? 'release');
+  const releaseRelative = path.relative(root, releaseDir);
+  if (!releaseRelative || releaseRelative.startsWith('..') || path.isAbsolute(releaseRelative)) throw new Error('Release output must stay inside the project');
+  const artifactName = (configured, fallback) => {
+    const name = (configured ?? fallback).replaceAll('${version}', pkg.version).replaceAll('${ext}', 'exe');
+    if (path.basename(name) !== name || name.includes('${') || !name.endsWith('.exe')) throw new Error('Invalid release artifact name');
+    return name;
+  };
+  const setupName = artifactName(pkg.build?.nsis?.artifactName, `Account-Manager-EGO-Setup-${pkg.version}.exe`);
+  const portableName = artifactName(pkg.build?.portable?.artifactName, `Account-Manager-EGO-${pkg.version}.exe`);
   const setup = path.join(releaseDir, setupName);
   const portable = path.join(releaseDir, portableName);
   const blockmap = `${setup}.blockmap`;

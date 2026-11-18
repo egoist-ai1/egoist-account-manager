@@ -5,6 +5,8 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { writePreparedAntigravityProfile } from "../../src/main/services/antigravityProfileWriter";
 
+import { createMemoryBackupProtection } from "../helpers/safetyFixtures";
+
 const tempDirs: string[] = [];
 
 function tempDir(): string {
@@ -59,6 +61,7 @@ describe("writePreparedAntigravityProfile", () => {
       appData,
       home: path.dirname(appData),
       backupRoot,
+      ...createMemoryBackupProtection(),
       allowedStateKeys: ["cam.allowed.token"],
       stateItems: [{ key: "cam.allowed.token", value: "new-state-secret" }],
       allowedStorageKeys: ["cam.allowed.storage"],
@@ -90,6 +93,7 @@ describe("writePreparedAntigravityProfile", () => {
       appData,
       home: path.dirname(appData),
       backupRoot,
+      ...createMemoryBackupProtection(),
       allowedStateKeys: ["cam.allowed.token"],
       stateItems: [{ key: "unexpected.token", value: "blocked-secret" }],
       allowedStorageKeys: [],
@@ -111,6 +115,7 @@ describe("writePreparedAntigravityProfile", () => {
       appData,
       home: path.dirname(appData),
       backupRoot,
+      ...createMemoryBackupProtection(),
       allowedStateKeys: ["cam.allowed.token"],
       stateItems: [{ key: "cam.allowed.token", value: "new-state-secret" }],
       allowedStorageKeys: ["cam.allowed.storage"],
@@ -127,4 +132,28 @@ describe("writePreparedAntigravityProfile", () => {
     expect(readStateValue(paths.stateDbPath, "cam.allowed.existing")).toBe("old-state-secret");
     expect(fs.readFileSync(paths.storageJsonPath, "utf8")).toBe(JSON.stringify({ "cam.allowed.existing": "old-storage-secret" }));
   });
+  it("rejects mismatched SQLite readback and restores the full previous profile", () => {
+    const appData = tempDir();
+    const backupRoot = tempDir();
+    const paths = createProfile(appData);
+    expect(() => writePreparedAntigravityProfile({
+      platform: "win32", appData, home: path.dirname(appData), backupRoot,
+      ...createMemoryBackupProtection(),
+      allowedStateKeys: ["cam.allowed.token"],
+      stateItems: [{ key: "cam.allowed.token", value: "expected-state-secret" }],
+      allowedStorageKeys: ["cam.allowed.storage"],
+      storagePatch: { "cam.allowed.storage": "expected-storage-secret" },
+      allowMachineIdWrite: false,
+      hooks: { afterStateWrite: () => {
+        const db = new Database(paths.stateDbPath);
+        try { db.prepare("UPDATE ItemTable SET value = ? WHERE key = ?").run("incorrect-state-secret", "cam.allowed.token"); }
+        finally { db.close(); }
+      } }
+    })).toThrow(/rolled back:.*readback/i);
+    expect(readStateValue(paths.stateDbPath, "cam.allowed.token")).toBeNull();
+    expect(readStateValue(paths.stateDbPath, "cam.allowed.existing")).toBe("old-state-secret");
+    expect(JSON.parse(fs.readFileSync(paths.storageJsonPath, "utf8"))).toEqual({ "cam.allowed.existing": "old-storage-secret" });
+    expect(fs.readFileSync(paths.machineIdPath, "utf8")).toBe("old-machine-secret");
+  });
+
 });

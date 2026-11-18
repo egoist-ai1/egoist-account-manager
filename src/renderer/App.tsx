@@ -4,15 +4,14 @@ import {
   AlertTriangle,
   Activity,
   Archive,
+  ArrowRightLeft,
   CheckCircle2,
   Clock,
   Command,
-  Copy,
   Database,
   ExternalLink,
   FileDown,
   FileUp,
-  Fingerprint,
   FolderOpen,
   KeyRound,
   LayoutDashboard,
@@ -24,6 +23,8 @@ import {
   Maximize2,
   Minus,
   MoreHorizontal,
+  PackageCheck,
+  Plus,
   Search,
   ShieldCheck,
   SlidersHorizontal,
@@ -44,7 +45,6 @@ import type {
   AppNotificationPayload,
   AntigravityDiagnostics,
   AntigravityCredentialBatchImportResult,
-  AntigravityCredentialImportSource,
   AntigravityProfileInspection,
   AntigravityProfileStatus,
   AntigravityOAuthStartResult,
@@ -52,64 +52,62 @@ import type {
   AuthEvent,
   AuthValidationState,
   CodexLoginRequest,
-  CodexLoginMethodId,
   HealthReport,
-  LoginStartResult,
   ManagedAccount,
   ProviderQuotaState,
+  AccountImportPreview,
   SwitchHistoryItem,
   SwitchTransaction,
   UpdateCheckResult,
   WorkspaceBinding
 } from "../shared/types";
 import type { AppViewKey, CommandPaletteCommand } from "../shared/commandPalette";
-import { buildCommandPalette, filterCommandPalette } from "../shared/commandPalette";
+import { buildUiCommands } from "./commandPresentation";
 import {
   formatRemainingCountdown,
   formatResetTimeShort,
-  selectAccountListQuota,
   sortAccountList,
   type AccountListSort
 } from "../shared/accountListPresentation";
-import { maskEmailForPrivacy, maskPathForPrivacy, maskSensitiveDisplayText } from "../shared/privacyDisplay";
+import { maskEmailForPrivacy, maskSensitiveDisplayText } from "../shared/privacyDisplay";
 import { buildProviderQuotaState } from "../shared/providerAdapter";
-import { buildQuotaFreshness, hasCurrentQuotaRefreshFailure } from "../shared/quotaFreshness";
+import { hasCurrentQuotaRefreshFailure } from "../shared/quotaFreshness";
 import { buildQuotaRefreshErrorMessage } from "../shared/quotaRefreshError";
 import { buildQuotaRefreshAccountMessage, buildQuotaRefreshMessage } from "../shared/quotaRefreshMessage";
 import { selectSmartAccount } from "../shared/smartSelection";
 import { appVersion, releaseNotes } from "../shared/releaseNotes";
+import { englishReleaseNotes } from "./releaseNotes";
+import { productName } from "../shared/branding";
+import { displayMetadata } from "./displayPrivacy";
 import appAvatarUrl from "./assets/app-avatar-mark.png";
-import codexLogoUrl from "./assets/codex-official.png";
-import antigravityLogoUrl from "./assets/antigravity-app-official.png";
+import { PlatformMark } from "./components/PlatformMark";
 import { getUiText } from "./i18n";
 import { SettingsPage } from "./pages/SettingsPage";
-import { ActivityPage } from "./components/v3/ActivityPage";
+import { ActivityPage, verificationSummary } from "./components/v3/ActivityPage";
 import { AuditDrawer } from "./components/v3/AuditDrawer";
 import { OverviewPage } from "./components/v3/OverviewPage";
 import { TrayPopover } from "./components/TrayPopover";
 import { TrayHoverPopover } from "./components/TrayHoverPopover";
 import "@fontsource-variable/unbounded";
+import "@fontsource-variable/montserrat";
+import { useVisibleClock } from "./hooks/useVisibleClock";
+import { useDialogManager } from "./hooks/useDialogManager";
+import { AntigravityImportModal, type AntigravityExternalImportSource } from "./components/AntigravityImportModal";
+import { AddAccountWizard, type LoginWizardState } from "./components/AddAccountWizard";
+import { ProfileTable } from "./components/ProfileTable";
+import { ImportPreviewDialog } from "./components/ImportPreviewDialog";
+import { CommandPalette } from "./components/CommandPalette";
+import { useMotionEnvironment, useSurfaceMotion } from "./hooks/useSurfaceMotion";
+import { usePreservedScroll, type ScrollPosition } from "./hooks/usePreservedScroll";
+import { RuntimeEvidence, runtimeLabel } from "./components/RuntimeEvidence";
+import { profilePresentation } from "./profilePresentation";
+import { mergeNotification, notificationDeadline, notificationOperation } from "./notificationPresentation";
+import { formatQuotaRemaining } from "../shared/providerAdapter";
 import "./styles.css";
-import "./v3.css";
-import "./v306.css";
-import "./v307.css";
-import "./v308.css";
-import "./v309.css";
-import "./v310.css";
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
-function useNowSeconds(intervalMs = 1000): number {
-  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), intervalMs);
-    return () => window.clearInterval(timer);
-  }, [intervalMs]);
-  return now;
-}
-
-
-
+const useNowSeconds = useVisibleClock;
 
 const demoSettings: AppSettings = {
   language: "ru",
@@ -337,7 +335,7 @@ const demoSwitchHistory: SwitchHistoryItem[] = demoSwitchTransactions.map((trans
 
 const cam: AppApi = window.cam ?? {
   listAccounts: async () => demoAccounts,
-  getAppInfo: async () => ({ name: "Account Manager EGO", publisher: "Egoist AI", version: appVersion, vaultDegraded: false }),
+  getAppInfo: async () => ({ name: productName, publisher: "Egoist", version: appVersion, vaultDegraded: false }),
   startLogin: async (input: CodexLoginRequest) => ({
     loginId: "demo-login",
     profileId: "demo-profile",
@@ -401,6 +399,9 @@ const cam: AppApi = window.cam ?? {
   refreshAllAccounts: async () => demoAccounts,
   exportAccounts: async () => ({ exportedCount: demoAccounts.length, filePath: "browser-preview.cam-export" }),
   importAccounts: async () => ({ importedCount: demoAccounts.length, accounts: demoAccounts }),
+  previewImport: async () => null,
+  applyImport: async () => ({ importedCount: 0, skippedCount: 0, accounts: demoAccounts }),
+  verifyRuntimeAccount: async () => ({ profileApplied: true, credentials: "not_checked", credentialMethod: null, launch: "not_requested", runtime: "unsupported", runtimeSource: null, observedEmail: null, observedAt: null, runtimePid: null, message: "Runtime verification is available only in the desktop application." }),
   openProfileFolder: async () => undefined,
   prepareSwitch: async (accountId: string) => ({
     transaction: {
@@ -682,9 +683,9 @@ const cam: AppApi = window.cam ?? {
   onTrayPlatform: () => () => undefined
 };
 
-function formatTime(value: number | null): string {
-  if (!value) return "нет данных";
-  return new Intl.DateTimeFormat("ru-RU", {
+function formatTime(value: number | null, language: AppSettings["language"] = "ru"): string {
+  if (!value) return language === "en" ? "No data" : "нет данных";
+  return new Intl.DateTimeFormat(language === "en" ? "en-US" : "ru-RU", {
     day: "2-digit",
     month: "short",
     hour: "2-digit",
@@ -692,7 +693,8 @@ function formatTime(value: number | null): string {
   }).format(new Date(value * 1000));
 }
 
-function authValidationLabel(state: AuthValidationState["state"]): string {
+function authValidationLabel(state: AuthValidationState["state"], language: AppSettings["language"]): string {
+  if (language === "en") return ({ unknown: "Unknown", authorized: "Authorized", expired: "Expired", revoked: "Revoked", needs_reauth: "Sign-in required", validation_failed: "Check failed" })[state];
   const labels: Record<AuthValidationState["state"], string> = {
     unknown: "неизвестно",
     authorized: "авторизован",
@@ -704,37 +706,14 @@ function authValidationLabel(state: AuthValidationState["state"]): string {
   return labels[state];
 }
 
-function QuotaFreshnessChip({ account }: { account: ManagedAccount }) {
-  const freshness = buildQuotaFreshness(account, { now: nowSeconds(), staleAfterSeconds: 15 * 60 });
-  const refreshFailed = hasCurrentQuotaRefreshFailure(account);
-  return (
-    <span
-      className={`quota-freshness-chip ${refreshFailed ? "refresh-error failed" : freshness.state}`}
-      title={refreshFailed ? `Последний запрос завершился ошибкой. ${freshness.title}. Корректный снимок сохранён.` : freshness.title}
-    >
-      {refreshFailed ? <AlertTriangle size={11} className="chip-icon alert-red" /> : <span className="status-dot" />}
-      <span>{refreshFailed ? "сбой обновления" : freshness.label}</span>
-    </span>
-  );
+function QuotaFreshnessChip({ account, language = "ru" }: { account: ManagedAccount; language?: AppSettings["language"] }) {
+  const view = profilePresentation(account, useVisibleClock(), language);
+  return <span className={`quota-freshness-chip ${view.refreshFailed ? "refresh-error failed" : view.readiness.state === "ready" ? "fresh" : "stale"}`} title={view.ageLabel}>{view.refreshFailed ? <AlertTriangle size={11} /> : <span className="status-dot" />}<span>{view.freshness}</span></span>;
 }
 
-function CredentialStateChip({ account }: { account: ManagedAccount }) {
-  const isFailed = account.status === "error" || account.credentialState !== "ready";
-  const meta = account.status === "error"
-    ? { label: "сбой проверки", tone: "failed", title: account.statusReason || "Ошибка проверки профиля" }
-    : account.credentialState === "ready"
-      ? { label: "вход сохранён", tone: "ready", title: "Авторизация зашифрована и сохранена локально" }
-      : account.credentialState === "needs_reauth"
-        ? { label: "нужен вход", tone: "failed", title: "Профиль сохранён, но требуется повторный вход" }
-        : account.credentialState === "drifted"
-          ? { label: "сбой сессии", tone: "failed", title: "Обнаружено изменение авторизации вне менеджера" }
-          : { label: "проверить вход", tone: "failed", title: "Нужно подтвердить принадлежность сохранённого профиля" };
-  return (
-    <span className={`credential-chip ${meta.tone}`} title={meta.title}>
-      {isFailed ? <AlertTriangle size={11} className="chip-icon alert-red" /> : <ShieldCheck size={11} />}
-      <span>{meta.label}</span>
-    </span>
-  );
+function CredentialStateChip({ account, language = "ru" }: { account: ManagedAccount; language?: AppSettings["language"] }) {
+  const view = profilePresentation(account, nowSeconds(), language);
+  return <span className={`credential-chip ${account.credentialState === "ready" ? "ready" : "failed"}`}>{account.credentialState === "ready" ? <ShieldCheck size={11} /> : <AlertTriangle size={11} />}<span>{view.credentialsLabel}</span></span>;
 }
 
 function statusClass(account: ManagedAccount): string {
@@ -745,16 +724,8 @@ function statusClass(account: ManagedAccount): string {
   return "";
 }
 
-function used(account: ManagedAccount): number {
-  return Math.max(account.fiveHourUsedPercent ?? 0, account.weeklyUsedPercent ?? 0);
-}
-
-function isUsable(account: ManagedAccount): boolean {
-  return account.status !== "limited" && account.status !== "error";
-}
-
 function uiErrorMessage(action: string): string {
-  return `${action}. Подробности доступны в журнале диагностики.`;
+  return `${action}. ${document.documentElement.lang === "en" ? "Details are available in the diagnostic log." : "Подробности доступны в журнале диагностики."}`;
 }
 
 function readableIpcError(error: unknown): string | null {
@@ -765,8 +736,28 @@ function readableIpcError(error: unknown): string | null {
     .trim();
 }
 
-function switchErrorMessage(error: unknown): string {
+function switchErrorMessage(error: unknown, platform: PlatformFilter, language: AppSettings["language"]): string {
   const detail = readableIpcError(error);
+  const en = language === "en";
+  if (platform === "antigravity") {
+    if (detail && /still has an open window|could not be stopped|still running/i.test(detail)) {
+      return en ? "Save your work, close Antigravity and retry the switch." : "Сохраните работу, закройте Antigravity и повторите переключение.";
+    }
+    if (detail && /Hub and IDE|multiple Antigravity installations|different Antigravity application|another Antigravity profile/i.test(detail)) {
+      return en ? "Close the other Antigravity windows and retry with one installation open." : "Закройте другие окна Antigravity и повторите переключение с одним запущенным приложением.";
+    }
+    if (detail && /active Antigravity profile changed/i.test(detail)) {
+      return en ? "The active Antigravity profile changed. Confirm the switch again." : "Текущий профиль Antigravity изменился. Подтвердите переключение заново.";
+    }
+    if (detail && /executable.*(unavailable|not found|unrecognized)/i.test(detail)) {
+      return en ? "Antigravity could not be found. Open the installation you use and retry." : "Не удалось найти Antigravity. Откройте нужную версию приложения и повторите переключение.";
+    }
+    if (detail && /readback|write failed|rollback|launch failed|exited before|spawn returned|window was ready/i.test(detail)) {
+      return en ? "Antigravity could not complete the switch. Check the switch journal for the restart and recovery result." : "Переключение Antigravity прервалось. Результат запуска и восстановления указан в журнале переключений.";
+    }
+    return uiErrorMessage(en ? "Could not switch the Antigravity profile" : "Не удалось переключить профиль Antigravity");
+  }
+  if (en) return uiErrorMessage(detail ?? "Could not switch profiles");
   if (!detail) return uiErrorMessage("Не удалось переключить аккаунт");
   if (/no auth\.json/i.test(detail)) {
     return "В Codex сейчас нет активной авторизации. Менеджер сохранил профили и попробует активировать выбранный аккаунт повторно.";
@@ -775,7 +766,7 @@ function switchErrorMessage(error: unknown): string {
     return "Текущая сессия Codex не совпала с отметкой в менеджере. Обновите список и повторите переключение. Сессия будет согласована автоматически.";
   }
   if (/hosted inside the active Codex process tree/i.test(detail)) {
-    return "Manager был открыт из процесса Codex, поэтому безопасное переключение остановлено до закрытия сессии. Перезапустите Manager из меню «Пуск» или с ярлыка.";
+    return "Квессер был открыт из процесса Codex, поэтому безопасное переключение остановлено до закрытия сессии. Перезапустите Квессер из меню «Пуск» или с ярлыка.";
   }
   if (/could not be safely closed|did not exit|still running/i.test(detail)) {
     return "Codex не удалось завершить. Включите «Автоматическое закрытие» в настройках и повторите попытку.";
@@ -790,14 +781,6 @@ function switchErrorMessage(error: unknown): string {
 }
 
 
-
-function relativeRefresh(account: ManagedAccount): string {
-  if (!account.lastRefreshAt) return "нет снимка";
-  const minutes = Math.max(0, Math.floor((nowSeconds() - account.lastRefreshAt) / 60));
-  if (minutes < 1) return "только что";
-  if (minutes < 60) return `${minutes} мин назад`;
-  return `${Math.floor(minutes / 60)} ч назад`;
-}
 
 function meterTone(usedPercent: number | null): string {
   const usedValue = usedPercent ?? 0;
@@ -825,11 +808,11 @@ function LimitMeter({
   platform?: "codex" | "antigravity";
   language?: AppSettings["language"];
 }) {
-  const now = useNowSeconds(1000);
+  const now = useNowSeconds();
   const remaining = remainingPercent(usedPercent);
   const isAvailable = usedPercent !== null;
   const isEnglish = language === "en";
-  const emptyReason = unavailableReason ?? (isEnglish ? "Syncing..." : "Синхронизация...");
+  const emptyReason = unavailableReason ?? (isEnglish ? "No quota data" : "Нет данных лимита");
   const countdown = formatRemainingCountdown(resetsAt, now, isEnglish);
   const isAntigravity = platform === "antigravity";
   const resetText = resetsAt
@@ -839,12 +822,12 @@ function LimitMeter({
   return (
     <div
       className={`limit-meter is-${platform} ${isAvailable ? meterTone(usedPercent) : "is-inactive"} ${remaining === 0 ? "is-depleted" : ""}`}
-      title={isAvailable ? (isEnglish ? `Remaining ${remaining?.toFixed(0)}%, used ${usedPercent?.toFixed(0)}%` : `Осталось ${remaining?.toFixed(0)}%, использовано ${usedPercent?.toFixed(0)}%`) : emptyReason}
-      aria-label={isAvailable ? `${label}: ${remaining?.toFixed(0)}%` : `${label}: ${emptyReason}`}
+      title={isAvailable ? (isEnglish ? `Remaining ${formatQuotaRemaining(remaining, language)}, used ${usedPercent?.toFixed(0)}%` : `Осталось ${formatQuotaRemaining(remaining, language)}, использовано ${usedPercent?.toFixed(0)}%`) : emptyReason}
+      aria-label={isAvailable ? `${label}: ${formatQuotaRemaining(remaining, language)}` : `${label}: ${emptyReason}`}
     >
       <div className="limit-line">
         <span className="limit-label-text">{label}</span>
-        <strong className="limit-value-percent">{isAvailable ? `${remaining?.toFixed(0)}%` : emptyReason}</strong>
+        <strong className="limit-value-percent">{isAvailable ? formatQuotaRemaining(remaining, language) : "—"}</strong>
       </div>
       <div className="bar">
         <span style={{ width: `${isAvailable ? (remaining ?? 0) : 0}%` }} />
@@ -852,7 +835,7 @@ function LimitMeter({
       <div className="limit-meter-footer">
         <small
           className="limit-reset-time"
-          title={resetsAt ? (isEnglish ? `Exact reset: ${formatTime(resetsAt)}` : `Точный сброс: ${formatTime(resetsAt)}`) : undefined}
+          title={resetsAt ? (isEnglish ? `Exact reset: ${formatTime(resetsAt, language)}` : `Точный сброс: ${formatTime(resetsAt, language)}`) : undefined}
         >
           {resetText}
         </small>
@@ -870,78 +853,25 @@ function LimitMeter({
   );
 }
 
-function accountLimitDisplay(account: ManagedAccount): {
-  primaryLabel: string;
-  primaryUsedPercent: number | null;
-  primaryResetsAt: number | null;
-  primaryUnavailableReason?: string;
-  secondaryLabel: string;
-  secondaryUsedPercent: number | null;
-  secondaryResetsAt: number | null;
-  secondaryUnavailableReason?: string;
-} {
-  if (accountPlatform(account) === "antigravity") {
-    const pUsed = account.primaryUsedPercent ?? account.fiveHourUsedPercent;
-    const pReset = account.primaryResetsAt ?? account.fiveHourResetsAt;
-    const pDur = account.primaryWindowDurationMins ?? (pUsed !== null ? 300 : null);
-
-    const sUsed = account.secondaryUsedPercent ?? account.weeklyUsedPercent;
-    const sReset = account.secondaryResetsAt ?? account.weeklyResetsAt;
-    const sDur = account.secondaryWindowDurationMins ?? (sUsed !== null ? 10080 : null);
-
-    return {
-      primaryLabel: windowLabel(pDur, "5 часов"),
-      primaryUsedPercent: pUsed,
-      primaryResetsAt: pReset,
-      primaryUnavailableReason: pUsed == null ? "Синхронизация..." : undefined,
-      secondaryLabel: windowLabel(sDur, "неделя"),
-      secondaryUsedPercent: sUsed,
-      secondaryResetsAt: sReset,
-      secondaryUnavailableReason: sUsed == null ? "Нет данных" : undefined
-    };
-  }
-
-  const has5h = account.fiveHourUsedPercent !== null;
-  const hasWeekly = account.weeklyUsedPercent !== null;
-
-  if (!has5h && hasWeekly) {
-    return {
-      primaryLabel: "неделя",
-      primaryUsedPercent: account.weeklyUsedPercent,
-      primaryResetsAt: account.weeklyResetsAt,
-      secondaryLabel: "5 часов",
-      secondaryUsedPercent: null,
-      secondaryResetsAt: null,
-      secondaryUnavailableReason: "Не применимо"
-    };
-  }
-
+function accountLimitDisplay(account: ManagedAccount, language: AppSettings["language"] = "ru") {
+  const windows = profilePresentation(account, nowSeconds(), language).summaryWindows;
   return {
-    primaryLabel: "5 часов",
-    primaryUsedPercent: account.fiveHourUsedPercent,
-    primaryResetsAt: account.fiveHourResetsAt,
-    primaryUnavailableReason: !has5h ? "Синхронизация..." : undefined,
-    secondaryLabel: "неделя",
-    secondaryUsedPercent: account.weeklyUsedPercent,
-    secondaryResetsAt: account.weeklyResetsAt,
-    secondaryUnavailableReason: !hasWeekly ? "Нет данных" : undefined
+    primaryLabel: windows[0]?.title ?? (language === "en" ? "Limit window" : "Окно лимита"),
+    primaryUsedPercent: windows[0]?.usedPercent ?? null,
+    primaryResetsAt: windows[0]?.resetsAt ?? null,
+    secondaryLabel: windows[1]?.title ?? (language === "en" ? "Other window" : "Другое окно"),
+    secondaryUsedPercent: windows[1]?.usedPercent ?? null,
+    secondaryResetsAt: windows[1]?.resetsAt ?? null,
+    primaryUnavailableReason: "—",
+    secondaryUnavailableReason: "—"
   };
 }
 
-function windowLabel(durationMins: number | null, fallback: string): string {
-  if (durationMins === 300) return "5 часов";
-  if (durationMins === 10_080) return "неделя";
-  return fallback;
-}
-
 function antigravityAccessLabel(account: ManagedAccount, language: AppSettings["language"] = "ru"): string {
-  const en = language === "en";
-  if (account.status === "error") return en ? "error" : "ошибка";
-  if (account.status === "limited") return en ? "limited" : "лимит";
-  if (account.antigravity?.lastQuotaRefreshAt || account.primaryUsedPercent != null || account.secondaryUsedPercent != null) return en ? "ready" : "готов";
-  if (account.isActive || account.status === "active" || account.status === "near_limit") return en ? "ready" : "готов";
-  if (account.antigravity?.forbidden) return en ? "ready" : "готов";
-  return en ? "preparing" : "готовится";
+  const view = profilePresentation(account, nowSeconds(), language);
+  if (view.readiness.state === "ready") return language === "en" ? "ready" : "готов";
+  if (view.readiness.state === "needs_reauth") return language === "en" ? "sign-in required" : "нужен вход";
+  return language === "en" ? "needs verification" : "нужна проверка";
 }
 
 function accountPlatform(account: ManagedAccount): "codex" | "antigravity" {
@@ -952,192 +882,20 @@ function platformLabel(account: ManagedAccount): string {
   return accountPlatform(account) === "antigravity" ? "Antigravity" : "Codex";
 }
 
-function platformLogoUrl(platform: "codex" | "antigravity"): string {
-  return platform === "antigravity" ? antigravityLogoUrl : codexLogoUrl;
-}
-
-function PlatformMark({
-  platform,
-  size = "small",
-  label
-}: {
-  platform: "codex" | "antigravity";
-  size?: "small" | "large" | "tile" | "micro";
-  label?: string;
-}) {
-  return (
-    <span className={`platform-mark ${platform} ${size}`} aria-hidden="true" title={label ?? (platform === "antigravity" ? "Antigravity" : "Codex")}>
-      <img src={platformLogoUrl(platform)} alt="" />
-    </span>
-  );
-}
-
 function AccountPlatformMark({ account, size = "small" }: { account: ManagedAccount; size?: "small" | "large" }) {
-  const platform = accountPlatform(account);
-  return <PlatformMark platform={platform} size={size} label={platformLabel(account)} />;
+  return <PlatformMark platform={accountPlatform(account)} size={size} />;
 }
 
-type PlanBadgeTone =
-  | "ag-standard"
-  | "ag-pro"
-  | "ag-ultra"
-  | "ag-ultrax20"
-  | "free"
-  | "go"
-  | "standard"
-  | "plus"
-  | "team"
-  | "pro"
-  | "pro5"
-  | "pro10"
-  | "pro20"
-  | "enterprise"
-  | "unknown";
-
-function planBadgeMeta(
-  planType: ManagedAccount["planType"],
-  platform?: "codex" | "antigravity"
-): { tone: PlanBadgeTone; label: string; title: string } {
-  const raw = String(planType ?? "unknown").trim();
-  const key = raw.toLowerCase().replace(/[\s_-]+/g, "");
-
-  if (!raw || key === "unknown") return { tone: "unknown", label: "Не определён", title: "Тариф не определён" };
-
-  if (platform === "antigravity" || key.startsWith("googleai") || key.startsWith("g1") || key.includes("antigravity")) {
-    if (key === "googleaiultrax20" || key.includes("ultrax20") || (key.includes("ultra") && key.includes("20"))) {
-      return { tone: "ag-ultrax20", label: "Ultra x20", title: "Google AI Ultra x20: подтверждено текущим tier Code Assist" };
-    }
-    if (key === "googleaiultra" || key.includes("ultra")) {
-      return { tone: "ag-ultra", label: "AI Ultra", title: "Google AI Ultra: подтверждено текущим tier Code Assist" };
-    }
-    if (key === "googleaipro" || key === "g1protier" || key.includes("pro")) {
-      return { tone: "ag-pro", label: "AI Pro", title: "Google AI Pro: подтверждено текущим tier Code Assist" };
-    }
-    return { tone: "ag-standard", label: "Standard", title: "Тариф Antigravity Standard (Code Assist)" };
-  }
-
-  if (key === "free") return { tone: "free", label: "Free", title: "Codex Free tier" };
-  if (key === "go") return { tone: "go", label: "Go", title: "Go: начальный платный уровень" };
-  if (key === "plus") return { tone: "plus", label: "Plus", title: "Plus: повышенный персональный уровень" };
-  if (key === "team" || key === "business") return { tone: "team", label: key === "business" ? "Business" : "Team", title: "Командный тариф" };
-  if (key === "enterprise" || key === "edu") return { tone: "enterprise", label: raw, title: "Enterprise/Edu: организационный уровень" };
-  if (key.includes("20") || key === "prox20") return { tone: "pro20", label: "Pro X20", title: "Pro X20: подтверждённый максимальный уровень" };
-  if (key.includes("10") || key === "prox10" || key === "prolite") return { tone: "pro10", label: key === "prolite" ? "Pro Lite" : "Pro X10", title: "Профессиональный уровень" };
-  if (key.includes("5") || key === "prox5") return { tone: "pro5", label: "Pro X5", title: "Pro X5: подтверждённый профессиональный уровень" };
-  if (key === "pro") return { tone: "pro", label: "Pro", title: "Codex Pro: профессиональный тариф" };
-
-  return { tone: "unknown", label: raw, title: `Тариф: ${raw}` };
+function PlanBadge({ planType, language }: { planType: ManagedAccount["planType"]; language: AppSettings["language"] }) {
+  const known: Record<string, string> = { free: "Free", go: "Go", plus: "Plus", pro: "Pro", pro5: "Pro X5", pro10: "Pro X10", pro20: "Pro X20", team: "Team", business: "Business", enterprise: "Enterprise", edu: "Edu", "google-ai-pro": "Google AI Pro", "google-ai-ultra": "Google AI Ultra", "google-ai-ultra-x20": "Google AI Ultra x20", standard: "Standard" };
+  const label = planType === "unknown" ? (language === "en" ? "Plan unknown" : "Тариф неизвестен") : known[planType] ?? planType;
+  return <span className="plan plan-badge" title={`${language === "en" ? "Reported plan" : "Сообщённый тариф"}: ${label}`}><span className="plan-glyph" aria-hidden="true" /><span>{label}</span></span>;
 }
-
-function PlanBadge({
-  planType,
-  platform
-}: {
-  planType: ManagedAccount["planType"];
-  platform?: "codex" | "antigravity";
-}) {
-  const meta = planBadgeMeta(planType, platform);
-  return (
-    <span className={`plan plan-badge plan-${meta.tone}`} title={meta.title}>
-      <span className="plan-glyph" aria-hidden="true" />
-      <span>{meta.label}</span>
-    </span>
-  );
-}
-
-function AccountCompactRow({
-  account,
-  selected,
-  privacyMode,
-  busy,
-  isEnglish,
-  onSelect,
-  onSwitch
-}: {
-  account: ManagedAccount;
-  selected: boolean;
-  privacyMode: boolean;
-  busy: string | null;
-  isEnglish: boolean;
-  onSelect: (id: string) => void;
-  onSwitch: (id: string) => void;
-}) {
-  const now = useNowSeconds(1000);
-  const quota = selectAccountListQuota(account, now);
-  const remaining = quota.remainingPercent;
-  const isAntigravity = (account.platform ?? "codex") === "antigravity";
-  const countdown = formatRemainingCountdown(quota.resetAt, now, isEnglish);
-  const windowName = quota.windowType === "5h"
-    ? (isEnglish ? "5-hour window" : "5-часовой лимит")
-    : quota.windowType === "weekly"
-      ? (isEnglish ? "Weekly limit" : "Недельный лимит")
-      : quota.windowType === "daily"
-        ? (isEnglish ? "Daily limit" : "Дневной лимит")
-        : (isEnglish ? "Current limit" : "Текущий лимит");
-  const resetLabel = quota.resetAt
-    ? quota.resetAt <= now
-      ? (isEnglish ? "Reset reached" : "Сброс наступил")
-      : `${isEnglish ? "Reset" : "Сброс"} ${formatResetTimeShort(quota.resetAt, isEnglish ? "en" : "ru", now)}`
-    : (isEnglish ? "Reset time unavailable" : "Время сброса неизвестно");
-  const tone = remaining === null ? "unknown" : remaining <= 10 ? "danger" : remaining <= 25 ? "warn" : "good";
-  const hasFailure = account.status === "error" || account.credentialState !== "ready" || hasCurrentQuotaRefreshFailure(account);
-  return (
-    <article className={`account-compact-row ${selected ? "is-selected" : ""} ${account.isActive ? "is-active" : ""} ${hasFailure ? "has-error" : "is-healthy"} is-${isAntigravity ? "antigravity" : "codex"}`} role="listitem" onClick={() => onSelect(account.id)}>
-      <div className="account-compact-identity">
-        <AccountPlatformMark account={account} />
-        <div className="account-copy">
-          <div className="name">
-            <span className="account-label" title={account.label}>{account.label}</span>
-            <PlanBadge planType={account.planType} platform={account.platform} />
-          </div>
-          <div className="email" title={privacyMode ? undefined : account.email}>{privacyMode ? maskEmailForPrivacy(account.email) : account.email}</div>
-        </div>
-      </div>
-      <div className={`account-compact-quota ${tone}`} title={remaining === null ? (isEnglish ? "No fresh quota data" : "Нет свежих данных лимита") : `${windowName}: ${remaining.toFixed(0)}%`}>
-        <div>
-          <span>{windowName}</span>
-          <strong>{remaining === null ? "-" : `${remaining.toFixed(0)}%`}</strong>
-        </div>
-        <div className="bar"><span style={{ width: `${remaining ?? 0}%` }} /></div>
-        <div className="compact-quota-timing">
-          <small title={quota.resetAt ? (isEnglish ? `Exact reset: ${formatTime(quota.resetAt)}` : `Точный сброс: ${formatTime(quota.resetAt)}`) : undefined}>
-            {resetLabel}
-          </small>
-          {countdown ? (
-            <span
-              className={`limit-countdown-badge ${isAntigravity ? "is-ag" : "is-codex"}`}
-              title={isEnglish ? `Time until reset: ${countdown}` : `До сброса: ${countdown}`}
-            >
-              <Clock className="countdown-icon" aria-hidden="true" />
-              <span>{countdown}</span>
-            </span>
-          ) : null}
-        </div>
-      </div>
-      <div className="account-compact-state">
-        <CredentialStateChip account={account} />
-        <QuotaFreshnessChip account={account} />
-      </div>
-      <button
-        className={`profile-switch-action account-compact-switch ${account.isActive ? "is-active" : ""}`}
-        disabled={busy !== null || account.isActive || account.credentialState !== "ready"}
-        onClick={(event) => {
-          event.stopPropagation();
-          onSwitch(account.id);
-        }}
-        title={account.credentialState !== "ready" ? (isEnglish ? "Sign-in required before switching" : "Перед переключением требуется вход") : (isEnglish ? "Make active" : "Сделать активным")}
-      >
-        {busy === `switch:${account.id}` ? <Loader2 className="spin" /> : account.isActive ? <CheckCircle2 /> : <Zap />}
-        <span>{account.isActive ? (isEnglish ? "Active" : "Активен") : (isEnglish ? "Switch" : "Переключить")}</span>
-      </button>
-    </article>
-  );
-}
-
 function AccountCard({
   account,
   selected,
   privacyMode,
+  language,
   busy,
   onRefresh,
   onSwitch,
@@ -1149,42 +907,41 @@ function AccountCard({
   account: ManagedAccount;
   selected: boolean;
   privacyMode: boolean;
+  language: AppSettings["language"];
   busy: string | null;
   onRefresh: (id: string) => void;
   onSwitch: (id: string) => void;
   onReauth: (id: string) => void;
   onRepair: (id: string) => void;
   onSelect: (id: string) => void;
-  onInspect: (id: string, trigger: HTMLButtonElement) => void;
+  onInspect: (id: string, trigger: HTMLElement) => void;
 }) {
+  const isEnglish = language === "en";
+  const view = profilePresentation(account, useVisibleClock(), language);
   const isAntigravity = accountPlatform(account) === "antigravity";
   const hasFailure = account.status === "error" || account.credentialState !== "ready" || hasCurrentQuotaRefreshFailure(account);
   const needsRepair = hasCurrentQuotaRefreshFailure(account) || account.credentialState !== "ready";
-  const limits = accountLimitDisplay(account);
+  const limits = accountLimitDisplay(account, language);
   return (
     <article
       className={`profile-card ${selected ? "is-selected" : ""} ${account.isActive ? "is-active" : ""} ${hasFailure ? "has-error" : "is-healthy"} is-${isAntigravity ? "antigravity" : "codex"}`}
-      tabIndex={0}
-      aria-label={`${account.label}, ${account.planType ?? "ChatGPT"}${account.isActive ? ", активный профиль" : ""}`}
-      onClick={() => onSelect(account.id)}
-      onKeyDown={(event) => {
-        if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
-        event.preventDefault();
-        onSelect(account.id);
-      }}
+      tabIndex={selected ? 0 : -1}
+      aria-label={displayMetadata(account.label, privacyMode, language)}
+      onClick={(event) => { if (!(event.target as HTMLElement).closest("button")) onSelect(account.id); }}
+      onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === "Enter") { event.preventDefault(); onInspect(account.id, event.currentTarget); } }}
     >
       <div className="profile-card-head">
         <div className="account-cell">
           <AccountPlatformMark account={account} />
           <div className="account-copy">
             <div className="name">
-              <span className="account-label" title={account.label}>{account.label}</span>
+              <span className="account-label" title={privacyMode ? undefined : account.label}>{displayMetadata(account.label, privacyMode, language)}</span>
               {account.favorite ? <Star className="inline-mark" /> : null}
-              {account.archived ? <span className="badge compact">архив</span> : null}
+              {account.archived ? <span className="badge compact">{isEnglish ? "Archived" : "Архив"}</span> : null}
               {account.isActive ? (
-                <span className="status-pill-clean is-live account-card-live-pill" title={isAntigravity ? "Активен в Antigravity IDE" : "Активен в Codex CLI"}>
+                <span className="status-pill-clean is-live account-card-live-pill" title={runtimeLabel(account.runtimeVerification, language)}>
                   <span className="status-dot" />
-                  <span>Активен</span>
+                  <span>{isEnglish ? "Selected" : "Выбран"}</span>
                 </span>
               ) : null}
             </div>
@@ -1192,8 +949,8 @@ function AccountCard({
           </div>
         </div>
         <div className="profile-card-status">
-          <PlanBadge planType={account.planType} platform={account.platform} />
-          <CredentialStateChip account={account} />
+          <PlanBadge planType={account.planType} language={language} />
+          <CredentialStateChip account={account} language={language} />
         </div>
       </div>
       <div className="profile-card-body">
@@ -1203,6 +960,7 @@ function AccountCard({
           resetsAt={limits.primaryResetsAt}
           unavailableReason={limits.primaryUnavailableReason}
           platform={account.platform}
+          language={language}
         />
         <LimitMeter
           label={limits.secondaryLabel}
@@ -1210,31 +968,32 @@ function AccountCard({
           resetsAt={limits.secondaryResetsAt}
           unavailableReason={limits.secondaryUnavailableReason}
           platform={account.platform}
+          language={language}
         />
       </div>
       <div className="profile-card-foot">
-        <QuotaFreshnessChip account={account} />
-        <span className="profile-refresh-age">{relativeRefresh(account)}</span>
+        <QuotaFreshnessChip account={account} language={language} />
+        <span className="profile-refresh-age">{view.ageLabel}</span>
       </div>
       <div className={`row-actions card-actions ${needsRepair ? "needs-repair" : ""}`} onClick={(event) => event.stopPropagation()}>
-        <button className="icon-btn" aria-label={isAntigravity ? "Обновить лимиты Antigravity" : "Обновить лимиты"} disabled={busy !== null} onClick={() => onRefresh(account.id)} title={isAntigravity ? "Обновить лимиты Antigravity" : "Обновить лимиты"}>
+        <button className="icon-btn" aria-label={isEnglish ? "Refresh limits" : "Обновить лимиты"} disabled={busy !== null} onClick={() => onRefresh(account.id)} title={isEnglish ? "Refresh limits" : "Обновить лимиты"}>
           {busy === `refresh:${account.id}` ? <Loader2 className="spin" /> : <RefreshCcw />}
         </button>
         <button
           className={`icon-btn ${needsRepair ? "repair-action" : ""}`}
-          aria-label={needsRepair ? "Диагностировать и восстановить аккаунт" : isAntigravity ? "Открыть авторизацию Antigravity" : "Повторно авторизовать профиль"}
+          aria-label={needsRepair ? (isEnglish ? "Repair profile" : "Восстановить профиль") : (isEnglish ? "Authorize again" : "Авторизовать заново")}
           disabled={busy !== null}
           onClick={() => needsRepair ? onRepair(account.id) : onReauth(account.id)}
-          title={needsRepair ? "Проверить вход, обновить лимиты и при необходимости восстановить авторизацию" : isAntigravity ? "Открыть авторизацию Antigravity" : "Повторно авторизовать профиль"}
+          title={needsRepair ? (isEnglish ? "Check sign-in and refresh limits" : "Проверить вход и обновить лимиты") : (isEnglish ? "Authorize again" : "Авторизовать заново")}
         >
           {busy === `repair:${account.id}` || busy === `reauth:${account.id}` ? <Loader2 className="spin" /> : <KeyRound />}
         </button>
-        <button className="icon-btn" aria-label="Подробнее о профиле" disabled={busy !== null} onClick={(event) => onInspect(account.id, event.currentTarget)} title="Подробнее о профиле">
+        <button className="icon-btn" aria-label={isEnglish ? "Profile details" : "Подробнее о профиле"} disabled={busy !== null} onClick={(event) => onInspect(account.id, event.currentTarget)} title={isEnglish ? "Profile details" : "Подробнее о профиле"}>
           <MoreHorizontal />
         </button>
-        <button className={`profile-switch-action ${account.isActive ? "is-active" : ""}`} disabled={busy !== null || account.isActive} onClick={() => onSwitch(account.id)} title={account.isActive ? "Активный профиль" : "Сделать активным"}>
+        <button className={`profile-switch-action ${account.isActive ? "is-active" : ""}`} disabled={busy !== null || (account.isActive && account.runtimeVerification?.runtime === "verified") || !view.readiness.canSwitchManually} onClick={() => onSwitch(account.id)} title={account.isActive ? (isEnglish ? "Selected profile" : "Выбранный профиль") : (isEnglish ? "Switch profile" : "Переключить профиль")}>
           {busy === `switch:${account.id}` ? <Loader2 className="spin" /> : account.isActive ? <CheckCircle2 /> : <Zap />}
-          <span>{account.isActive ? "Активен" : "Переключить"}</span>
+          <span>{account.isActive ? account.runtimeVerification?.runtime === "verified" ? (isEnglish ? "Selected" : "Выбран") : (isEnglish ? "Reapply" : "Применить снова") : (isEnglish ? "Switch" : "Переключить")}</span>
         </button>
       </div>
     </article>
@@ -1254,7 +1013,7 @@ function AccountInspector({
   onOpenFolder,
   onMetadata,
   onDelete,
-  onRegenerateFingerprint
+  onVerifyRuntime
 }: {
   account: ManagedAccount | null;
   privacyMode: boolean;
@@ -1268,10 +1027,11 @@ function AccountInspector({
   onOpenFolder: (id: string) => void;
   onMetadata: (id: string, input: { tags?: string[]; favorite?: boolean; archived?: boolean }) => void;
   onDelete: (id: string) => void;
-  onRegenerateFingerprint?: (id: string) => void;
+  onVerifyRuntime: (id: string) => void;
 }) {
   const isEnglish = language === "en";
   const text = getUiText(language);
+  const now = useVisibleClock();
   if (!account) {
     return (
       <aside className="inspector empty-inspector">
@@ -1282,13 +1042,12 @@ function AccountInspector({
     );
   }
   const isAntigravity = accountPlatform(account) === "antigravity";
-  const limits = accountLimitDisplay(account);
-  const switchDisabled = busy !== null || account.isActive;
+  const view = profilePresentation(account, now, language);
+  const switchDisabled = busy !== null || (account.isActive && account.runtimeVerification?.runtime === "verified") || !view.readiness.canSwitchManually;
   const tags = account.tags ?? [];
   const visibleTags = tags.slice(0, 2);
   const hiddenTagCount = Math.max(0, tags.length - visibleTags.length);
-  const antigravityProject = account.antigravity?.googleProjectId ?? (isEnglish ? "no project" : "нет проекта");
-  const antigravityFingerprint = account.antigravity?.fingerprintId ?? (isEnglish ? "not linked" : "не привязан");
+  const antigravityProject = privacyMode ? (isEnglish ? "Project hidden" : "Проект скрыт") : account.antigravity?.googleProjectId ?? (isEnglish ? "no project" : "нет проекта");
   const currentQuotaFailure = hasCurrentQuotaRefreshFailure(account);
 
   return (
@@ -1297,55 +1056,56 @@ function AccountInspector({
         <div className="inspector-identity">
           <AccountPlatformMark account={account} size="large" />
           <div>
-            <strong>{account.label}</strong>
+            <strong>{displayMetadata(account.label, privacyMode, language)}</strong>
             <span>{privacyMode ? maskEmailForPrivacy(account.email) : account.email}</span>
           </div>
         </div>
         <div className="inspector-meta-chips inspector-meta-line">
-          <PlanBadge planType={account.planType} platform={account.platform} />
-          <CredentialStateChip account={account} />
-          <QuotaFreshnessChip account={account} />
-          <span className="inspector-refresh-age">{relativeRefresh(account)}</span>
+          <PlanBadge planType={account.planType} language={language} />
+          <CredentialStateChip account={account} language={language} />
+          <QuotaFreshnessChip account={account} language={language} />
+          <span className="inspector-refresh-age">{view.ageLabel}</span>
         </div>
+      </div>
+      <div className="inspector-command">
+        <button
+          className="button"
+          aria-label={isEnglish ? "Activate account" : "Активировать аккаунт"}
+          disabled={switchDisabled}
+          onClick={() => onSwitch(account.id)}
+          title={isAntigravity ? (isEnglish ? "Apply profile and restart Antigravity" : "Применить профиль и перезапустить Antigravity") : undefined}
+        >
+          <ArrowRightLeft />
+          {account.isActive ? account.runtimeVerification?.runtime === "verified" ? (isEnglish ? "Selected" : "Выбран") : (isEnglish ? "Reapply profile" : "Применить снова") : (isEnglish ? "Switch profile" : "Переключить профиль")}
+        </button>
+        <button className="button secondary" disabled={busy !== null} aria-busy={busy === `refresh:${account.id}`} onClick={() => onRefresh(account.id)}>
+          {busy === `refresh:${account.id}` ? <Loader2 className="spin" /> : <RefreshCcw />}
+          {isEnglish ? "Refresh limits" : "Обновить лимиты"}
+        </button>
       </div>
       <div className="inspector-tag-section">
         <div className="metadata-strip">
-          <button className={`meta-toggle ${account.favorite ? "is-on" : ""}`} disabled={busy !== null} onClick={() => onMetadata(account.id, { favorite: !account.favorite })}>
+          <button className={`meta-toggle ${account.favorite ? "is-on" : ""}`} aria-pressed={Boolean(account.favorite)} disabled={busy !== null} onClick={() => onMetadata(account.id, { favorite: !account.favorite })}>
             <Star />
             {isEnglish ? "Favorite" : "Избранное"}
           </button>
-          <button className={`meta-toggle ${account.archived ? "is-on" : ""}`} disabled={busy !== null} onClick={() => onMetadata(account.id, { archived: !account.archived })}>
+          <button className={`meta-toggle ${account.archived ? "is-on" : ""}`} aria-pressed={Boolean(account.archived)} disabled={busy !== null} onClick={() => onMetadata(account.id, { archived: !account.archived })}>
             <Archive />
             {isEnglish ? "Archive" : "Архив"}
           </button>
           {visibleTags.length > 0 ? (
             <div className="tag-row compact-tag-row">
-              {visibleTags.map((tag) => <span key={tag}><Tag />{tag}</span>)}
+              {visibleTags.map((tag) => <span key={tag}><Tag />{displayMetadata(tag, privacyMode, language)}</span>)}
               {hiddenTagCount > 0 ? <span className="tag-more">+{hiddenTagCount}</span> : null}
             </div>
           ) : null}
         </div>
       </div>
       <div className="inspector-limit-grid">
-        <LimitMeter
-          label={limits.primaryLabel}
-          usedPercent={limits.primaryUsedPercent}
-          resetsAt={limits.primaryResetsAt}
-          unavailableReason={limits.primaryUnavailableReason}
-          platform={account.platform}
-          language={language}
-        />
-        <LimitMeter
-          label={limits.secondaryLabel}
-          usedPercent={limits.secondaryUsedPercent}
-          resetsAt={limits.secondaryResetsAt}
-          unavailableReason={limits.secondaryUnavailableReason}
-          platform={account.platform}
-          language={language}
-        />
+        {view.windows.length ? view.windows.map((window) => <div className="inspector-quota-window" key={window.id}><LimitMeter label={window.title} usedPercent={window.usedPercent} resetsAt={window.resetsAt} platform={account.platform} language={language} /><small>{displayMetadata([window.label, window.modelId, window.scope].filter(Boolean).join(" · "), privacyMode, language)}</small></div>) : <LimitMeter label={isEnglish ? "Quota not observed" : "Лимит не наблюдался"} usedPercent={null} resetsAt={null} language={language} />}
       </div>
       {currentQuotaFailure ? (
-        <div className="quota-refresh-warning" title={account.lastRefreshError ?? undefined}>
+        <div className="quota-refresh-warning" title={privacyMode ? undefined : account.lastRefreshError ?? undefined}>
           <AlertTriangle />
           <span><strong>{isEnglish ? "Latest refresh failed" : "Последнее обновление не удалось"}</strong>{isEnglish ? "The last correct quota snapshot is preserved." : "Последний корректный снимок лимитов сохранён."}</span>
           <button className="repair-inline" disabled={busy !== null} onClick={() => onRepair(account.id)}>
@@ -1356,54 +1116,27 @@ function AccountInspector({
       ) : null}
       {accountPlatform(account) === "antigravity" ? (
         <div className="antigravity-compact-details" aria-label={isEnglish ? "Antigravity diagnostics" : "Диагностика Antigravity"}>
-          <span title={antigravityProject}><strong>Project</strong>{antigravityProject}</span>
-          <span title={antigravityFingerprint}><strong>FP</strong>{antigravityFingerprint}</span>
+          <span title={antigravityProject}><strong>{isEnglish ? "Project" : "Проект"}</strong>{antigravityProject}</span>
           <span><strong>IDE</strong>{account.antigravity?.ideStateDetected ? (isEnglish ? "found" : "найден") : (isEnglish ? "missing" : "не найден")}</span>
           <span><strong>{isEnglish ? "Access" : "Доступ"}</strong>{antigravityAccessLabel(account, language)}</span>
         </div>
       ) : null}
+      <RuntimeEvidence evidence={account.runtimeVerification} privacyMode={privacyMode} language={language} selected={account.isActive} busy={busy !== null} onVerify={() => onVerifyRuntime(account.id)} />
       <div className="inspector-path" title={privacyMode ? (isEnglish ? "Path hidden" : "Путь скрыт") : account.profileDir}>
         <Database />
-        <span>{privacyMode ? maskPathForPrivacy(account.profileDir) : account.profileDir}</span>
+        <span>{privacyMode ? (isEnglish ? "Path hidden" : "Путь скрыт") : account.profileDir}</span>
       </div>
       <section className="inspector-management" aria-label={isEnglish ? "Profile management" : "Управление профилем"}>
         <div className="inspector-management-head">
           <strong>{isEnglish ? "Profile management" : "Управление профилем"}</strong>
-          <span>{isEnglish ? "All actions are available here" : "Все действия доступны сразу"}</span>
         </div>
         <div className="inspector-action-grid">
-        <button
-          className="button"
-          aria-label={isEnglish ? "Activate account" : "Активировать аккаунт"}
-          disabled={switchDisabled}
-          onClick={() => onSwitch(account.id)}
-          title={isAntigravity ? (isEnglish ? "Apply through Antigravity Credential Manager and restart Antigravity" : "Применить аккаунт через Antigravity Credential Manager и перезапустить Antigravity") : (isEnglish ? "Activate account" : "Активировать аккаунт")}
-        >
-          <Zap />
-          <span className="action-label">{isEnglish ? "Activate" : "Активировать"}</span>
-        </button>
-        <button className="button secondary" aria-label={isEnglish ? "Refresh limits" : "Обновить лимиты"} disabled={busy !== null} onClick={() => onRefresh(account.id)} title={isAntigravity ? (isEnglish ? "Refresh Antigravity limits" : "Обновить лимиты Antigravity") : (isEnglish ? "Refresh limits" : "Обновить лимиты")}>
-          <RefreshCcw />
-          <span className="action-label">{isEnglish ? "Refresh" : "Обновить"}</span>
-        </button>
         <button className="button secondary" aria-label={isEnglish ? "Check sign-in" : "Проверить вход"} disabled={busy !== null} onClick={() => onValidateAuth(account.id)}>
           {busy === `auth:${account.id}` ? <Loader2 className="spin" /> : <ShieldCheck />}
           <span className="action-label">{isEnglish ? "Check" : "Проверить вход"}</span>
         </button>
         <button className="button secondary" aria-label={isEnglish ? "Authorize" : "Авторизация"} disabled={busy !== null} onClick={() => onReauth(account.id)}><KeyRound />{isEnglish ? "Authorize again" : "Авторизовать заново"}</button>
         <button className="button secondary" aria-label={isEnglish ? "Open folder" : "Открыть папку"} disabled={busy !== null} onClick={() => onOpenFolder(account.id)}><FolderOpen />{isEnglish ? "Open profile folder" : "Открыть папку профиля"}</button>
-        {isAntigravity && onRegenerateFingerprint ? (
-          <button
-            className="button secondary"
-            aria-label={isEnglish ? "Regenerate device fingerprint" : "Обновить отпечаток оборудования"}
-            disabled={busy !== null}
-            onClick={() => onRegenerateFingerprint(account.id)}
-            title={isEnglish ? "Generate a new isolated hardware fingerprint for this profile" : "Сгенерировать новый изолированный отпечаток оборудования для этого профиля"}
-          >
-            {busy === `fp:${account.id}` ? <Loader2 className="spin" /> : <Fingerprint />}
-            <span className="action-label">{isEnglish ? "New Fingerprint" : "Новый отпечаток"}</span>
-          </button>
-        ) : null}
         <button className="button danger-action" aria-label={isEnglish ? "Delete profile" : "Удалить профиль"} disabled={busy !== null || account.isActive} onClick={() => onDelete(account.id)} title={account.isActive ? (isEnglish ? "Activate another profile first" : "Сначала переключись на другой аккаунт") : undefined}><Trash2 />{isEnglish ? "Delete profile" : "Удалить профиль"}</button>
         </div>
       </section>
@@ -1415,15 +1148,6 @@ type TransferMode = "export" | "import";
 type ViewKey = AppViewKey;
 type NavItem = { key: ViewKey; label: string; description: string; icon: LucideIcon };
 type PlatformFilter = "all" | "codex" | "antigravity";
-type AntigravityExternalImportSource = Exclude<AntigravityCredentialImportSource, "token_json" | "local_files">;
-type LoginWizardState = {
-  open: boolean;
-  phase: "method" | "starting" | "waiting" | "done" | "error";
-  type: CodexLoginRequest["type"] | null;
-  result: LoginStartResult | null;
-  error: string | null;
-};
-
 const ANTIGRAVITY_CLI_DOCS_URL = "https://www.antigravity.google/docs/cli-getting-started";
 
 const antigravityOAuthStepMessage: Record<string, string> = {
@@ -1448,273 +1172,21 @@ type ConfirmState = {
   details?: string[];
 };
 
-function passwordStrength(value: string): { label: string; className: string } {
+function passwordStrength(value: string, language: AppSettings["language"]): { label: string; className: string } {
   const score = Number(value.length >= 8) + Number(value.length >= 14) + Number(/\p{Lu}/u.test(value)) + Number(/\d/.test(value)) + Number(/[^\p{L}\d]/u.test(value));
-  if (!value) return { label: "Введите пароль", className: "idle" };
-  if (score <= 2) return { label: "Слабый пароль", className: "weak" };
-  if (score <= 4) return { label: "Нормальный пароль", className: "medium" };
-  return { label: "Сильный пароль", className: "strong" };
-}
-
-function useModalEscape(open: boolean, label: string, onClose: () => void): void {
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
-      if (dialogs.item(dialogs.length - 1)?.getAttribute("aria-label") !== label) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      onClose();
-    };
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [open, label, onClose]);
-}
-function AddAccountWizard({
-  state,
-  busy,
-  capabilities,
-  onStart,
-  onOpen,
-  onCopyDeviceCode,
-  onOpenDeviceLogin,
-  onImportCurrentSession,
-  onClose
-}: {
-  state: LoginWizardState;
-  busy: string | null;
-  capabilities: AppDiagnostics["codexCapabilities"] | null | undefined;
-  onStart: (input: CodexLoginRequest) => void;
-  onOpen: (url: string) => void;
-  onCopyDeviceCode: (userCode: string) => Promise<unknown>;
-  onOpenDeviceLogin: (url: string, userCode: string) => Promise<unknown>;
-  onImportCurrentSession?: () => void;
-  onClose: () => void;
-}) {
-  const [credentialType, setCredentialType] = useState<"apiKey" | "enterpriseAccessToken" | null>(null);
-  const [credential, setCredential] = useState("");
-  const [showCredential, setShowCredential] = useState(false);
-  const [deviceCodeAction, setDeviceCodeAction] = useState<"idle" | "copying" | "copied" | "opening" | "opened" | "error">("idle");
-  useEffect(() => {
-    if (state.open) return;
-    setCredential("");
-    setCredentialType(null);
-    setShowCredential(false);
-    setDeviceCodeAction("idle");
-  }, [state.open]);
-  useEffect(() => {
-    if (state.phase !== "waiting" || !state.result?.userCode) return;
-    setDeviceCodeAction(
-      state.result.loginPageOpened && state.result.deviceCodeCopied
-        ? "opened"
-        : state.result.deviceCodeCopied
-          ? "copied"
-          : state.result.loginPageOpened
-            ? "error"
-            : "idle"
-    );
-  }, [state.phase, state.result?.userCode, state.result?.deviceCodeCopied, state.result?.loginPageOpened]);
-  useModalEscape(state.open, "Добавление аккаунта", onClose);
-  if (!state.open) return null;
-  const url = state.result?.authUrl ?? state.result?.verificationUrl ?? "";
-  const methodAvailable = (id: CodexLoginMethodId) =>
-    capabilities?.loginMethods.find((method) => method.id === id)?.available !== false;
-  const submitCredential = () => {
-    if (!credentialType || !credential.trim()) return;
-    onStart({ type: credentialType, credential: credential.trim() });
-    setCredential("");
-    setShowCredential(false);
-  };
-  const copyDeviceCode = async () => {
-    const userCode = state.result?.userCode;
-    if (!userCode) return;
-    setDeviceCodeAction("copying");
-    try {
-      await onCopyDeviceCode(userCode);
-      setDeviceCodeAction("copied");
-    } catch {
-      setDeviceCodeAction("error");
-    }
-  };
-  const openLoginPage = async () => {
-    if (!url) return;
-    const userCode = state.result?.userCode;
-    if (!userCode) {
-      onOpen(url);
-      return;
-    }
-    setDeviceCodeAction("opening");
-    try {
-      await onOpenDeviceLogin(url, userCode);
-      setDeviceCodeAction("opened");
-    } catch {
-      setDeviceCodeAction("error");
-    }
-  };
-  return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Добавление аккаунта">
-      <div className="workflow-modal">
-        <div className="modal-head">
-          <div>
-            <div className="panel-title">Добавление аккаунта</div>
-            <p className="muted">Авторизация проходит через локальный Codex app-server. Токены остаются на этом ПК.</p>
-          </div>
-          <button className="window-btn" onClick={onClose} title="Закрыть">
-            <X />
-          </button>
-        </div>
-
-        {state.phase === "method" ? (
-          <div className="codex-onboarding-layout">
-            <section className="codex-official-login-intro" aria-label="Официальная авторизация Codex">
-              <div className="codex-section-heading">
-                <span>ОФИЦИАЛЬНАЯ АВТОРИЗАЦИЯ</span>
-                <strong>Выберите подходящий способ входа</strong>
-              </div>
-              <p>Каждый профиль создаётся в отдельном локальном <code>CODEX_HOME</code>, проверяется официальным app-server и сохраняется в зашифрованном Windows vault.</p>
-            </section>
-            <div className="choice-grid codex-login-choice-grid">
-            {onImportCurrentSession ? (
-              <button
-                className="choice-card"
-                disabled={busy !== null}
-                onClick={onImportCurrentSession}
-                style={{
-                  gridColumn: "1 / -1",
-                  borderColor: "rgba(99, 220, 165, 0.4)",
-                  background: "linear-gradient(135deg, rgba(48, 157, 111, 0.16), rgba(255, 255, 255, 0.02))"
-                }}
-              >
-                <Zap style={{ color: "#5ed9a1" }} />
-                <strong>Подхватить текущую сессию с ПК</strong>
-                <span>Быстрый импорт уже авторизованной сессии из ~/.codex/auth.json без повторного входа.</span>
-              </button>
-            ) : null}
-            <button className="choice-card" disabled={busy !== null || !methodAvailable("chatgptDeviceCode")} onClick={() => onStart({ type: "chatgptDeviceCode" })}>
-              <KeyRound />
-              <strong>Код устройства</strong>
-              <span>Надёжный вариант, если браузерный callback недоступен.</span>
-            </button>
-            <button className="choice-card" disabled={busy !== null || !methodAvailable("chatgpt")} onClick={() => onStart({ type: "chatgpt" })}>
-              <LogIn />
-              <strong>Браузерный вход</strong>
-              <span>Откроет ChatGPT и вернёт профиль после подтверждения.</span>
-            </button>
-            <button className="choice-card" disabled={busy !== null || !methodAvailable("apiKey")} onClick={() => setCredentialType("apiKey")}>
-              <KeyRound />
-              <strong>OpenAI API key</strong>
-              <span>Ключ передаётся локальному Codex app-server и сразу удаляется из формы.</span>
-            </button>
-            <button className="choice-card" disabled={busy !== null || !methodAvailable("enterpriseAccessToken")} onClick={() => setCredentialType("enterpriseAccessToken")}>
-              <ShieldCheck />
-              <strong>Enterprise access token</strong>
-              <span>Официальный CLI-вход через stdin, без токена в аргументах процесса и логах.</span>
-            </button>
-            {credentialType ? (
-              <div className="credential-login-form">
-                <label htmlFor="codex-credential">
-                  {credentialType === "apiKey" ? "OpenAI API key" : "Enterprise access token"}
-                </label>
-                <div className="credential-input-row">
-                  <input
-                    id="codex-credential"
-                    type={showCredential ? "text" : "password"}
-                    autoComplete="off"
-                    spellCheck={false}
-                    value={credential}
-                    onChange={(event) => setCredential(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") submitCredential();
-                    }}
-                    placeholder={credentialType === "apiKey" ? "sk-…" : "eyJ…"}
-                  />
-                  <button className="button secondary" type="button" onClick={() => setShowCredential((value) => !value)}>
-                    {showCredential ? "Скрыть" : "Показать"}
-                  </button>
-                  <button className="button" type="button" disabled={!credential.trim() || busy !== null} onClick={submitCredential}>
-                    Войти
-                  </button>
-                </div>
-                <small>Секрет существует только в памяти формы до отправки в локальный main process.</small>
-              </div>
-            ) : null}
-            </div>
-          </div>
-        ) : null}
-
-        {state.phase === "starting" ? (
-          <div className="workflow-state">
-            <Loader2 className="spin" />
-            <strong>Запускаю авторизацию</strong>
-            <span>Поднимаю Codex RPC и готовлю отдельный локальный профиль.</span>
-          </div>
-        ) : null}
-
-        {state.phase === "waiting" && state.result ? (
-          <div className="workflow-state">
-            <CheckCircle2 />
-            <strong>{state.type === "chatgptDeviceCode" ? "Введите код устройства" : "Завершите вход в браузере"}</strong>
-            {state.result.userCode ? (
-              <div className="device-code-panel">
-                <div className="device-code-caption"><span>Одноразовый код</span><small>действует 15 минут</small></div>
-                <code>{state.result.userCode}</code>
-                <button className="device-code-copy" type="button" disabled={deviceCodeAction === "copying"} onClick={() => void copyDeviceCode()} title="Скопировать код устройства">
-                  {deviceCodeAction === "copying" ? <Loader2 className="spin" /> : deviceCodeAction === "copied" || deviceCodeAction === "opened" ? <CheckCircle2 /> : <Copy />}
-                  <span>{deviceCodeAction === "copied" || deviceCodeAction === "opened" ? "Скопировано" : "Копировать"}</span>
-                </button>
-              </div>
-            ) : null}
-            <span className={`device-code-guidance ${deviceCodeAction === "error" ? "is-error" : ""}`} role="status">
-              {state.result.userCode
-                ? deviceCodeAction === "error"
-                  ? "Не удалось передать код. Нажмите «Копировать» и откройте страницу ещё раз."
-                  : "Код уже в буфере. После выбора аккаунта вставьте его в поле сочетанием Ctrl+V."
-                : "После подтверждения приложение само сохранит профиль и обновит список."}
-            </span>
-            {url ? (
-              <button className="button device-login-open" disabled={deviceCodeAction === "opening"} onClick={() => void openLoginPage()}>
-                {deviceCodeAction === "opening" ? <Loader2 className="spin" /> : <ExternalLink />}
-                {state.result.userCode ? "Открыть и подготовить код" : "Открыть страницу входа"}
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-
-        {state.phase === "done" ? (
-          <div className="workflow-state success">
-            <CheckCircle2 />
-            <strong>Аккаунт добавлен</strong>
-            <span>Профиль сохранён локально. Можно обновить лимиты или переключиться на него.</span>
-            <button className="button" onClick={onClose}>Готово</button>
-          </div>
-        ) : null}
-
-        {state.phase === "error" ? (
-          <div className="workflow-state danger">
-            <AlertTriangle />
-            <strong>Не удалось добавить аккаунт</strong>
-            <span>{state.error ?? "Подробности доступны в журнале диагностики."}</span>
-            <div style={{ display: "flex", gap: "8px", justifyContent: "center", marginTop: "12px", flexWrap: "wrap" }}>
-              {onImportCurrentSession ? (
-                <button className="button" onClick={onImportCurrentSession}>
-                  Подхватить сессию с этого ПК
-                </button>
-              ) : null}
-              <button className="button secondary" onClick={() => onStart({ type: "chatgptDeviceCode" })}>Повторить через код</button>
-            </div>
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
+  if (!value) return { label: language === "en" ? "Enter a password" : "Введите пароль", className: "idle" };
+  if (score <= 2) return { label: language === "en" ? "Weak password" : "Слабый пароль", className: "weak" };
+  if (score <= 4) return { label: language === "en" ? "Moderate password" : "Нормальный пароль", className: "medium" };
+  return { label: language === "en" ? "Strong password" : "Сильный пароль", className: "strong" };
 }
 
 function ConfirmDialog({
   state,
+  language,
   onClose
 }: {
   state: ConfirmState | null;
+  language: AppSettings["language"];
   onClose: (confirmed: boolean) => void;
 }) {
   if (!state) return null;
@@ -1726,7 +1198,7 @@ function ConfirmDialog({
             <div className="panel-title">{state.title}</div>
             <p className="muted">{state.body}</p>
           </div>
-          <button className="window-btn" onClick={() => onClose(false)} title="Закрыть">
+          <button className="window-btn" onClick={() => onClose(false)} aria-label={language === "en" ? "Close" : "Закрыть"}>
             <X />
           </button>
         </div>
@@ -1736,7 +1208,7 @@ function ConfirmDialog({
           </div>
         ) : null}
         <div className="modal-actions">
-          <button className="button secondary" onClick={() => onClose(false)}>Отмена</button>
+          <button className="button secondary" onClick={() => onClose(false)}>{language === "en" ? "Cancel" : "Отмена"}</button>
           <button className={`button ${state.tone === "danger" ? "danger-action" : ""}`} onClick={() => onClose(true)}>{state.confirmLabel}</button>
         </div>
       </div>
@@ -1744,265 +1216,8 @@ function ConfirmDialog({
   );
 }
 
-function CommandPalette({
-  open,
-  query,
-  commands,
-  busy,
-  onQuery,
-  onClose,
-  onRun
-}: {
-  open: boolean;
-  query: string;
-  commands: CommandPaletteCommand[];
-  busy: string | null;
-  onQuery: (value: string) => void;
-  onClose: () => void;
-  onRun: (command: CommandPaletteCommand) => void;
-}) {
-  if (!open) return null;
-  const visible = filterCommandPalette(commands, query).slice(0, 18);
-  const groups = Array.from(new Set(visible.map((command) => command.group)));
-
-  return (
-    <div className="modal-backdrop command-backdrop" role="dialog" aria-modal="true" aria-label="Командный центр">
-      <div className="command-palette">
-        <div className="command-search">
-          <Command />
-          <input
-            autoFocus
-            value={query}
-            onChange={(event) => onQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") onClose();
-              if (event.key === "Enter") {
-                const first = visible.find((command) => !command.disabled);
-                if (first) onRun(first);
-              }
-            }}
-            placeholder="Найти команду, аккаунт или действие"
-            aria-label="Поиск команды"
-          />
-          <kbd>Esc</kbd>
-        </div>
-        <div className="command-list">
-          {visible.length === 0 ? <div className="empty compact-empty">Команд не найдено.</div> : null}
-          {groups.map((group) => (
-            <section key={group} className="command-group">
-              <span>{group}</span>
-              {visible.filter((command) => command.group === group).map((command) => (
-                <button
-                  key={command.id}
-                  className="command-row"
-                  disabled={busy !== null || command.disabled}
-                  onClick={() => onRun(command)}
-                >
-                  <strong>{command.title}</strong>
-                  <small>{command.subtitle}</small>
-                </button>
-              ))}
-            </section>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function AntigravityImportModal({
-  busy,
-  profileStatus,
-  oauthSession,
-  callbackUrl,
-  onCallbackUrl,
-  tokenPayload,
-  onTokenPayload,
-  result,
-  displayEmail,
-  onClose,
-  onStartOAuth,
-  onFinishOAuth,
-  onImportToken,
-  onImportFiles,
-  onImportSource,
-  onImportLocalProfile,
-  onInspect,
-  onOpenDocs,
-  onImportCurrentSession
-}: {
-  busy: string | null;
-  profileStatus: AntigravityProfileStatus | null;
-  oauthSession: AntigravityOAuthStartResult | null;
-  callbackUrl: string;
-  onCallbackUrl: (value: string) => void;
-  tokenPayload: string;
-  onTokenPayload: (value: string) => void;
-  result: AntigravityCredentialBatchImportResult | null;
-  displayEmail: (email: string) => string;
-  onClose: () => void;
-  onStartOAuth: () => void;
-  onFinishOAuth: (manualCallback: boolean) => void;
-  onImportToken: () => void;
-  onImportFiles: () => void;
-  onImportSource: (source: AntigravityExternalImportSource) => void;
-  onImportLocalProfile: () => void;
-  onInspect: () => void;
-  onOpenDocs: () => void;
-  onImportCurrentSession: () => void;
-}) {
-  useModalEscape(true, "Добавить Antigravity", onClose);
-  const sources: Array<[AntigravityExternalImportSource, string, LucideIcon]> = [
-    ["plugin", "Плагин", KeyRound],
-    ["local_db", "Локальная БД", Database],
-    ["antigravity_tools", "Antigravity Tools", Zap],
-    ["cockpit", "Cockpit", Layers3]
-  ];
-
-  return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Добавить Antigravity">
-      <div className="transfer-modal antigravity-import-modal">
-        <div className="modal-head">
-          <div>
-            <div className="panel-title">Добавить Antigravity</div>
-            <p className="muted">Вход через браузер в 1 клик без SMS, прямое подключение установленной IDE или локальный JSON.</p>
-          </div>
-          <button className="icon-btn" onClick={onClose} title="Закрыть">
-            <X />
-          </button>
-        </div>
-
-        <section className="antigravity-primary-flow">
-          <button
-            className="antigravity-method-card antigravity-pickup-banner"
-            disabled={busy !== null}
-            onClick={onImportCurrentSession}
-            style={{
-              borderColor: "rgba(168, 85, 247, 0.5)",
-              background: "linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(255, 255, 255, 0.02))",
-              padding: "16px",
-              display: "flex",
-              alignItems: "center",
-              gap: "14px",
-              width: "100%",
-              marginBottom: "12px",
-              cursor: "pointer"
-            }}
-          >
-            <span className="method-card-icon" style={{ background: "rgba(168, 85, 247, 0.25)", color: "#c084fc" }}>
-              {busy === "import:current-antigravity" ? <Loader2 className="spin" /> : <Zap />}
-            </span>
-            <span style={{ textAlign: "left", flex: 1 }}>
-              <strong style={{ fontSize: "15px", color: "#fff", display: "block" }}>Подхватить текущую сессию Antigravity с ПК</strong>
-              <small style={{ color: "rgba(255, 255, 255, 0.75)", display: "block" }}>Мгновенный вход из Windows Credential Manager с загрузкой квот моделей</small>
-            </span>
-            <em style={{ background: "#9333ea", color: "#fff", padding: "4px 8px", borderRadius: "6px", fontSize: "11px", fontWeight: 700 }}>1 клик</em>
-          </button>
-          <div className="antigravity-status-strip">
-            <span className={`status-dot ${profileStatus?.detected ? "is-ready" : ""}`} />
-            <div><strong>{profileStatus?.detected ? "Локальный профиль найден" : "Локальный профиль не найден"}</strong><small>{profileStatus?.detected ? "Можно импортировать вход из установленной Antigravity IDE." : "Google-вход создаст новый защищённый профиль."}</small></div>
-            <button className="button secondary compact-button" disabled={busy !== null} onClick={onInspect}><ShieldCheck />Проверить</button>
-          </div>
-          <div className="antigravity-primary-grid">
-            <button className="antigravity-method-card is-recommended" disabled={busy !== null} onClick={onStartOAuth}>
-              <span className="method-card-icon">{busy === "antigravity-oauth-start" ? <Loader2 className="spin" /> : <ExternalLink />}</span>
-              <span><strong>Войти через Google</strong><small>Рекомендуется · доверенный браузер без SMS-верификации</small></span>
-              <em>Основной</em>
-            </button>
-            <button className="antigravity-method-card" disabled={busy !== null || !profileStatus?.detected} onClick={onImportLocalProfile}>
-              <span className="method-card-icon">{busy === "antigravity-import-local" ? <Loader2 className="spin" /> : <Database />}</span>
-              <span><strong>Из локальной IDE</strong><small>Считать уже сохранённый вход и контекст Code Assist</small></span>
-              <em>{profileStatus?.detected ? "Найден" : "Нет данных"}</em>
-            </button>
-            <button className="antigravity-method-card" disabled={busy !== null} onClick={onImportFiles}>
-              <span className="method-card-icon">{busy === "antigravity-file-import" ? <Loader2 className="spin" /> : <FileDown />}</span>
-              <span><strong>Выбрать JSON</strong><small>Проверить локальные credential-файлы перед импортом</small></span>
-              <em>Файл</em>
-            </button>
-          </div>
-          {oauthSession ? (
-            <div className="antigravity-session-line">
-              <span>Ожидаю callback</span>
-              <strong>{oauthSession.redirectUri}</strong>
-              <em>до {formatTime(oauthSession.expiresAt)}</em>
-            </div>
-          ) : null}
-        </section>
-
-        <details className="antigravity-advanced">
-          <summary>Перенос и восстановление</summary>
-          <div className="antigravity-import-source-row">
-            {sources.map(([source, title, Icon]) => {
-              const busyKey = "antigravity-source:" + source;
-              return (
-                <button
-                  key={source}
-                  className="button secondary compact-button"
-                  disabled={busy !== null}
-                  onClick={() => onImportSource(source)}
-                >
-                  {busy === busyKey ? <Loader2 className="spin" /> : <Icon />}
-                  {title}
-                </button>
-              );
-            })}
-          </div>
-
-          <label className="field compact-field">
-            <span>Токен или JSON</span>
-            <textarea
-              className="token-json-input"
-              value={tokenPayload}
-              onChange={(event) => onTokenPayload(event.target.value)}
-              placeholder={'[{"email":"user@example.com","refresh_token":"1//..."}] или raw refresh_token'}
-              spellCheck={false}
-            />
-          </label>
-          <div className="antigravity-inline-actions">
-            <button className="button secondary" disabled={busy !== null} onClick={() => onTokenPayload("")}>Очистить</button>
-            <button className="button" disabled={busy !== null || tokenPayload.trim().length < 20} onClick={onImportToken}>
-              {busy === "antigravity-token-import" ? <Loader2 className="spin" /> : <KeyRound />}
-              Импортировать токен
-            </button>
-          </div>
-
-          <div className="antigravity-local-flow">
-            <button className="button secondary" disabled={busy !== null} onClick={onOpenDocs}>
-              <ExternalLink />
-              Документация CLI
-            </button>
-          </div>
-
-          <label className="field compact-field">
-            <span>Ручной callback URL</span>
-            <div className="inline-copy-field">
-              <input value={callbackUrl} onChange={(event) => onCallbackUrl(event.target.value)} placeholder="http://localhost:36742/oauth-callback?code=...&state=..." />
-              <button className="button secondary inline-action" disabled={busy !== null || !oauthSession || !callbackUrl.trim()} onClick={() => onFinishOAuth(true)}>
-                Завершить
-              </button>
-            </div>
-          </label>
-        </details>
-
-        {result ? (
-          <div className="antigravity-import-result">
-            <strong>{result.importedCount > 0 ? "Импортировано: " + result.importedCount : "Новые аккаунты не найдены"}</strong>
-            {result.failures.slice(0, 3).map((failure) => (
-              <span key={failure.source + "-" + (failure.email ?? "unknown")}>{failure.email ? displayEmail(failure.email) : failure.source}: {failure.reason}</span>
-            ))}
-          </div>
-        ) : null}
-
-        <div className="modal-actions">
-          <button className="button secondary" onClick={onClose}>Закрыть</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-let notificationAudioContext: AudioContext | null = null;
 let lastNotificationSoundAt = 0;
+let notificationAudioContext: AudioContext | null = null;
 
 async function playNotificationSound(tone: AppNotificationPayload["tone"]): Promise<void> {
   if (tone === "progress" || document.visibilityState !== "visible") return;
@@ -2035,7 +1250,7 @@ function App() {
   const [switchTransactions, setSwitchTransactions] = useState<SwitchTransaction[]>([]);
   const [switchHistory, setSwitchHistory] = useState<SwitchHistoryItem[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
-  const [message, setMessage] = useState<string>("Готов к работе");
+  const [message, setMessage] = useState<string>("");
   const [appNotifications, setAppNotifications] = useState<AppNotificationPayload[]>([]);
   const [visibilityEpoch, setVisibilityEpoch] = useState(0);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "degraded" | "error">("loading");
@@ -2043,13 +1258,14 @@ function App() {
   const [diagnostics, setDiagnostics] = useState<AppDiagnostics | null>(null);
   const [settingsData, setSettingsData] = useState<AppSettings | null>(null);
   const [antigravityProfileStatus, setAntigravityProfileStatus] = useState<AntigravityProfileStatus | null>(null);
-  const [antigravityGodMode, setAntigravityGodModeState] = useState<boolean>(false);
-  const [hygieneBusy, setHygieneBusy] = useState<boolean>(false);
   const [workspaceBinding, setWorkspaceBinding] = useState<WorkspaceBinding | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [showLogViewer, setShowLogViewer] = useState(false);
   const [showReleaseNotes, setShowReleaseNotes] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateCheckResult | null>(null);
+  const now = useVisibleClock();
+  const [importPreview, setImportPreview] = useState<AccountImportPreview | null>(null);
+  const diagnosticsLoadedRef = useRef(false);
   const [transferMode, setTransferMode] = useState<TransferMode | null>(null);
   const [transferPassword, setTransferPassword] = useState("");
   const [transferConfirm, setTransferConfirm] = useState("");
@@ -2064,13 +1280,18 @@ function App() {
     const saved = window.localStorage.getItem("cam.accountSort");
     return saved === "subscription" || saved === "remaining" || saved === "reset" || saved === "freshness" || saved === "added" || saved === "name" ? saved : "smart";
   });
-  const [platformFilter, setPlatformFilter] = useState<PlatformFilter>("codex");
-  const [viewMode, setViewMode] = useState<"table" | "cards">(() => window.localStorage.getItem("cam.accountView") === "table" ? "table" : "cards");
+  const [platformFilter, setPlatformFilter] = useState<PlatformFilter>("all");
+  const [viewMode, setViewMode] = useState<"table" | "cards">(() => window.localStorage.getItem("cam.accountView") === "cards" ? "cards" : "table");
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const inspectorTriggerRef = useRef<HTMLElement | null>(null);
   const inspectorCloseButtonRef = useRef<HTMLButtonElement | null>(null);
-  const [activeView, setActiveView] = useState<ViewKey>("overview");
+  const [activeView, setActiveView] = useState<ViewKey>("accounts");
+  const profileMainRef = useRef<HTMLDivElement>(null);
+  const profileScroll = useRef<Record<"table" | "cards", ScrollPosition>>({ table: { top: 0, left: 0 }, cards: { top: 0, left: 0 } });
+  usePreservedScroll(profileMainRef, profileScroll.current.cards, activeView === "accounts" && viewMode === "cards" && loadState !== "loading");
+  const contentRef = useRef<HTMLDivElement>(null);
+  useSurfaceMotion(contentRef, `${activeView}:${viewMode}:${loadState}`);
   const [auditDrawerOpen, setAuditDrawerOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandSearch, setCommandSearch] = useState("");
@@ -2093,7 +1314,6 @@ function App() {
     addAntigravity: isEnglish ? "Add Antigravity" : "Добавить Antigravity",
     commands: isEnglish ? "Commands" : "Команды",
     deviceCode: isEnglish ? "Device code" : "Код устройства",
-    consoleSections: isEnglish ? "Console sections" : "Разделы консоли",
     windowControls: isEnglish ? "Window controls" : "Управление окном",
     minimize: isEnglish ? "Minimize" : "Свернуть",
     maximize: isEnglish ? "Maximize" : "Развернуть",
@@ -2102,12 +1322,12 @@ function App() {
     refreshLimits: isEnglish ? "Refresh limits" : "Обновить лимиты"
   };
   const accountsText = {
-    title: platformFilter === "antigravity" ? (isEnglish ? "Antigravity accounts" : "Аккаунты Antigravity") : (isEnglish ? "Codex accounts" : "Аккаунты Codex"),
+    title: isEnglish ? "Profiles" : "Профили",
     searchProfile: isEnglish ? "Search profile" : "Поиск профиля",
     accountFilter: isEnglish ? "Account filter" : "Фильтр аккаунтов",
     viewMode: isEnglish ? "Account view" : "Вид аккаунтов",
     all: isEnglish ? "All" : "Все",
-    table: isEnglish ? "List" : "Список",
+    table: isEnglish ? "Table" : "Таблица",
     cards: isEnglish ? "Cards" : "Карточки",
     sort: isEnglish ? "Sort accounts" : "Сортировка аккаунтов",
     smartSort: isEnglish ? "Smart order" : "Умная сортировка",
@@ -2129,30 +1349,25 @@ function App() {
   const privacyMode = settingsData?.privacyMode === true;
   const displayEmail = (email: string): string => privacyMode ? maskEmailForPrivacy(email) : email;
   const displayPath = (value: string | null | undefined, fallback = "не выбран"): string => {
-    return privacyMode ? maskPathForPrivacy(value, fallback) : (value ?? fallback);
+    return privacyMode && value ? (isEnglish ? "Path hidden" : "Путь скрыт") : (value ?? fallback);
   };
 
   const stats = useMemo(() => {
-    const active = accounts.find((account) => account.isActive);
-    const low = accounts.filter((account) => account.status === "near_limit" || account.status === "limited").length;
-    const avg = accounts.length ? accounts.reduce((sum, account) => sum + used(account), 0) / accounts.length : 0;
-    const usable = accounts.filter(isUsable).length;
-    const stale = accounts.filter((account) => !account.lastRefreshAt || nowSeconds() - account.lastRefreshAt > 15 * 60).length;
     const codex = accounts.filter((account) => accountPlatform(account) === "codex").length;
     const antigravity = accounts.filter((account) => accountPlatform(account) === "antigravity").length;
-    return { active, low, avg, usable, stale, codex, antigravity };
+    return { codex, antigravity };
   }, [accounts]);
 
-  const smartRecommendation = useMemo(() => selectSmartAccount(accounts, workspaceBinding), [accounts, workspaceBinding]);
+  const smartRecommendation = useMemo(() => selectSmartAccount(accounts, workspaceBinding, { now, staleAfterSeconds: 900 }), [accounts, workspaceBinding, now]);
   const bestAccount = useMemo(() => {
     return smartRecommendation ? accounts.find((account) => account.id === smartRecommendation.accountId) ?? null : null;
   }, [accounts, smartRecommendation]);
-  const commandPalette = useMemo(() => buildCommandPalette({
+  const commandPalette = useMemo(() => buildUiCommands({
     accounts,
     activeView,
     smartRecommendation,
     privacyMode
-  }), [accounts, activeView, privacyMode, smartRecommendation]);
+  }, language, now), [accounts, activeView, privacyMode, smartRecommendation, language, now]);
   const showUpdateBanner = updateStatus?.status === "available";
   const updateButtonDisabled = busy !== null;
   const updateButtonLabel = isEnglish ? "Open GitHub" : "Открыть GitHub";
@@ -2179,37 +1394,32 @@ function App() {
     return sortAccountList(filtered, accountSort, nowSeconds());
   }, [accountSort, scopedAccounts, search]);
   const scopedProtectedCount = scopedAccounts.filter((account) => account.credentialState === "ready").length;
-  const scopedAttentionCount = scopedAccounts.filter((account) => account.credentialState !== "ready" || hasCurrentQuotaRefreshFailure(account)).length;
+  const scopedAttentionCount = scopedAccounts.filter((account) => profilePresentation(account, now, language).readiness.state !== "ready" || (account.isActive && account.runtimeVerification?.runtime !== "verified")).length;
   const refreshableAccountCount = accounts.length;
-  const tableScrollable = false;
   const navItems: NavItem[] = [
+    { key: "accounts", label: isEnglish ? "Profiles" : "Профили", description: isEnglish ? "Accounts and limits" : "Аккаунты и лимиты", icon: Layers3 },
     { key: "overview", label: isEnglish ? "Overview" : "Обзор", description: isEnglish ? "Session and readiness" : "Сессия и готовность", icon: LayoutDashboard },
-    { key: "accounts", label: uiText.nav.accounts, description: platformFilter === "antigravity" ? "Antigravity" : "Codex", icon: Layers3 },
+    { key: "activity", label: isEnglish ? "Journal" : "Журнал", description: isEnglish ? "Switch evidence" : "Проверки переключений", icon: Activity },
     { key: "settings", label: uiText.nav.settings, description: isEnglish ? "App behavior" : "Поведение приложения", icon: SlidersHorizontal }
   ];
-  const activeNav = navItems.find((item) => item.key === activeView) ?? navItems[0];
   const platformSummaries = [
     {
       id: "codex",
       label: "Codex",
       count: stats.codex,
-      state: platformFilter === "codex" ? "выбран" : diagnostics?.codexPath ? "готов" : "нужен CLI",
+      state: diagnostics?.codexPath ? (isEnglish ? "CLI found" : "CLI найден") : (isEnglish ? "CLI required" : "Нужен CLI"),
       tone: diagnostics?.codexPath ? "ready" : "warn",
-      available: true
     },
     {
       id: "antigravity",
       label: "Antigravity",
       count: stats.antigravity,
-      state: platformFilter === "antigravity"
-        ? (isEnglish ? "selected" : "выбран")
-        : antigravityProfileStatus?.detected || stats.antigravity > 0
-          ? (isEnglish ? "ready" : "готов")
-          : (isEnglish ? "login needed" : "нужен вход"),
+      state: antigravityProfileStatus?.detected || stats.antigravity > 0
+        ? (isEnglish ? "Profile found" : "Профиль найден")
+        : (isEnglish ? "Sign-in needed" : "Нужен вход"),
       tone: antigravityProfileStatus?.detected || stats.antigravity > 0 ? "ready" : "warn",
-      available: true
     }
-  ];
+  ] as const;
 
   useEffect(() => {
     if (selectedAccountId && scopedAccounts.some((account) => account.id === selectedAccountId)) return;
@@ -2239,57 +1449,45 @@ function App() {
 
   useEffect(() => {
     if (document.visibilityState !== "visible") return;
-    const dismissible = appNotifications.filter((notice) => notice.timeoutType === "default" && notice.tone !== "error");
-    if (dismissible.length === 0) return;
-    const timers = dismissible.map((notice) => window.setTimeout(() => {
-      setAppNotifications((current) => current.filter((item) => item.key !== notice.key));
-    }, notice.tone === "progress" ? 8_500 : 7_000));
+    const timers = appNotifications.flatMap((notice) => {
+      const deadline = notificationDeadline(notice);
+      if (deadline === null) return [];
+      return [window.setTimeout(() => {
+        setAppNotifications((current) => current.filter((item) => item !== notice));
+      }, Math.max(0, deadline - Date.now()))];
+    });
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [appNotifications, visibilityEpoch]);
 
-  useEffect(() => {
-    if (!inspectorOpen) return;
-    const trigger = inspectorTriggerRef.current;
-    const focusCloseButton = window.requestAnimationFrame(() => inspectorCloseButtonRef.current?.focus());
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setInspectorOpen(false);
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const dialog = inspectorCloseButtonRef.current?.closest<HTMLElement>("[role='dialog']");
-      if (!dialog) return;
-      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
-        "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"
-      )).filter((element) => element.offsetParent !== null);
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.cancelAnimationFrame(focusCloseButton);
-      document.removeEventListener("keydown", onKeyDown);
-      window.requestAnimationFrame(() => {
-        if (trigger?.isConnected) trigger.focus();
-      });
-    };
-  }, [inspectorOpen]);
+  useDialogManager((label) => {
+    if (label === "Profile details" || label === "Подробности профиля") setInspectorOpen(false);
+    else if (label === "Предварительный импорт" || label === "Import preview") { if (busy !== "import:apply") setImportPreview(null); }
+    else if (label === "Добавление аккаунта" || label === "Add account") closeLoginWizard();
+    else if (label === "Добавить Antigravity" || label === "Add Antigravity") closeAntigravityImport();
+    else if (label === "Командный центр" || label === "Command center") setCommandOpen(false);
+    else if (label === "Что нового" || label === "What's new") closeReleaseNotes();
+    else if (label === "Журнал диагностики" || label === "Diagnostic log") setShowLogViewer(false);
+    else if (label === "Журнал аудита переключений" || label === "Switch audit log") setAuditDrawerOpen(false);
+    else if (transferMode) closeTransferPrompt(null);
+    else if (confirmState) closeConfirm(false);
+  });
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const isTextInput = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA";
+      if (event.key === "Escape" && !document.querySelector('[role="dialog"][aria-modal="true"]')) {
+        const menu = document.querySelector<HTMLDetailsElement>(".account-tools-menu[open]");
+        if (menu) {
+          event.preventDefault();
+          menu.open = false;
+          menu.querySelector<HTMLElement>("summary")?.focus();
+          return;
+        }
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
+        if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
         setCommandOpen(true);
         setCommandSearch("");
         return;
@@ -2305,47 +1503,24 @@ function App() {
   async function reload() {
     const requestId = ++reloadSequenceRef.current;
     try {
-      const [
-        nextAccounts,
-        nextDiagnostics,
-        nextSettings,
-        nextAntigravityProfileStatus,
-        nextBinding,
-        nextSwitchTransactions,
-        nextSwitchHistory,
-        nextGodMode
-      ] = await Promise.all([
-        cam.listAccounts(),
-        cam.getDiagnostics(),
-        cam.getSettings().catch(() => null),
-        cam.getAntigravityProfileStatus().catch(() => null),
-        cam.getWorkspaceBinding().catch(() => null),
-        cam.listSwitchTransactions().catch(() => []),
-        cam.getSwitchHistory().catch(() => []),
-        cam.getAntigravityGodMode().catch(() => ({ enabled: false, settingsPath: "", details: { workspaceTrustDisabled: false, chatAlwaysConfirmDisabled: false, terminalConfirmNever: false, telemetryOff: false } }))
+      const [nextAccounts, nextSettings, nextBinding, nextTransactions, nextHistory] = await Promise.all([
+        cam.listAccounts(), cam.getSettings().catch(() => null), cam.getWorkspaceBinding().catch(() => null), cam.listSwitchTransactions().catch(() => []), cam.getSwitchHistory().catch(() => [])
       ]);
       if (requestId !== reloadSequenceRef.current) return;
-      setAccounts(nextAccounts);
-      setDiagnostics(nextDiagnostics);
-      setSettingsData(nextSettings);
-      setAntigravityProfileStatus(nextAntigravityProfileStatus);
-      setAntigravityGodModeState(nextGodMode.enabled);
-      setWorkspaceBinding(nextBinding);
-      setSwitchTransactions(nextSwitchTransactions);
-      setSwitchHistory(nextSwitchHistory);
-      setLoadError(nextDiagnostics.startupError ?? null);
-      setLoadState(nextDiagnostics.startupError ? "degraded" : "ready");
-      if (nextDiagnostics.startupError) setMessage(uiErrorMessage("Сервисы приложения требуют внимания"));
+      setAccounts(nextAccounts); setSettingsData(nextSettings); setWorkspaceBinding(nextBinding); setSwitchTransactions(nextTransactions); setSwitchHistory(nextHistory);
+      setLoadState("ready");
+      if (!diagnosticsLoadedRef.current) {
+        diagnosticsLoadedRef.current = true;
+        void Promise.all([cam.getDiagnostics(), cam.getAntigravityProfileStatus().catch(() => null)]).then(([nextDiagnostics, nextStatus]) => {
+          setDiagnostics(nextDiagnostics); setAntigravityProfileStatus(nextStatus);
+          setLoadError(nextDiagnostics.startupError ?? null);
+          if (nextDiagnostics.startupError) setLoadState("degraded");
+        }).catch(() => { diagnosticsLoadedRef.current = false; });
+      }
     } catch (error) {
       if (requestId !== reloadSequenceRef.current) return;
-      setLoadError(error instanceof Error ? error.message : "Desktop bridge did not return data");
-      setLoadState("error");
-      setMessage(uiErrorMessage("Не удалось загрузить список аккаунтов"));
-      try {
-        setDiagnostics(await cam.getDiagnostics());
-      } catch {
-        // Keep UI alive if diagnostics are unavailable.
-      }
+      setLoadError(error instanceof Error ? error.message : "Desktop bridge did not return data"); setLoadState("error");
+      setMessage(uiErrorMessage(languageRef.current === "en" ? "Could not load profiles" : "Не удалось загрузить профили"));
     }
   }
 
@@ -2355,7 +1530,7 @@ function App() {
       setShowReleaseNotes(true);
     }
     const offAuth = cam.onAuthEvent((event: AuthEvent) => {
-      setMessage(event.success ? "Аккаунт добавлен" : uiErrorMessage("Не удалось завершить вход"));
+      setMessage(event.success ? (languageRef.current === "en" ? "Profile added" : "Профиль добавлен") : uiErrorMessage(languageRef.current === "en" ? "Could not complete sign-in" : "Не удалось завершить вход"));
       setLoginWizard((current) => ({
         ...current,
         open: true,
@@ -2365,7 +1540,7 @@ function App() {
       void reload();
     });
     const offAccountsUpdated = cam.onAccountsUpdated(() => {
-      setMessage("Данные аккаунтов обновлены");
+      setMessage(languageRef.current === "en" ? "Profile data updated" : "Данные профилей обновлены");
       void reload();
     });
     const offSwitchTransaction = cam.onSwitchTransaction(({ transaction }) => {
@@ -2373,23 +1548,7 @@ function App() {
         transaction,
         ...current.filter((item) => item.id !== transaction.id)
       ].sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 30));
-      const phaseMessage: Record<string, string> = {
-        preparing: "Готовлю безопасное переключение",
-        validating_previous: "Проверяю текущий профиль",
-        validating_target: "Проверяю целевой профиль",
-        ready: "Проверка завершена. Готово к переключению",
-        quiescing: "Закрываю активный Codex",
-        activating: "Активирую выбранную авторизацию",
-        launching: "Запускаю Codex с новым профилем",
-        verifying: "Проверяю запущенный аккаунт",
-        committed: "Переключение подтверждено",
-        rolling_back: "Возвращаю предыдущий профиль",
-        rolled_back: "Предыдущий профиль восстановлен",
-        aborted: "Переключение отменено до изменения авторизации",
-        failed: "Переключение завершилось ошибкой",
-        recovery_required: "Требуется восстановление переключения"
-      };
-      setMessage(phaseMessage[transaction.phase] ?? `Переключение: ${transaction.phase}`);
+      setMessage(verificationSummary(transaction, languageRef.current === "en"));
       if (["committed", "rolled_back", "failed", "recovery_required"].includes(transaction.status)) {
         void reload();
       }
@@ -2424,10 +1583,7 @@ function App() {
       setMessage(result.message);
     });
     const offAppNotification = cam.onAppNotification((notification) => {
-      setAppNotifications((current) => [
-        notification,
-        ...current.filter((item) => item.key !== notification.key)
-      ].slice(0, 3));
+      setAppNotifications((current) => mergeNotification(current, notification));
       if (!notification.silent && settingsRef.current?.notificationSoundEnabled !== false) {
         void playNotificationSound(notification.tone);
       }
@@ -2502,7 +1658,7 @@ function App() {
         setLoginWizard({ open: true, phase: "done", type, result, error: null });
         if (result.account) setSelectedAccountId(result.account.id);
         await reload();
-        setMessage("Аккаунт проверен и сохранён в локальном защищённом профиле");
+        setMessage((isEnglish ? "Profile checked and saved locally" : "Аккаунт проверен и сохранён в локальном защищённом профиле"));
       } else {
         setLoginWizard({ open: true, phase: "waiting", type, result, error: null });
         setMessage(
@@ -2521,18 +1677,18 @@ function App() {
         result: null,
         error: uiErrorMessage(error instanceof Error ? error.message : "Не удалось начать вход. Проверь диагностику Codex CLI.")
       });
-      setMessage(uiErrorMessage("Не удалось начать вход"));
+      setMessage(uiErrorMessage((isEnglish ? "Could not start sign-in" : "Не удалось начать вход")));
     } finally {
       setBusy(null);
     }
   }
 
   function openLoginWizard(): void {
-    setLoginWizard({ open: true, phase: "method", type: null, result: null, error: null });
+    setLoginWizard((current) => current.phase === "waiting" || current.phase === "starting" ? { ...current, open: true } : { open: true, phase: "method", type: null, result: null, error: null });
   }
 
   function closeLoginWizard(): void {
-    setLoginWizard({ open: false, phase: "method", type: null, result: null, error: null });
+    setLoginWizard((current) => ({ ...current, open: false }));
   }
 
   function requestConfirm(state: ConfirmState): Promise<boolean> {
@@ -2570,55 +1726,13 @@ function App() {
     }
   }
 
-  async function regenerateFingerprint(id: string) {
-    setBusy(`fp:${id}`);
-    try {
-      const updated = await cam.regenerateAntigravityFingerprint(id);
-      await reload();
-      setMessage(isEnglish ? `Hardware persona regenerated: ${updated.antigravity?.fingerprintId ?? ""}` : `Отпечаток оборудования обновлён: ${updated.antigravity?.fingerprintId ?? ""}`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function toggleGodMode(enabled: boolean) {
-    setBusy("godMode");
-    try {
-      const result = await cam.setAntigravityGodMode(enabled);
-      setAntigravityGodModeState(result.enabled);
-      setMessage(result.enabled ? "Режим Бога (Zero Confirmations) включён" : "Режим Бога отключён");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function cleanHygiene() {
-    setHygieneBusy(true);
-    try {
-      const result = await cam.cleanAntigravityHygiene();
-      const freedMb = (result.freedBytes / (1024 * 1024)).toFixed(1);
-      const msg = isEnglish
-        ? `Cleaned ${result.cleanedLocks.length} locks, ${result.cleanedCaches.length} caches (${freedMb} MB freed)`
-        : `Очищено блокировок: ${result.cleanedLocks.length}, кэшей: ${result.cleanedCaches.length} (освобождено ${freedMb} МБ)`;
-      setMessage(msg);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setHygieneBusy(false);
-    }
-  }
-
   async function validateAccountAuth(id: string) {
     setBusy(`auth:${id}`);
     try {
       const result = await cam.validateAuth(id);
-      setMessage(`Статус входа: ${authValidationLabel(result.state)}`);
+      setMessage(`${isEnglish ? "Sign-in status" : "Статус входа"}: ${authValidationLabel(result.state, language)}`);
     } catch {
-      setMessage(uiErrorMessage("Не удалось проверить вход"));
+      setMessage(uiErrorMessage((isEnglish ? "Could not check sign-in" : "Не удалось проверить вход")));
     } finally {
       setBusy(null);
     }
@@ -2648,7 +1762,7 @@ function App() {
 
       const result = await cam.reauthenticateAccount(id, { type: "chatgptDeviceCode" });
       setLoginWizard({ open: true, phase: "waiting", type: "chatgptDeviceCode", result, error: null });
-      setMessage("Сохранённый профиль сохранён. Завершите вход по коду устройства для восстановления сессии.");
+      setMessage((isEnglish ? "The saved profile is preserved. Complete device sign-in to restore the session." : "Сохранённый профиль сохранён. Завершите вход по коду устройства для восстановления сессии."));
     } catch (error) {
       setMessage(buildQuotaRefreshErrorMessage("Не удалось автоматически починить аккаунт", error));
     } finally {
@@ -2658,7 +1772,7 @@ function App() {
 
   async function refreshAllAccounts() {
     if (refreshableAccountCount === 0) {
-      setMessage("Нет аккаунтов для обновления лимитов");
+      setMessage((isEnglish ? "No profiles to refresh" : "Нет аккаунтов для обновления лимитов"));
       return;
     }
     setBusy("refresh:all");
@@ -2724,11 +1838,11 @@ function App() {
   function submitTransferPrompt(): void {
     if (!transferMode) return;
     if (transferPassword.trim().length < 8) {
-      setTransferError("Пароль должен быть не короче 8 символов");
+      setTransferError(isEnglish ? "Use at least 8 characters" : "Пароль должен быть не короче 8 символов");
       return;
     }
     if (transferMode === "export" && transferPassword !== transferConfirm) {
-      setTransferError("Пароли не совпадают");
+      setTransferError(isEnglish ? "Passwords do not match" : "Пароли не совпадают");
       return;
     }
     closeTransferPrompt(transferPassword);
@@ -2736,14 +1850,14 @@ function App() {
 
   async function exportAccounts() {
     if (accounts.length === 0) {
-      setMessage("Нечего экспортировать: список аккаунтов пуст");
+      setMessage((isEnglish ? "There are no profiles to export" : "Нечего экспортировать: список аккаунтов пуст"));
       return;
     }
     const confirmed = await requestConfirm({
-      title: "Экспорт аккаунтов",
-      body: "Файл будет зашифрован паролем, но после расшифровки он содержит auth-материал. Храни его как секрет.",
-      confirmLabel: "Продолжить экспорт",
-      details: [`Аккаунтов: ${accounts.length}`, "Формат: .cam-export", "Передача только доверенным ПК"]
+      title: isEnglish ? "Export profiles" : "Экспорт профилей",
+      body: isEnglish ? "The encrypted file contains sign-in secrets after decryption. Keep the file and its password private." : "После расшифровки файл содержит секреты входа. Храните файл и его пароль конфиденциально.",
+      confirmLabel: isEnglish ? "Continue export" : "Продолжить экспорт",
+      details: [`${isEnglish ? "Profiles" : "Профилей"}: ${accounts.length}`, `${isEnglish ? "Format" : "Формат"}: .cam-export`]
     });
     if (!confirmed) return;
     const passphrase = await requestTransferPassword("export");
@@ -2751,9 +1865,9 @@ function App() {
     setBusy("export");
     try {
       const result = await cam.exportAccounts(passphrase);
-      setMessage(result.exportedCount > 0 ? `Экспортировано аккаунтов: ${result.exportedCount}` : "Экспорт отменён");
+      setMessage(result.exportedCount > 0 ? (isEnglish ? `Exported ${result.exportedCount} profiles` : `Экспортировано профилей: ${result.exportedCount}`) : (isEnglish ? "Export canceled" : "Экспорт отменён"));
     } catch {
-      setMessage(uiErrorMessage("Не удалось экспортировать аккаунты"));
+      setMessage(uiErrorMessage((isEnglish ? "Could not export profiles" : "Не удалось экспортировать аккаунты")));
     } finally {
       setBusy(null);
     }
@@ -2764,15 +1878,46 @@ function App() {
     if (!passphrase) return;
     setBusy("import");
     try {
-      const result = await cam.importAccounts(passphrase);
+      const preview = await cam.previewImport(passphrase);
+      setImportPreview(preview);
+      if (!preview) setMessage(isEnglish ? "Import canceled" : "Импорт отменён");
+    } catch (error) {
+      setMessage(uiErrorMessage(isEnglish ? "Could not validate the import file" : "Не удалось проверить файл импорта") + (readableIpcError(error) ? ` ${maskSensitiveDisplayText(readableIpcError(error)!)}` : ""));
+    } finally { setBusy(null); }
+  }
+
+  async function applyImport() {
+    if (!importPreview || importPreview.expiresAt <= nowSeconds()) return;
+    setBusy("import:apply");
+    try {
+      const result = await cam.applyImport(importPreview.previewId);
       setAccounts(result.accounts);
-      setMessage(result.importedCount > 0 ? `Импортировано аккаунтов: ${result.importedCount}` : "Импорт отменён");
+      setImportPreview(null);
+      setMessage(isEnglish ? `Imported ${result.importedCount}; skipped ${result.skippedCount ?? 0}.` : `Импортировано: ${result.importedCount}; пропущено: ${result.skippedCount ?? 0}.`);
       await reload();
-    } catch {
-      setMessage(uiErrorMessage("Не удалось импортировать аккаунты"));
-    } finally {
-      setBusy(null);
-    }
+    } catch (error) { setMessage(uiErrorMessage(isEnglish ? "Could not apply import" : "Не удалось применить импорт") + (readableIpcError(error) ? ` ${maskSensitiveDisplayText(readableIpcError(error)!)}` : "")); }
+    finally { setBusy(null); }
+  }
+
+  async function verifyRuntimeAccount(id: string) {
+    setBusy(`runtime:${id}`);
+    try {
+      const evidence = await cam.verifyRuntimeAccount(id);
+      setAccounts((current) => current.map((account) => account.id === id ? { ...account, runtimeVerification: evidence } : account));
+      setMessage(runtimeLabel(evidence, language));
+    } catch { setMessage(uiErrorMessage(isEnglish ? "Could not verify the running IDE account" : "Не удалось проверить аккаунт работающей IDE")); }
+    finally { setBusy(null); }
+  }
+
+  async function restoreSwitchSnapshot(eventId: string) {
+    const event = switchHistory.find((item) => item.id === eventId);
+    if (!event) return;
+    const confirmed = await requestConfirm({ title: isEnglish ? "Restore snapshot" : "Восстановить снимок", body: isEnglish ? "The IDE will close while Квессер restores the saved local state. Runtime identity will be checked separately after restart." : "IDE будет закрыта для восстановления сохранённого локального состояния. Аккаунт работающей IDE проверяется отдельно после запуска.", confirmLabel: isEnglish ? "Restore" : "Восстановить", details: [`${isEnglish ? "Snapshot date" : "Дата снимка"}: ${new Date(event.startedAt * 1000).toLocaleString(isEnglish ? "en-US" : "ru-RU")}`] });
+    if (!confirmed) return;
+    setBusy(`rollback:${eventId}`);
+    try { setSwitchHistory(await cam.rollbackSwitch(eventId)); await reload(); setMessage(isEnglish ? "Snapshot restored; runtime identity is shown separately." : "Снимок восстановлен; подтверждение IDE показано отдельно."); }
+    catch (error) { setMessage((isEnglish ? "Could not restore the snapshot" : "Не удалось восстановить снимок") + (readableIpcError(error) ? `: ${maskSensitiveDisplayText(readableIpcError(error)!)}` : "")); await reload(); }
+    finally { setBusy(null); }
   }
 
   async function inspectAntigravityProfile() {
@@ -2781,9 +1926,9 @@ function App() {
       const inspection = await cam.inspectAntigravityProfile();
       const status = await cam.getAntigravityProfileStatus();
       setAntigravityProfileStatus({ ...status, inspection });
-      setMessage("Диагностика Antigravity обновлена");
+      setMessage((isEnglish ? "Antigravity diagnostics updated" : "Диагностика Antigravity обновлена"));
     } catch {
-      setMessage(uiErrorMessage("Не удалось выполнить диагностику Antigravity"));
+      setMessage(uiErrorMessage((isEnglish ? "Could not inspect Antigravity" : "Не удалось выполнить диагностику Antigravity")));
     } finally {
       setBusy(null);
     }
@@ -2808,7 +1953,7 @@ function App() {
       }
       setMessage(uiErrorMessage(result.reason));
     } catch {
-      setMessage(uiErrorMessage("Не удалось импортировать локальный профиль Antigravity"));
+      setMessage(uiErrorMessage((isEnglish ? "Could not import the local Antigravity profile" : "Не удалось импортировать локальный профиль Antigravity")));
     } finally {
       setBusy(null);
     }
@@ -2831,7 +1976,7 @@ function App() {
 
   async function finishAntigravityOAuthAuthorization(useManualCallback: boolean) {
     if (!antigravityOAuthSession) {
-      setMessage("Сначала запусти OAuth авторизацию Antigravity.");
+      setMessage((isEnglish ? "Start official Antigravity sign-in first." : "Сначала запусти OAuth авторизацию Antigravity."));
       return;
     }
     setBusy("antigravity-oauth-finish");
@@ -2864,20 +2009,6 @@ function App() {
     }
   }
 
-  async function cancelAntigravityOAuthAuthorization() {
-    if (!antigravityOAuthSession) {
-      closeAntigravityImport();
-      return;
-    }
-    try {
-      await cam.cancelAntigravityGoogleOAuth(antigravityOAuthSession.sessionId);
-    } finally {
-      setAntigravityOAuthSession(null);
-      setAntigravityCallbackUrl("");
-      closeAntigravityImport();
-    }
-  }
-
   function applyAntigravityBatchImportResult(result: AntigravityCredentialBatchImportResult): void {
     setAntigravityImportResult(result);
     setAccounts(result.accounts);
@@ -2892,10 +2023,10 @@ function App() {
 
   async function importAntigravityTokenPayload() {
     if (antigravityTokenPayload.trim().length < 20) {
-      setMessage("Вставь refresh_token или JSON с refresh_token.");
+      setMessage((isEnglish ? "Enter a refresh token or its credential JSON." : "Вставь refresh_token или JSON с refresh_token."));
       return;
     }
-    if (!window.confirm("Antigravity Beta: импорт содержит секрет авторизации. Продолжай только для аккаунта, которым ты вправе управлять. Секрет не будет показан в интерфейсе или логах.")) {
+    if (!await requestConfirm({ title: isEnglish ? "Import Antigravity sign-in" : "Импорт входа Antigravity", body: isEnglish ? "This import contains a sign-in secret. Continue only for profiles you are authorized to manage. The secret will not be displayed in the interface or logs." : "Импорт содержит секрет авторизации. Продолжайте только для профилей, которыми вы вправе управлять. Секрет не будет показан в интерфейсе или логах.", confirmLabel: isEnglish ? "Import" : "Импортировать" })) {
       return;
     }
     setBusy("antigravity-token-import");
@@ -2918,7 +2049,7 @@ function App() {
   }
 
   async function importAntigravityLocalFiles() {
-    if (!window.confirm("Antigravity Beta: будут прочитаны локальные credential-файлы текущего Windows-пользователя. Продолжить?")) {
+    if (!await requestConfirm({ title: isEnglish ? "Read local Antigravity sign-in" : "Прочитать локальный вход Antigravity", body: isEnglish ? "Квессер will read the credential files you select for the current Windows user. They can contain sign-in secrets." : "Квессер прочитает выбранные файлы входа текущего пользователя Windows. Они могут содержать секреты авторизации.", confirmLabel: isEnglish ? "Choose files" : "Выбрать файлы" })) {
       return;
     }
     setBusy("antigravity-file-import");
@@ -2935,7 +2066,7 @@ function App() {
   }
 
   async function importAntigravityExternalSource(source: AntigravityExternalImportSource) {
-    if (!window.confirm("Antigravity Beta: импорт из внешнего источника может содержать секреты. Подтверди, что имеешь право управлять этими аккаунтами.")) {
+    if (!await requestConfirm({ title: isEnglish ? "Import external Antigravity profiles" : "Импорт внешних профилей Antigravity", body: isEnglish ? "The external source may contain sign-in secrets. Continue only for profiles you are authorized to manage." : "Внешний источник может содержать секреты входа. Продолжайте только для профилей, которыми вы вправе управлять.", confirmLabel: isEnglish ? "Import" : "Импортировать", details: [source] })) {
       return;
     }
     setBusy(`antigravity-source:${source}`);
@@ -2957,11 +2088,8 @@ function App() {
   }
 
   function closeAntigravityImport(): void {
-    if (antigravityOAuthSession) {
-      void cam.cancelAntigravityGoogleOAuth(antigravityOAuthSession.sessionId);
-    }
-    setAntigravityOAuthSession(null);
     setAntigravityCallbackUrl("");
+    setAntigravityTokenPayload("");
     setAntigravityImportOpen(false);
   }
 
@@ -2975,10 +2103,10 @@ function App() {
     try {
       const result = await cam.reauthenticateAccount(id, { type: "chatgptDeviceCode" });
       setLoginWizard({ open: true, phase: "waiting", type: "chatgptDeviceCode", result, error: null });
-      setMessage("Открыл reauth. Заверши вход, профиль обновится без пересоздания списка");
+      setMessage((isEnglish ? "Sign-in is open. Complete it to update this saved profile." : "Открыл reauth. Заверши вход, профиль обновится без пересоздания списка"));
     } catch {
       setLoginWizard({ open: true, phase: "error", type: "chatgptDeviceCode", result: null, error: `Не удалось обновить авторизацию${account ? ` для ${displayEmail(account.email)}` : ""}.` });
-      setMessage(uiErrorMessage("Не удалось обновить авторизацию"));
+      setMessage(uiErrorMessage((isEnglish ? "Could not update sign-in" : "Не удалось обновить авторизацию")));
     } finally {
       setBusy(null);
     }
@@ -2988,9 +2116,9 @@ function App() {
     setBusy(`folder:${id}`);
     try {
       await cam.openProfileFolder(id);
-      setMessage("Папка профиля открыта");
+      setMessage((isEnglish ? "Profile folder opened" : "Папка профиля открыта"));
     } catch {
-      setMessage(uiErrorMessage("Не удалось открыть папку профиля"));
+      setMessage(uiErrorMessage((isEnglish ? "Could not open the profile folder" : "Не удалось открыть папку профиля")));
     } finally {
       setBusy(null);
     }
@@ -3003,28 +2131,29 @@ function App() {
     try {
       preparation = await cam.prepareSwitch(id);
     } catch (error) {
-      setMessage(uiErrorMessage(error instanceof Error ? error.message : "Не удалось подготовить переключение"));
+      setMessage(switchErrorMessage(error, account ? accountPlatform(account) : platformFilter, language));
       setBusy(null);
       return;
     }
     setBusy(null);
-    if (account && !account.isActive && settingsData?.confirmSwitch !== false) {
+    if (account && settingsData?.confirmSwitch !== false) {
       const isAntigravity = accountPlatform(account) === "antigravity";
+      const current = accounts.find((item) => item.isActive && accountPlatform(item) === accountPlatform(account));
+      const currentLabel = current ? displayMetadata(current.label, privacyMode, language) : (isEnglish ? "None selected" : "Не выбран");
       const confirmed = await requestConfirm({
-        title: "Переключить аккаунт",
+        title: isEnglish ? "Switch profile" : "Переключить профиль",
         body: isAntigravity
-          ? "Менеджер активирует авторизацию выбранного аккаунта в Antigravity IDE, сохранит резервную копию и перезапустит среду. Сессия запустится напрямую без запроса SMS-верификации."
+          ? (isEnglish ? "Квессер will save a protected snapshot and restart Antigravity with the selected profile. The journal will show the restart and any available account confirmation." : "Квессер сохранит защищённый снимок и перезапустит Antigravity с выбранным профилем. В журнале будут видны запуск и результат проверки аккаунта, если она доступна.")
           : settingsData?.desktopClosePolicy === "graceful-only"
-            ? "Менеджер заменит активный Codex auth.json только после мягкого закрытия приложения. Если Codex не завершится, переключение будет отменено."
-            : "Менеджер сначала мягко закроет Codex, а затем при необходимости завершит только заранее проверенное дерево процессов установленного пакета. После активации он сразу запустит тот же Codex с выбранным профилем.",
-        confirmLabel: "Переключить",
+            ? (isEnglish ? "Квессер will apply the profile and relaunch Codex after it closes normally. If Codex stays open, the switch will be canceled." : "Квессер применит профиль и снова запустит Codex после штатного закрытия. Если Codex останется открыт, переключение будет отменено.")
+            : (isEnglish ? "Квессер will close the installed Codex and restart it with the selected profile. If needed, it will stop the verified Codex process tree." : "Квессер закроет установленный Codex и запустит его с выбранным профилем. При необходимости он завершит проверенное дерево процессов Codex."),
+        confirmLabel: isEnglish ? "Switch" : "Переключить",
         details: [
-          `Платформа: ${platformLabel(account)}`,
-          `Профиль: ${account.label}`,
+          `${isEnglish ? "Provider" : "Платформа"}: ${platformLabel(account)}`,
+          `${isEnglish ? "Current profile" : "Текущий профиль"}: ${currentLabel}`,
+          `${isEnglish ? "Target profile" : "Новый профиль"}: ${displayMetadata(account.label, privacyMode, language)}`,
           `Email: ${displayEmail(account.email)}`,
-          `Текущий: ${stats.active?.label ?? "не выбран"}`,
-          `Проверка: ${preparation.transaction.phase}`,
-          ...preparation.warnings
+          ...preparation.warnings.map((warning) => displayMetadata(warning, privacyMode, language))
         ]
       });
       if (!confirmed) {
@@ -3032,6 +2161,7 @@ function App() {
         return;
       }
     }
+    setInspectorOpen(false);
     setBusy(`switch:${id}`);
     try {
       const switched = await cam.switchAccount(id, preparation.transaction.id);
@@ -3040,13 +2170,11 @@ function App() {
         : accountPlatform(item) === accountPlatform(switched)
           ? { ...item, isActive: false }
           : item));
-      setMessage(account && accountPlatform(account) === "antigravity"
-        ? "Профиль Antigravity переключён. IDE перезапускается со свежей сессией без запроса SMS."
-        : "Профиль Codex переключён. ChatGPT/Codex безопасно перезапускается с выбранным аккаунтом.");
+      setMessage(runtimeLabel(switched.runtimeVerification, language));
       void reload();
     } catch (error) {
       await cam.cancelSwitch(preparation.transaction.id).catch(() => undefined);
-      setMessage(switchErrorMessage(error));
+      setMessage(switchErrorMessage(error, account ? accountPlatform(account) : platformFilter, language));
     } finally {
       setBusy(null);
     }
@@ -3056,21 +2184,21 @@ function App() {
     const account = accounts.find((item) => item.id === id);
     if (account) {
       const confirmed = await requestConfirm({
-        title: "Удалить профиль",
-        body: "Профиль будет удалён из менеджера вместе с локальной папкой профиля. Активный auth.json Codex не удаляется.",
-        confirmLabel: "Удалить",
+        title: isEnglish ? "Delete profile" : "Удалить профиль",
+        body: isEnglish ? "The saved profile and its local folder will be removed from Квессер." : "Сохранённый профиль и его локальная папка будут удалены из Квессер.",
+        confirmLabel: isEnglish ? "Delete" : "Удалить",
         tone: "danger",
-        details: [`Профиль: ${account.label}`, `Email: ${displayEmail(account.email)}`]
+        details: [`${isEnglish ? "Profile" : "Профиль"}: ${account.label}`, `Email: ${displayEmail(account.email)}`]
       });
       if (!confirmed) return;
     }
     setBusy(`delete:${id}`);
     try {
       await cam.deleteAccount(id);
-      setMessage("Профиль удалён из менеджера");
+      setMessage((isEnglish ? "Profile removed from Квессер" : "Профиль удалён из менеджера"));
       await reload();
     } catch {
-      setMessage(uiErrorMessage("Не удалось удалить профиль"));
+      setMessage(uiErrorMessage((isEnglish ? "Could not delete the profile" : "Не удалось удалить профиль")));
     } finally {
       setBusy(null);
     }
@@ -3083,7 +2211,7 @@ function App() {
       setDiagnostics(nextDiagnostics);
       setMessage(`Рабочая папка Codex: ${displayPath(nextDiagnostics.workspacePath, "не выбрана")}`);
     } catch {
-      setMessage(uiErrorMessage("Не удалось выбрать рабочую папку"));
+      setMessage(uiErrorMessage((isEnglish ? "Could not choose the workspace" : "Не удалось выбрать рабочую папку")));
     } finally {
       setBusy(null);
     }
@@ -3099,7 +2227,7 @@ function App() {
         ? (input.language === "en" ? "Interface language changed" : "Язык интерфейса изменён")
         : isEnglish ? "Settings updated" : "Настройки обновлены");
     } catch {
-      setMessage(uiErrorMessage("Не удалось сохранить настройки"));
+      setMessage(uiErrorMessage((isEnglish ? "Could not save settings" : "Не удалось сохранить настройки")));
     } finally {
       setBusy(null);
     }
@@ -3110,11 +2238,11 @@ function App() {
     try {
       const lines = await cam.readLogTail();
       const visibleLines = lines.map(maskSensitiveDisplayText);
-      setLogLines(visibleLines.length ? visibleLines : ["Журнал пока пуст."]);
+      setLogLines(visibleLines.length ? visibleLines : [(isEnglish ? "The log is empty." : "Журнал пока пуст.")]);
       setShowLogViewer(true);
-      setMessage("Журнал диагностики открыт");
+      setMessage((isEnglish ? "Diagnostic log opened" : "Журнал диагностики открыт"));
     } catch {
-      setMessage(uiErrorMessage("Не удалось открыть журнал диагностики"));
+      setMessage(uiErrorMessage((isEnglish ? "Could not open the diagnostic log" : "Не удалось открыть журнал диагностики")));
     } finally {
       setBusy(null);
     }
@@ -3124,9 +2252,9 @@ function App() {
     setBusy("logs-folder");
     try {
       await cam.openLogsFolder();
-      setMessage("Папка журналов открыта");
+      setMessage((isEnglish ? "Log folder opened" : "Папка журналов открыта"));
     } catch {
-      setMessage(uiErrorMessage("Не удалось открыть папку журналов"));
+      setMessage(uiErrorMessage((isEnglish ? "Could not open the log folder" : "Не удалось открыть папку журналов")));
     } finally {
       setBusy(null);
     }
@@ -3136,9 +2264,9 @@ function App() {
     setBusy("diagnostic-report");
     try {
       const result = await cam.exportDiagnosticReport();
-      setMessage(result.filePath ? "Отчёт диагностики сохранён" : "Экспорт отчёта отменён");
+      setMessage(result.filePath ? (isEnglish ? "Diagnostic report saved" : "Отчёт диагностики сохранён") : (isEnglish ? "Report export canceled" : "Экспорт отчёта отменён"));
     } catch {
-      setMessage(uiErrorMessage("Не удалось сохранить отчёт диагностики"));
+      setMessage(uiErrorMessage((isEnglish ? "Could not save the diagnostic report" : "Не удалось сохранить отчёт диагностики")));
     } finally {
       setBusy(null);
     }
@@ -3175,9 +2303,9 @@ function App() {
     try {
       const updated = await cam.updateAccount({ id, ...input });
       setAccounts((current) => current.map((account) => account.id === id ? updated : account));
-      setMessage("Метки профиля обновлены");
+      setMessage((isEnglish ? "Profile metadata updated" : "Метки профиля обновлены"));
     } catch {
-      setMessage(uiErrorMessage("Не удалось обновить метки профиля"));
+      setMessage(uiErrorMessage((isEnglish ? "Could not update profile metadata" : "Не удалось обновить метки профиля")));
     } finally {
       setBusy(null);
     }
@@ -3198,7 +2326,7 @@ function App() {
       return;
     }
     if (command.view === "activity" || command.action === "navigate:activity") {
-      setAuditDrawerOpen(true);
+      setActiveView("activity");
       return;
     }
     if (command.view) {
@@ -3251,50 +2379,60 @@ function App() {
             smartSwitchThresholdPercent={settingsData?.smartSwitchThresholdPercent ?? 10}
             isEnglish={isEnglish}
             displayEmail={displayEmail}
+            displayLabel={(value) => displayMetadata(value, privacyMode, language)}
             onAdd={platformFilter === "antigravity" ? () => openAntigravityImport() : openLoginWizard}
             onAddAntigravity={() => openAntigravityImport()}
             onAddCodex={openLoginWizard}
             onRefresh={() => void refreshAllAccounts()}
             onSwitch={(accountId) => void switchAccount(accountId)}
             onOpenAccounts={() => setActiveView("accounts")}
-            onOpenActivity={() => setAuditDrawerOpen(true)}
+            onOpenActivity={() => setActiveView("activity")}
           />
         );
       case "accounts":
         return (
-          <>
-            <section className="panel workbench-panel account-panel">
-              <div className="panel-head">
-                <div className="account-panel-intro">
-                  <div className="panel-title-row">
-                    <h3>{accountsText.title}</h3>
-                    <span
-                      className="badge compact"
-                      title={search.trim() ? `${visibleAccounts.length} ${isEnglish ? "shown out of" : "показано из"} ${scopedAccounts.length}` : `${scopedAccounts.length} ${isEnglish ? "saved profiles" : "сохранённых профилей"}`}
-                    >
-                      {search.trim() ? `${visibleAccounts.length} ${isEnglish ? "of" : "из"} ${scopedAccounts.length}` : scopedAccounts.length}
-                    </span>
-                  </div>
+          <section className="profile-page">
+            <header className="page-head">
+                <div>
+                  <h2>{accountsText.title}</h2>
                   <p>
                     {isEnglish
-                      ? `${scopedProtectedCount} protected · ${scopedAttentionCount} need attention`
+                      ? `${scopedProtectedCount} with saved sign-in · ${scopedAttentionCount} need attention`
                       : `${scopedProtectedCount} с сохранённым входом · ${scopedAttentionCount} ${scopedAttentionCount === 1 ? "требует" : "требуют"} внимания`}
                   </p>
                 </div>
                 <div className="panel-actions">
-                  <label className="search-wrap">
-                    <Search />
+                  <button className="button secondary" disabled={busy !== null || refreshableAccountCount === 0} aria-busy={busy === "refresh:all"} onClick={refreshAllAccounts} title={refreshableAccountCount === 0 ? shellText.noRefreshableAccounts : shellText.refreshLimits}>
+                    {busy === "refresh:all" ? <Loader2 className="spin" /> : <RefreshCcw />}
+                    {uiText.actions.refresh}
+                  </button>
+                  <details className="account-tools-menu">
+                    <summary className="icon-btn" title={isEnglish ? "Import and export" : "Импорт и экспорт"} aria-label={isEnglish ? "Import and export" : "Импорт и экспорт"}><MoreHorizontal /></summary>
+                    <div>
+                      <button disabled={busy !== null || accounts.length === 0} onClick={exportAccounts}>{busy === "export" ? <Loader2 className="spin" /> : <FileDown />}{accountsText.export}</button>
+                      <button disabled={busy !== null} onClick={importAccounts}>{busy === "import" ? <Loader2 className="spin" /> : <FileUp />}{accountsText.import}</button>
+                    </div>
+                  </details>
+                </div>
+            </header>
+            <section className="panel account-panel" aria-label={accountsText.title}>
+              <div className="profile-toolbar">
+                  <div className="search-wrap">
+                    <Search aria-hidden="true" />
                     <input
                       className="search"
+                      type="search"
                       value={search}
                       onChange={(event) => setSearch(event.target.value)}
                       placeholder={accountsText.searchProfile}
                       aria-label={accountsText.searchProfile}
                     />
-                  </label>
-                  <div className="segmented account-view-toggle" aria-label={accountsText.viewMode}>
-                    <button className={viewMode === "cards" ? "is-selected" : ""} onClick={() => setViewMode("cards")} title={accountsText.cards} aria-label={accountsText.cards}><LayoutGrid /><span>{accountsText.cards}</span></button>
-                    <button className={viewMode === "table" ? "is-selected" : ""} onClick={() => setViewMode("table")} title={accountsText.table} aria-label={accountsText.table}><List /><span>{accountsText.table}</span></button>
+                    {search ? <button className="search-clear" onClick={() => setSearch("")} aria-label={isEnglish ? "Clear search" : "Очистить поиск"}><X /></button> : null}
+                  </div>
+                  <label className="account-sort-control provider-filter-control"><span className="sr-only">{isEnglish ? "Provider filter" : "Фильтр провайдера"}</span><select aria-label={isEnglish ? "Provider filter" : "Фильтр провайдера"} value={platformFilter} onChange={(event) => setPlatformFilter(event.target.value as PlatformFilter)}><option value="all">{isEnglish ? "All providers" : "Все провайдеры"}</option><option value="codex">Codex</option><option value="antigravity">Antigravity</option></select></label>
+                  <div className="segmented account-view-toggle" role="group" aria-label={accountsText.viewMode}>
+                    <button className={viewMode === "cards" ? "is-selected" : ""} aria-pressed={viewMode === "cards"} onClick={() => setViewMode("cards")} title={accountsText.cards} aria-label={accountsText.cards}><LayoutGrid /><span>{accountsText.cards}</span></button>
+                    <button className={viewMode === "table" ? "is-selected" : ""} aria-pressed={viewMode === "table"} onClick={() => setViewMode("table")} title={accountsText.table} aria-label={accountsText.table}><List /><span>{accountsText.table}</span></button>
                   </div>
                   <label className="account-sort-control" title={accountsText.sort}>
                     <ArrowUpDown aria-hidden="true" />
@@ -3309,38 +2447,11 @@ function App() {
                       <option value="name">{accountsText.nameSort}</option>
                     </select>
                   </label>
-                  <button className="button secondary" disabled={busy !== null || refreshableAccountCount === 0} onClick={refreshAllAccounts} title={refreshableAccountCount === 0 ? shellText.noRefreshableAccounts : shellText.refreshLimits}>
-                    {busy === "refresh:all" ? <Loader2 className="spin" /> : <RefreshCcw />}
-                    {uiText.actions.refresh}
-                  </button>
-                  <details className="account-tools-menu">
-                    <summary className="icon-btn" title={isEnglish ? "Import and export" : "Импорт и экспорт"} aria-label={isEnglish ? "Import and export" : "Импорт и экспорт"}><MoreHorizontal /></summary>
-                    <div>
-                      <button disabled={busy !== null || accounts.length === 0} onClick={exportAccounts}>{busy === "export" ? <Loader2 className="spin" /> : <FileDown />}{accountsText.export}</button>
-                      <button disabled={busy !== null} onClick={importAccounts}>{busy === "import" ? <Loader2 className="spin" /> : <FileUp />}{accountsText.import}</button>
-                    </div>
-                  </details>
-                </div>
               </div>
               <div className="profile-workbench">
-                <div className={`profile-main ${tableScrollable ? "is-scrollable" : ""}`}>
+                <div ref={profileMainRef} className="profile-main is-scrollable">
                   {viewMode === "table" ? (
-                    <div className="account-compact-list" role="list" aria-label={isEnglish ? "Compact account list" : "Компактный список аккаунтов"}>
-                      {visibleAccounts.map((account) => (
-                        <AccountCompactRow
-                          key={account.id}
-                          account={account}
-                          selected={selectedAccount?.id === account.id}
-                          privacyMode={privacyMode}
-                          busy={busy}
-                          isEnglish={isEnglish}
-                          onSelect={setSelectedAccountId}
-                          onSwitch={switchAccount}
-                        />
-                      ))}
-                      {scopedAccounts.length === 0 ? <div className="empty">{platformFilter === "antigravity" ? "Список Antigravity пуст" : "Список Codex пуст"}</div> : null}
-                      {scopedAccounts.length > 0 && visibleAccounts.length === 0 ? <div className="empty">{accountsText.emptyFiltered}</div> : null}
-                    </div>
+                    <ProfileTable accounts={visibleAccounts} selectedId={selectedAccount?.id ?? null} now={now} language={language} privacyMode={privacyMode} busy={busy} onSelect={setSelectedAccountId} onRefresh={refreshAccount} onRepair={repairAccount} onReauth={reauthenticateAccount} onSwitch={switchAccount} scrollPosition={profileScroll.current.table} onAdd={scopedAccounts.length === 0 ? platformFilter === "antigravity" ? openAntigravityImport : openLoginWizard : undefined} onInspect={(id, trigger) => { inspectorTriggerRef.current = trigger; setSelectedAccountId(id); setInspectorOpen(true); }} />
                   ) : (
                     <div className="profile-grid">
                       {visibleAccounts.map((account) => (
@@ -3349,6 +2460,7 @@ function App() {
                           account={account}
                           selected={selectedAccount?.id === account.id}
                           privacyMode={privacyMode}
+                          language={language}
                           busy={busy}
                           onRefresh={refreshAccount}
                           onSwitch={switchAccount}
@@ -3364,14 +2476,14 @@ function App() {
                       ))}
                       {scopedAccounts.length === 0 ? (
                         <div className="empty-onboarding">
-                          <strong>{platformFilter === "antigravity" ? "Список Antigravity пуст" : "Список Codex пуст"}</strong>
-                          <span>{platformFilter === "antigravity" ? "Добавь Antigravity через официальный вход и диагностику локального профиля IDE." : "Добавь Codex-профиль через один из официальных способов входа."}</span>
+                          <strong>{isEnglish ? "No profiles yet" : "Профилей пока нет"}</strong>
+                          <span>{isEnglish ? "Add a profile using an official sign-in method." : "Добавьте профиль одним из официальных способов входа."}</span>
                           <div className="mini-actions">
                             {platformFilter === "antigravity" ? (
-                              <button className="button" disabled={busy !== null} onClick={() => openAntigravityImport()}><KeyRound />Добавить Antigravity</button>
+                              <button className="button" disabled={busy !== null} onClick={() => openAntigravityImport()}><KeyRound />{shellText.addAntigravity}</button>
                             ) : (
                               <>
-                                <button className="button" disabled={busy !== null} onClick={openLoginWizard}><LogIn />Добавить Codex</button>
+                                <button className="button" disabled={busy !== null} onClick={openLoginWizard}><LogIn />{shellText.addCodex}</button>
                               </>
                             )}
                           </div>
@@ -3382,8 +2494,12 @@ function App() {
                   )}
                 </div>
               </div>
+              <footer className="profile-table-footer">
+                <span role="status">{isEnglish ? "Profiles shown" : "Показано профилей"} <strong>{visibleAccounts.length}</strong> {isEnglish ? "of" : "из"} {scopedAccounts.length}</span>
+                {viewMode === "table" && visibleAccounts.length > 0 ? <span><kbd>↑</kbd><kbd>↓</kbd>{isEnglish ? "select" : "выбор"}<kbd>Enter</kbd>{isEnglish ? "details" : "подробности"}</span> : null}
+              </footer>
             </section>
-          </>
+          </section>
         );
       case "activity":
         return (
@@ -3392,6 +2508,10 @@ function App() {
             history={switchHistory}
             accounts={accounts}
             isEnglish={isEnglish}
+            privacyMode={privacyMode}
+            busy={busy}
+            onRollback={(eventId) => void restoreSwitchSnapshot(eventId)}
+            onVerifyRuntime={(id) => void verifyRuntimeAccount(id)}
             onOpenSettings={() => setActiveView("settings")}
           />
         );
@@ -3403,10 +2523,6 @@ function App() {
             antigravityStatus={antigravityProfileStatus}
             accounts={accounts}
             busy={busy === "settings"}
-            godModeEnabled={antigravityGodMode}
-            hygieneBusy={hygieneBusy}
-            onToggleGodMode={(enabled) => void toggleGodMode(enabled)}
-            onCleanHygiene={() => void cleanHygiene()}
             onUpdate={(input) => void updateSettings(input)}
             onSelectWorkspace={selectWorkspace}
             onOpenLogViewer={openLogViewer}
@@ -3424,15 +2540,9 @@ function App() {
           <div className="mark">
             <img src={appAvatarUrl} alt="" aria-hidden="true" />
           </div>
-          <div className="rail-brand-meta">
-            <div className="rail-brand-overline">
-              <span className="eyebrow">{isEnglish ? "SESSION CONTROL" : "ЦЕНТР СЕССИЙ"}</span>
-              <span className="version">v{appVersion}</span>
-            </div>
-            <h1>Account Manager EGO</h1>
-          </div>
+          <h1>{productName}</h1>
         </div>
-        <nav className="rail-nav">
+        <nav className="rail-nav" style={{ "--nav-index": navItems.findIndex((item) => item.key === activeView) } as React.CSSProperties}><span className="rail-nav-selection" aria-hidden="true" />
           {navItems.map((item) => {
             const Icon = item.icon;
             return (
@@ -3444,9 +2554,8 @@ function App() {
                 aria-current={activeView === item.key ? "page" : undefined}
                 title={`${item.label} · ${item.description}`}
               >
-                <Icon />
+                <Icon aria-hidden="true" />
                 <span>{item.label}</span>
-                <small>{item.description}</small>
               </button>
             );
           })}
@@ -3456,49 +2565,39 @@ function App() {
           {platformSummaries.map((platform) => (
             <button
               key={platform.id}
-              className={`platform-tile ${platform.id} ${platform.tone} ${platformFilter === platform.id ? "is-active" : ""} ${platform.available ? "" : "is-coming-soon"}`}
+              className={`platform-tile ${platform.tone} ${activeView === "accounts" && platformFilter === platform.id ? "is-active" : ""}`}
               aria-label={`${platform.label}: ${platform.count} · ${platform.state}`}
-              aria-disabled={!platform.available}
-              title={platform.available ? `${platform.label} · ${platform.state}` : undefined}
-              data-tooltip={platform.available ? undefined : (isEnglish ? "Antigravity · In development" : "Antigravity · В разработке")}
+              aria-pressed={activeView === "accounts" && platformFilter === platform.id}
+              title={`${platform.label} · ${platform.state}`}
               onClick={() => {
-                if (!platform.available) return;
                 setActiveView("accounts");
-                setPlatformFilter(platform.id as PlatformFilter);
+                setPlatformFilter((current) => activeView === "accounts" && current === platform.id ? "all" : platform.id);
               }}
             >
               <span className="platform-tile-label">
-                <PlatformMark platform={platform.id as "codex" | "antigravity"} size="tile" />
-                <span>{platform.label}</span>
+                <PlatformMark platform={platform.id} size="tile" />
+                <span><b>{platform.label}</b><small>{platform.state}</small></span>
               </span>
               <strong>{platform.count}</strong>
-              <small>{platform.state}</small>
             </button>
           ))}
         </section>
-        <div className="rail-footer" role="status" aria-live="polite">
-          <span>{message}</span>
+        <div className="rail-footer">
+          <p role="status"><span className={`rail-status-dot is-${loadState}`} aria-hidden="true" />{message ? displayMetadata(message, privacyMode, language) : uiText.states.success}</p>
+          <span className="version">v{appVersion}</span>
         </div>
       </aside>
 
       <section className="app-frame">
         <header className="topbar">
-          <div className="topbar-context">
-            <span>{activeNav.label}</span>
-            <strong>{activeNav.description}</strong>
-          </div>
-          <nav className="top-nav compact-top-nav" aria-label={shellText.consoleSections}>
-            {navItems.map((item) => (
-              <button
-                key={item.key}
-                className={activeView === item.key ? "is-active" : ""}
-                onClick={() => setActiveView(item.key)}
-                aria-current={activeView === item.key ? "page" : undefined}
-              >
-                {item.label}
-              </button>
-            ))}
-          </nav>
+          <button className="button secondary command-trigger" aria-label={shellText.commands} title={shellText.commands} aria-keyshortcuts="Control+k Meta+k" onClick={() => {
+            setCommandOpen(true);
+            setCommandSearch("");
+          }}>
+            <Command aria-hidden="true" />
+            <span>{shellText.commands}</span>
+            <kbd>Ctrl K</kbd>
+          </button>
           <div className="actions top-actions">
             <button
               className="button secondary audit-top-trigger"
@@ -3508,34 +2607,22 @@ function App() {
             >
               <Activity size={14} />
               <span>{isEnglish ? "Audit" : "Аудит"}</span>
-              {switchTransactions.length > 0 && (
-                <span className="audit-badge">{switchTransactions.length}</span>
-              )}
             </button>
-            <button className="button secondary command-trigger" onClick={() => {
-              setCommandOpen(true);
-              setCommandSearch("");
-            }}>
-              <Command />
-              {shellText.commands}
-              <kbd>Ctrl K</kbd>
-            </button>
-            <button className="button secondary update-check-button" disabled={busy !== null} onClick={checkApplicationUpdates}>
-              {busy === "updates" ? <Loader2 className="spin" /> : <RefreshCcw />}
-              {isEnglish ? "Check app" : "Проверить"}
+            <button className="icon-btn update-check-button" aria-label={isEnglish ? "Check app updates" : "Проверить обновления приложения"} title={isEnglish ? "Check app updates" : "Проверить обновления приложения"} disabled={busy !== null} aria-busy={busy === "updates"} onClick={checkApplicationUpdates}>
+              {busy === "updates" ? <Loader2 className="spin" /> : <PackageCheck />}
             </button>
             <button className="button" disabled={busy !== null} onClick={platformFilter === "antigravity" ? () => openAntigravityImport() : openLoginWizard}>
-              {platformFilter === "antigravity" ? <KeyRound /> : <LogIn />}
-              {platformFilter === "antigravity" ? shellText.addAntigravity : shellText.addCodex}
+              <Plus />
+              <span>{isEnglish ? "Add profile" : "Добавить профиль"}</span>
             </button>
             <div className="window-controls" aria-label={shellText.windowControls}>
-              <button className="window-btn" onClick={() => void cam.minimizeWindow()} title={shellText.minimize}>
+              <button className="window-btn" onClick={() => void cam.minimizeWindow()} title={shellText.minimize} aria-label={shellText.minimize}>
                 <Minus />
               </button>
-              <button className="window-btn" onClick={() => void cam.toggleMaximizeWindow()} title={shellText.maximize}>
+              <button className="window-btn" onClick={() => void cam.toggleMaximizeWindow()} title={shellText.maximize} aria-label={shellText.maximize}>
                 <Maximize2 />
               </button>
-              <button className="window-btn close" onClick={() => void cam.closeWindow()} title={shellText.close}>
+              <button className="window-btn close" onClick={() => void cam.closeWindow()} title={shellText.close} aria-label={shellText.close}>
                 <X />
               </button>
             </div>
@@ -3545,18 +2632,26 @@ function App() {
         {appNotifications.length > 0 ? (
           <section className="process-notice-stack" aria-label={isEnglish ? "Application notifications" : "Уведомления приложения"}>
             {appNotifications.map((notice) => (
-              <aside className={`process-notice is-${notice.tone}`} role={notice.tone === "error" ? "alert" : "status"} aria-live={notice.tone === "error" ? "assertive" : "polite"} key={notice.key}>
-                <span className="process-notice-copy">
-                  <span>{notice.progress?.label ?? (notice.tone === "warning" ? (isEnglish ? "ATTENTION" : "ВНИМАНИЕ") : notice.tone === "error" ? (isEnglish ? "ACTION REQUIRED" : "НУЖНО ДЕЙСТВИЕ") : (isEnglish ? "CODEX MANAGER" : "CODEX MANAGER"))}</span>
-                  <strong>{notice.title}</strong>
-                  <small>{notice.body}</small>
+              <aside className={`process-notice is-${notice.tone}`} key={notificationOperation(notice.key)}>
+                <span className="process-notice-icon" aria-hidden="true">
+                  {notice.tone === "progress" ? <Loader2 className="spin" /> : notice.tone === "success" ? <CheckCircle2 /> : <AlertTriangle />}
                 </span>
+                <div className="process-notice-copy" role={notice.tone === "error" ? "alert" : "status"}>
+                  <strong>{displayMetadata(notice.title, privacyMode, language)}</strong>
+                  <small>{displayMetadata(notice.body, privacyMode, language)}</small>
+                </div>
                 <button className="process-notice-close" onClick={() => setAppNotifications((current) => current.filter((item) => item.key !== notice.key))} aria-label={isEnglish ? "Dismiss notification" : "Закрыть уведомление"}><X /></button>
-                {notice.progress ? (
-                  <span className="process-notice-progress" aria-label={`${Math.round(notice.progress.value * 100)}%`}>
-                    <span><small>{notice.progress.status}</small><b>{Math.round(notice.progress.value * 100)}%</b></span>
+                {notice.progress && notice.tone === "progress" ? (
+                  <span className="process-notice-progress" role="progressbar" aria-label={notice.progress.label} aria-valuetext={notice.progress.status} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(Math.max(0, Math.min(1, notice.progress.value)) * 100)}>
+                    <span><small>{notice.progress.status}</small><b>{Math.round(Math.max(0, Math.min(1, notice.progress.value)) * 100)}%</b></span>
                     <i><em style={{ width: `${Math.max(0, Math.min(100, notice.progress.value * 100))}%` }} /></i>
                   </span>
+                ) : null}
+                {notice.key.startsWith("switch:") && (notice.tone === "error" || notice.tone === "warning") ? (
+                  <button className="notice-journal-link" onClick={() => {
+                    setActiveView("activity");
+                    setAppNotifications((current) => current.filter((item) => item.key !== notice.key));
+                  }}>{isEnglish ? "Open journal" : "Открыть журнал"}</button>
                 ) : null}
               </aside>
             ))}
@@ -3579,10 +2674,10 @@ function App() {
         {loadState === "error" || loadState === "degraded" ? (
           <div className={`runtime-state-banner ${loadState}`} role="alert">
             <AlertTriangle />
-            <span>
+            <div>
               <strong>{loadState === "error" ? (isEnglish ? "Account data did not load" : "Данные аккаунтов не загрузились") : (isEnglish ? "Limited mode" : "Ограниченный режим")}</strong>
-              {isEnglish ? "Saved profiles were not deleted. Retry the desktop connection." : "Сохранённые профили не удалены. Повтори подключение к desktop-сервису."}
-            </span>
+              <p>{isEnglish ? "Retry the connection to the local vault." : "Повторите подключение к локальному хранилищу."}</p>
+            </div>
             <div className="runtime-state-actions">
               {loadError ? (
                 <button className="button ghost" onClick={() => void openLogsFolder()}><TerminalSquare />{isEnglish ? "Log" : "Журнал"}</button>
@@ -3591,18 +2686,20 @@ function App() {
             </div>
           </div>
         ) : null}
+        {!loginWizard.open && (loginWizard.phase === "waiting" || loginWizard.phase === "starting") ? <div className="pending-login-banner" role="status"><KeyRound /><span>{isEnglish ? "Codex sign-in is still pending." : "Вход Codex ещё ожидает завершения."}</span><button className="button secondary compact-button" onClick={openLoginWizard}>{isEnglish ? "Continue sign-in" : "Продолжить вход"}</button></div> : null}
+        {!antigravityImportOpen && antigravityOAuthSession ? <div className="pending-login-banner" role="status"><KeyRound /><span>{isEnglish ? "Antigravity sign-in is still pending." : "Вход Antigravity ещё ожидает завершения."}</span><button className="button secondary compact-button" onClick={() => setAntigravityImportOpen(true)}>{isEnglish ? "Continue sign-in" : "Продолжить вход"}</button></div> : null}
         {loadState === "loading" ? (
           <div className="content boot-loading" role="status" aria-live="polite">
             <Loader2 className="spin" />
-            <strong>{isEnglish ? "Connecting to the local vault…" : "Подключаю локальное хранилище…"}</strong>
-            <span>{isEnglish ? "Accounts remain encrypted on this computer." : "Аккаунты остаются зашифрованными на этом компьютере."}</span>
+            <strong>{isEnglish ? "Opening the local vault…" : "Открываем локальное хранилище…"}</strong>
           </div>
         ) : (
-          <div className={`content content-${activeView}`}>{pageContent}</div>
+          <div ref={contentRef} className={`content content-${activeView}`}>{pageContent}</div>
         )}
       </section>
       <AddAccountWizard
         state={loginWizard}
+        language={language}
         busy={busy}
         capabilities={diagnostics?.codexCapabilities}
         onStart={(input) => void startLogin(input)}
@@ -3612,8 +2709,8 @@ function App() {
         onImportCurrentSession={() => void importCurrentCodexSession()}
         onClose={closeLoginWizard}
       />
-      <ConfirmDialog state={confirmState} onClose={closeConfirm} />
       <CommandPalette
+        language={language}
         open={commandOpen}
         query={commandSearch}
         commands={commandPalette}
@@ -3634,11 +2731,8 @@ function App() {
         >
           <div className="profile-details-dialog">
             <div className="modal-head">
-              <div>
-                <div className="panel-title">{isEnglish ? "Profile details" : "Подробности профиля"}</div>
-                <p className="muted">{isEnglish ? "Status, limits and every profile action in one place." : "Состояние, лимиты и все действия с профилем в одном окне."}</p>
-              </div>
-              <button ref={inspectorCloseButtonRef} className="icon-btn" onClick={() => setInspectorOpen(false)} title={isEnglish ? "Close" : "Закрыть"}>
+              <h2 className="panel-title">{isEnglish ? "Profile details" : "Подробности профиля"}</h2>
+              <button ref={inspectorCloseButtonRef} className="icon-btn" onClick={() => setInspectorOpen(false)} title={isEnglish ? "Close" : "Закрыть"} aria-label={isEnglish ? "Close" : "Закрыть"}>
                 <X />
               </button>
             </div>
@@ -3658,7 +2752,7 @@ function App() {
                 setInspectorOpen(false);
                 void deleteAccount(id);
               }}
-              onRegenerateFingerprint={regenerateFingerprint}
+              onVerifyRuntime={verifyRuntimeAccount}
             />
           </div>
         </div>
@@ -3666,6 +2760,7 @@ function App() {
       {antigravityImportOpen ? (
         <AntigravityImportModal
           busy={busy}
+          language={language}
           profileStatus={antigravityProfileStatus}
           oauthSession={antigravityOAuthSession}
           callbackUrl={antigravityCallbackUrl}
@@ -3674,7 +2769,7 @@ function App() {
           onTokenPayload={setAntigravityTokenPayload}
           result={antigravityImportResult}
           displayEmail={displayEmail}
-          onClose={() => void cancelAntigravityOAuthAuthorization()}
+          onClose={closeAntigravityImport}
           onStartOAuth={() => void startAntigravityOAuthAuthorization()}
           onFinishOAuth={(manualCallback) => void finishAntigravityOAuthAuthorization(manualCallback)}
           onImportToken={() => void importAntigravityTokenPayload()}
@@ -3686,27 +2781,28 @@ function App() {
           onImportCurrentSession={() => void importCurrentAntigravitySession()}
         />
       ) : null}
+      {importPreview ? <ImportPreviewDialog preview={importPreview} language={language} privacyMode={privacyMode} now={now} busy={busy === "import:apply"} onApply={() => void applyImport()} onClose={() => setImportPreview(null)} /> : null}
       {transferMode ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={transferMode === "export" ? "Экспорт аккаунтов" : "Импорт аккаунтов"}>
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={transferMode === "export" ? (isEnglish ? "Export profiles" : "Экспорт профилей") : (isEnglish ? "Import profiles" : "Импорт профилей")}>
           <div className="transfer-modal">
-            <div className="panel-title">{transferMode === "export" ? "Экспорт аккаунтов" : "Импорт аккаунтов"}</div>
+            <div className="panel-title">{transferMode === "export" ? (isEnglish ? "Export profiles" : "Экспорт профилей") : (isEnglish ? "Import profiles" : "Импорт профилей")}</div>
             <p className="muted">
               {transferMode === "export"
-                ? "Задай пароль для зашифрованного файла. Он понадобится для импорта на другом ПК."
-                : "Введи пароль от экспортированного файла, чтобы перенести авторизации на этот ПК."}
+                ? (isEnglish ? "Set a password for the encrypted file. Keep it for import on another PC." : "Задайте пароль для зашифрованного файла. Он понадобится для импорта на другом ПК.")
+                : (isEnglish ? "Enter the exported file password to review its profiles before import." : "Введите пароль экспортированного файла, чтобы проверить профили перед импортом.")}
             </p>
             <label className="field">
-              <span>Пароль</span>
-              <input autoFocus type="password" aria-label={transferMode === "export" ? "Пароль экспорта" : "Пароль импорта"} value={transferPassword} onChange={(event) => setTransferPassword(event.target.value)} onKeyDown={(event) => {
+              <span>{isEnglish ? "Password" : "Пароль"}</span>
+              <input data-dialog-initial-focus type="password" aria-label={transferMode === "export" ? (isEnglish ? "Export password" : "Пароль экспорта") : (isEnglish ? "Import password" : "Пароль импорта")} value={transferPassword} onChange={(event) => setTransferPassword(event.target.value)} onKeyDown={(event) => {
                 if (event.key === "Enter") submitTransferPrompt();
                 if (event.key === "Escape") closeTransferPrompt(null);
               }} />
-              <small className={`password-hint ${passwordStrength(transferPassword).className}`}>{passwordStrength(transferPassword).label}</small>
+              <small className={`password-hint ${passwordStrength(transferPassword, language).className}`}>{passwordStrength(transferPassword, language).label}</small>
             </label>
             {transferMode === "export" ? (
               <label className="field">
-                <span>Повтор пароля</span>
-                <input type="password" aria-label="Повтор пароля экспорта" value={transferConfirm} onChange={(event) => setTransferConfirm(event.target.value)} onKeyDown={(event) => {
+                <span>{isEnglish ? "Confirm password" : "Повтор пароля"}</span>
+                <input type="password" aria-label={isEnglish ? "Confirm export password" : "Повтор пароля экспорта"} value={transferConfirm} onChange={(event) => setTransferConfirm(event.target.value)} onKeyDown={(event) => {
                   if (event.key === "Enter") submitTransferPrompt();
                   if (event.key === "Escape") closeTransferPrompt(null);
                 }} />
@@ -3714,49 +2810,49 @@ function App() {
             ) : null}
             {transferError ? <div className="form-error">{transferError}</div> : null}
             <div className="modal-actions">
-              <button className="button secondary" onClick={() => closeTransferPrompt(null)}>Отмена</button>
-              <button className="button" onClick={submitTransferPrompt}>{transferMode === "export" ? "Экспорт" : "Импорт"}</button>
+              <button className="button secondary" onClick={() => closeTransferPrompt(null)}>{isEnglish ? "Cancel" : "Отмена"}</button>
+              <button className="button" onClick={submitTransferPrompt}>{transferMode === "export" ? (isEnglish ? "Export" : "Экспорт") : (isEnglish ? "Review import" : "Проверить импорт")}</button>
             </div>
           </div>
         </div>
       ) : null}
       {showLogViewer ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Журнал диагностики">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={isEnglish ? "Diagnostic log" : "Журнал диагностики"}>
           <div className="transfer-modal log-viewer">
             <div className="modal-head">
               <div>
-                <div className="panel-title">Журнал диагностики</div>
-                <p className="muted">Последние записи без секретов и токенов.</p>
+                <div className="panel-title">{isEnglish ? "Diagnostic log" : "Журнал диагностики"}</div>
+                <p className="muted">{isEnglish ? "Recent diagnostic events" : "Последние события диагностики"}</p>
               </div>
-              <button className="icon-btn" onClick={() => setShowLogViewer(false)} title="Закрыть">
+              <button className="icon-btn" onClick={() => setShowLogViewer(false)} aria-label={isEnglish ? "Close" : "Закрыть"}>
                 <X />
               </button>
             </div>
-            <pre className="log-lines">{logLines.join("\n")}</pre>
+            <pre className="log-lines">{(privacyMode ? logLines.map((line) => displayMetadata(line, true, language)) : logLines).join("\n")}</pre>
             <div className="modal-actions">
               <button className="button secondary" onClick={openLogsFolder}>
                 <FolderOpen />
-                Папка логов
+                {isEnglish ? "Log folder" : "Папка логов"}
               </button>
-              <button className="button" onClick={() => setShowLogViewer(false)}>Готово</button>
+              <button className="button" onClick={() => setShowLogViewer(false)}>{isEnglish ? "Done" : "Готово"}</button>
             </div>
           </div>
         </div>
       ) : null}
       {showReleaseNotes ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Что нового">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={isEnglish ? "What's new" : "Что нового"}>
           <div className="transfer-modal release-notes-modal">
             <div className="modal-head">
               <div>
-                <div className="panel-title">Что нового в {appVersion}</div>
-                <p className="muted">Коротко о свежем релизе.</p>
+                <div className="panel-title">{isEnglish ? "New in" : "Что нового в"} {appVersion}</div>
+                <p className="muted">{isEnglish ? "Changes in this local release candidate." : "Изменения локальной предварительной версии."}</p>
               </div>
-              <button className="icon-btn" onClick={closeReleaseNotes} title="Закрыть">
+              <button className="icon-btn" onClick={closeReleaseNotes} aria-label={isEnglish ? "Close" : "Закрыть"}>
                 <X />
               </button>
             </div>
             <div className="release-notes-list">
-              {releaseNotes.map((note) => (
+              {(isEnglish ? englishReleaseNotes : releaseNotes).map((note) => (
                 <article key={note.title}>
                   <CheckCircle2 />
                   <div>
@@ -3770,8 +2866,8 @@ function App() {
               <button className="button secondary" onClick={() => {
                 closeReleaseNotes();
                 setActiveView("accounts");
-              }}>Аккаунты</button>
-              <button className="button" onClick={closeReleaseNotes}>Понятно</button>
+              }}>{isEnglish ? "Profiles" : "Профили"}</button>
+              <button className="button" onClick={closeReleaseNotes}>{isEnglish ? "Got it" : "Понятно"}</button>
             </div>
           </div>
         </div>
@@ -3784,7 +2880,9 @@ function App() {
         accounts={accounts}
         isEnglish={isEnglish}
         displayEmail={displayEmail}
+        privacyMode={privacyMode}
       />
+      <ConfirmDialog state={confirmState ? { ...confirmState, body: displayMetadata(confirmState.body, privacyMode, language), details: confirmState.details?.map((detail) => displayMetadata(detail, privacyMode, language)) } : null} language={language} onClose={closeConfirm} />
     </main>
   );
 }
@@ -3796,7 +2894,7 @@ function BridgeUnavailable() {
       <div>
         <p>DESKTOP BRIDGE</p>
         <h1>Интерфейс не подключён к приложению</h1>
-        <p>Данные аккаунтов не загружены и не потеряны. Перезапустите Account Manager EGO. При повторении экрана переустановите текущую версию поверх существующей.</p>
+        <p>Данные аккаунтов не загружены и не потеряны. Перезапустите Квессер. При повторении экрана переустановите текущую версию поверх существующей.</p>
       </div>
     </main>
   );
@@ -3804,14 +2902,18 @@ function BridgeUnavailable() {
 
 const root = createRoot(document.getElementById("root")!);
 const surface = new URLSearchParams(window.location.search).get("surface");
+function ApplicationSurface() {
+  useMotionEnvironment();
+  return window.cam || import.meta.env.DEV
+    ? surface === "tray"
+      ? <TrayPopover api={cam} />
+      : surface === "tray-hover"
+        ? <TrayHoverPopover api={cam} />
+        : <App />
+    : <BridgeUnavailable />;
+}
 root.render(
   <React.StrictMode>
-    {window.cam || import.meta.env.DEV
-      ? surface === "tray"
-        ? <TrayPopover api={cam} />
-        : surface === "tray-hover"
-          ? <TrayHoverPopover api={cam} />
-          : <App />
-      : <BridgeUnavailable />}
+    <ApplicationSurface />
   </React.StrictMode>
 );

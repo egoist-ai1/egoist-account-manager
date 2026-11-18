@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import http from "node:http";
+import { ProviderRequestError, providerHttpError } from "../../shared/quotaRefreshError.js";
 
 export const ANTIGRAVITY_GOOGLE_OAUTH_SCOPES = [
   "https://www.googleapis.com/auth/cloud-platform",
@@ -17,8 +18,6 @@ const googleUserInfoUrls = [
 ] as const;
 const codeAssistContextEndpoints = [
   "https://daily-cloudcode-pa.googleapis.com",
-  "https://autopush-cloudcode-pa.sandbox.googleapis.com",
-  "https://daily-cloudcode-pa.sandbox.googleapis.com",
   "https://cloudcode-pa.googleapis.com"
 ] as const;
 const callbackPath = "/oauth-callback";
@@ -153,49 +152,27 @@ export function createAntigravityOAuthState(): string {
   return crypto.randomBytes(24).toString("base64url");
 }
 
-// Fallback official client ID & secret obfuscated with byte-masking
-// to prevent static push-protection scanners from flagging desktop OAuth client strings.
-const BUNDLED_CLIENT_ID_BYTES = [
-  107, 106, 109, 107, 106, 106, 108, 106, 108, 106, 111, 99, 107, 119, 46, 55, 50, 41, 41, 51,
-  52, 104, 50, 104, 107, 54, 57, 40, 63, 104, 105, 111, 44, 46, 53, 54, 53, 48, 50, 110,
-  61, 110, 106, 105, 63, 42, 116, 59, 42, 42, 41, 116, 61, 53, 53, 61, 54, 63, 47, 41,
-  63, 40, 57, 53, 52, 46, 63, 52, 46, 116, 57, 53, 55
-];
-const BUNDLED_CLIENT_SECRET_BYTES = [
-  29, 21, 25, 9, 10, 2, 119, 17, 111, 98, 28, 13, 8, 110, 98, 108, 22, 62, 22, 16,
-  107, 55, 22, 24, 98, 41, 2, 25, 110, 32, 108, 43, 30, 27, 60
-];
-
-function deobfuscate(bytes: number[]): string {
-  return String.fromCharCode(...bytes.map((b) => b ^ 0x5a));
+function configuredOAuthClient(env: AntigravityGoogleOAuthEnv): { clientId: string; clientSecret: string | null } | null {
+  const managerId = env.CAM_ANTIGRAVITY_OAUTH_CLIENT_ID?.trim();
+  if (managerId) return { clientId: managerId, clientSecret: env.CAM_ANTIGRAVITY_OAUTH_CLIENT_SECRET?.trim() || null };
+  const clientId = env.ANTIGRAVITY_OAUTH_CLIENT_ID?.trim();
+  return clientId ? { clientId, clientSecret: env.ANTIGRAVITY_OAUTH_CLIENT_SECRET?.trim() || null } : null;
 }
 
-export const DEFAULT_ANTIGRAVITY_OAUTH_CLIENT_ID = deobfuscate(BUNDLED_CLIENT_ID_BYTES);
-export const DEFAULT_ANTIGRAVITY_OAUTH_CLIENT_SECRET = deobfuscate(BUNDLED_CLIENT_SECRET_BYTES);
+export function resolveAntigravityOAuthClient(env: AntigravityGoogleOAuthEnv = process.env as AntigravityGoogleOAuthEnv) {
+  const client = configuredOAuthClient(env);
+  if (!client) throw new Error("Для входа через Google укажите CAM_ANTIGRAVITY_OAUTH_CLIENT_ID своего OAuth-клиента и перезапустите Квессер.");
+  return client;
+}
 
-export function resolveAntigravityOAuthClient(env: AntigravityGoogleOAuthEnv = {}): {
-  clientId: string;
-  clientSecret: string | null;
-  usesBundledPublicClient: boolean;
-} {
-  const customClientId = env.CAM_ANTIGRAVITY_OAUTH_CLIENT_ID?.trim() || env.ANTIGRAVITY_OAUTH_CLIENT_ID?.trim();
-  const customClientSecret = env.CAM_ANTIGRAVITY_OAUTH_CLIENT_SECRET?.trim()
-    || env.ANTIGRAVITY_OAUTH_CLIENT_SECRET?.trim()
-    || null;
-
-  if (customClientId) {
-    return {
-      clientId: customClientId,
-      clientSecret: customClientSecret,
-      usesBundledPublicClient: false
-    };
-  }
-
-  return {
-    clientId: DEFAULT_ANTIGRAVITY_OAUTH_CLIENT_ID,
-    clientSecret: DEFAULT_ANTIGRAVITY_OAUTH_CLIENT_SECRET,
-    usesBundledPublicClient: true
-  };
+export function resolveAntigravityOAuthClientForAccount(
+  storedClientId: string | null | undefined,
+  env: AntigravityGoogleOAuthEnv = process.env as AntigravityGoogleOAuthEnv
+): ReturnType<typeof resolveAntigravityOAuthClient> {
+  const clientId = storedClientId?.trim();
+  if (!clientId) return resolveAntigravityOAuthClient(env);
+  const configured = configuredOAuthClient(env);
+  return configured?.clientId === clientId ? configured : { clientId, clientSecret: null };
 }
 
 export function buildAntigravityGoogleAuthUrl(input: {
@@ -223,30 +200,47 @@ export function buildAntigravityGoogleAuthUrl(input: {
   return `${googleAuthUrl}?${params.toString()}`;
 }
 
-async function fetchWithHardTimeout(fetchPromise: Promise<Response>, timeoutMs: number, label: string): Promise<Response> {
-  let timeout: NodeJS.Timeout | null = null;
-  const timeoutPromise = new Promise<Response>((_resolve, reject) => {
-    timeout = setTimeout(() => reject(new Error(`${label} timed out after ${Math.ceil(timeoutMs / 1000)} seconds`)), timeoutMs);
-  });
+async function requestJson<T>(input: {
+  fetchImpl: typeof fetch; url: string; init?: RequestInit; timeoutMs: number; label: string; signal?: AbortSignal;
+}): Promise<{ response: Response; body: T }> {
+  const controller = new AbortController();
+  const cancel = () => controller.abort(input.signal?.reason ?? new Error(`${input.label} cancelled`));
+  input.signal?.addEventListener("abort", cancel, { once: true });
+  if (input.signal?.aborted) cancel();
+  let timer: NodeJS.Timeout | undefined;
   try {
-    return await Promise.race([fetchPromise, timeoutPromise]);
+    return await Promise.race([
+      (async () => {
+        if (controller.signal.aborted) throw controller.signal.reason;
+        const response = await input.fetchImpl(input.url, { ...input.init, signal: controller.signal });
+        const tokenEndpoint = input.url === googleTokenUrl;
+        if ([401, 403, 429].includes(response.status) && !(tokenEndpoint && response.status === 401)) {
+          const error = providerHttpError(response.status, input.label, response.headers.get("Retry-After"));
+          controller.abort(error);
+          throw error;
+        }
+        const text = await response.text();
+        let body: T;
+        try { body = (text ? JSON.parse(text) : {}) as T; } catch { body = {} as T; }
+        if (tokenEndpoint && !response.ok) {
+          const code = (body as TokenResponse | null)?.error;
+          if (code === "invalid_client" || code === "unauthorized_client") {
+            throw new ProviderRequestError({ category: "provider_forbidden", statusCode: response.status,
+              retryAfterSeconds: null, requiresReauth: false, retryable: false,
+              message: "Google отклонил OAuth-клиент. Проверьте настройки клиента, выдавшего разрешение этому профилю." });
+          }
+        }
+        return { response, body };
+      })(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => controller.abort(new Error(`${input.label} timed out after ${Math.ceil(input.timeoutMs / 1000)} seconds`)), input.timeoutMs);
+        if (controller.signal.aborted) reject(controller.signal.reason);
+        controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true });
+      })
+    ]);
   } finally {
-    if (timeout) clearTimeout(timeout);
-  }
-}
-
-async function readJsonWithHardTimeout<T>(response: Response, timeoutMs: number, label: string): Promise<T> {
-  let timeout: NodeJS.Timeout | null = null;
-  const timeoutPromise = new Promise<T>((_resolve, reject) => {
-    timeout = setTimeout(() => reject(new Error(`${label} timed out after ${Math.ceil(timeoutMs / 1000)} seconds`)), timeoutMs);
-  });
-  try {
-    const bodyPromise = response.text()
-      .then((text) => (text ? JSON.parse(text) : {}) as T)
-      .catch(() => ({} as T));
-    return await Promise.race([bodyPromise, timeoutPromise]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
+    if (timer) clearTimeout(timer);
+    input.signal?.removeEventListener("abort", cancel);
   }
 }
 
@@ -265,7 +259,7 @@ function authCompleteHtml(success: boolean, message: string): string {
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
-  <title>Egoist Account Manager</title>
+  <title>Квессер</title>
   <style>
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0f0f12; color: #f4f0ff; font-family: system-ui, -apple-system, Segoe UI, sans-serif; }
     main { width: min(520px, calc(100vw - 40px)); border: 1px solid #302b3a; border-radius: 14px; padding: 28px; background: #17151d; box-shadow: 0 18px 60px rgba(0,0,0,.45); }
@@ -335,7 +329,7 @@ async function createCallbackServer(timeoutMs = 5 * 60_000): Promise<Antigravity
           return;
         }
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        res.end(authCompleteHtml(true, "Egoist Account Manager завершает привязку аккаунта. Вернись в приложение через несколько секунд."));
+        res.end(authCompleteHtml(true, "Квессер завершает привязку аккаунта. Вернись в приложение через несколько секунд."));
         if (!settled) {
           settled = true;
           resolveCallback({ code, state });
@@ -498,6 +492,7 @@ export async function exchangeAntigravityGoogleCode(input: {
   fetchImpl?: typeof fetch;
   now?: () => number;
   requestTimeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<AntigravityGoogleOAuthTokens> {
   const params = new URLSearchParams({
     client_id: input.clientId,
@@ -509,16 +504,11 @@ export async function exchangeAntigravityGoogleCode(input: {
   if (input.clientSecret) params.set("client_secret", input.clientSecret);
 
   const fetchImpl = input.fetchImpl ?? fetch;
-  const response = await fetchWithHardTimeout(
-    fetchImpl(googleTokenUrl, {
+  const { response, body } = await requestJson<TokenResponse>({ fetchImpl, url: googleTokenUrl, init: {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: params
-    }),
-    input.requestTimeoutMs ?? 20_000,
-    "Google token exchange"
-  );
-  const body = await readJsonWithHardTimeout<TokenResponse>(response, input.requestTimeoutMs ?? 20_000, "Google token response");
+    }, timeoutMs: input.requestTimeoutMs ?? 20_000, label: "Google token exchange", signal: input.signal });
   if (!response.ok || typeof body.access_token !== "string") {
     const description = typeof body.error_description === "string"
       ? body.error_description
@@ -541,18 +531,14 @@ export async function fetchAntigravityGoogleUserInfo(input: {
   accessToken: string;
   fetchImpl?: typeof fetch;
   requestTimeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<AntigravityGoogleUserInfo> {
   const fetchImpl = input.fetchImpl ?? fetch;
   let lastError: Error | null = null;
   for (const url of googleUserInfoUrls) {
-    const response = await fetchWithHardTimeout(
-      fetchImpl(url, {
+    const { response, body } = await requestJson<UserInfoResponse>({ fetchImpl, url, init: {
         headers: { Authorization: `Bearer ${input.accessToken}` }
-      }),
-      input.requestTimeoutMs ?? 20_000,
-      "Google userinfo request"
-    );
-    const body = await readJsonWithHardTimeout<UserInfoResponse>(response, input.requestTimeoutMs ?? 20_000, "Google userinfo response");
+      }, timeoutMs: input.requestTimeoutMs ?? 20_000, label: "Google userinfo request", signal: input.signal });
     if (response.ok && typeof body.email === "string" && body.email.includes("@")) {
       return {
         id: typeof body.id === "string" && body.id ? body.id : null,
@@ -561,7 +547,8 @@ export async function fetchAntigravityGoogleUserInfo(input: {
         name: typeof body.name === "string" && body.name ? body.name : null
       };
     }
-    lastError = new Error(`Google user info request failed with HTTP ${response.status}`);
+    lastError = providerHttpError(response.status, "Google user info request", response.headers.get("Retry-After"));
+    if ([401, 403, 429].includes(response.status)) throw lastError;
   }
   throw lastError ?? new Error("Google user info request failed");
 }
@@ -597,14 +584,12 @@ function tierPreferredDisplayValue(tier: LoadCodeAssistTier | null | undefined):
 function classifyTierLabel(label: string | null): "free" | "standard" | "paid" | "unknown" {
   const normalized = (label ?? "").toLowerCase().trim();
   if (!normalized) return "unknown";
-  if (normalized.includes("free") || normalized.includes("zero") || normalized === "legacy-tier") return "free";
-  if (normalized.includes("standard-tier") || normalized.includes("antigravity standard")) return "standard";
+  if (/^(free(?:-tier)?|zero|legacy-tier)(?:\s|$)/.test(normalized)) return "free";
+  if (/^standard-tier(?:\s|$)/.test(normalized) || normalized === "antigravity standard") return "standard";
   // Generic values such as `g1-pro-tier` are returned by internal Code Assist
   // eligibility payloads and can describe an available tier, not the user's
   // active subscription. Only strong plan markers are surfaced as paid.
-  if (/(google[\s_-]*ai[\s_-]*pro|google[\s_-]*ai[\s_-]*ultra|ultra)/.test(normalized)) return "paid";
-  if (/\b(plus|team|business|enterprise|edu)\b/.test(normalized)) return "paid";
-  if (/(^|[-_\s])(x?10|x?20)([-_\s]|$)/.test(normalized)) return "paid";
+  if (/(?:^|\s)google[\s_-]*ai[\s_-]*(?:pro|ultra(?:[\s_-]*x20)?)(?:$|\s)/.test(normalized)) return "paid";
   return "unknown";
 }
 
@@ -663,9 +648,7 @@ function selectedTier(body: LoadCodeAssistResponse): LoadCodeAssistTier | null {
   const currentClass = classifyTierLabel(tierLabel(body.currentTier));
   if (currentClass === "paid") return body.currentTier ?? null;
   if (currentClass !== "unknown") return body.currentTier ?? null;
-  const defaultTier = defaultAllowedTier(body);
-  if (defaultTier && classifyTierLabel(tierLabel(defaultTier)) !== "unknown") return defaultTier;
-  return null;
+  return body.currentTier ?? null;
 }
 
 function extractTier(body: LoadCodeAssistResponse): "free" | "standard" | "paid" | "unknown" {
@@ -683,7 +666,7 @@ function extractTier(body: LoadCodeAssistResponse): "free" | "standard" | "paid"
 function extractTierId(body: LoadCodeAssistResponse): string | null {
   const tier = selectedTier(body);
   if (classifyTierLabel(tierLabel(tier)) !== "unknown") return tierPreferredDisplayValue(tier);
-  return strongPlanInfoLabel(body);
+  return strongPlanInfoLabel(body) ?? tierPreferredDisplayValue(tier);
 }
 
 function codeAssistHeaders(accessToken: string): Record<string, string> {
@@ -714,15 +697,6 @@ function buildCodeAssistMetadata(pluginType: "ANTIGRAVITY" | "GEMINI", projectId
 
 const codeAssistMetadataCandidates: ReadonlyArray<{ metadata?: Record<string, string>; mode?: string }> = [
   { metadata: buildCodeAssistMetadata("GEMINI") },
-  { metadata: buildCodeAssistMetadata("ANTIGRAVITY") },
-  {
-    metadata: {
-      ideType: "IDE_UNSPECIFIED",
-      platform: "PLATFORM_UNSPECIFIED",
-      pluginType: "GEMINI"
-    },
-    mode: "FULL_ELIGIBILITY_CHECK"
-  },
   { mode: "FULL_ELIGIBILITY_CHECK" }
 ] as const;
 
@@ -754,6 +728,7 @@ async function onboardCodeAssistProject(input: {
   metadata: Record<string, string>;
   fetchImpl: typeof fetch;
   requestTimeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<string | null> {
   const body = {
     tierId: input.tierId,
@@ -761,22 +736,19 @@ async function onboardCodeAssistProject(input: {
   };
   let operationName: string | null = null;
   for (let attempt = 0; attempt < 6; attempt += 1) {
-    const request = operationName
-      ? input.fetchImpl(`${input.endpoint}/v1internal/${operationName}`, {
+    const url: string = operationName ? `${input.endpoint}/v1internal/${operationName}` : `${input.endpoint}/v1internal:onboardUser`;
+    const init: RequestInit = operationName
+      ? {
           method: "GET",
           headers: codeAssistHeaders(input.accessToken)
-        })
-      : input.fetchImpl(`${input.endpoint}/v1internal:onboardUser`, {
+        }
+      : {
           method: "POST",
           headers: codeAssistHeaders(input.accessToken),
           body: JSON.stringify(body)
-        });
-    const response = await fetchWithHardTimeout(
-      request,
-      input.requestTimeoutMs,
-      operationName ? "Antigravity Code Assist onboarding poll" : "Antigravity Code Assist onboarding request"
-    );
-    const payload = await readJsonWithHardTimeout<OnboardUserResponse>(response, input.requestTimeoutMs, "Antigravity Code Assist onboarding response");
+        };
+    const { response, body: payload }: { response: Response; body: OnboardUserResponse } = await requestJson<OnboardUserResponse>({ fetchImpl: input.fetchImpl, url, init,
+      timeoutMs: input.requestTimeoutMs, label: "Antigravity Code Assist onboarding request", signal: input.signal });
     if (!response.ok) return null;
     const projectId = extractProjectId({ cloudaicompanionProject: payload.response?.cloudaicompanionProject });
     if (projectId) return projectId;
@@ -791,29 +763,32 @@ export async function fetchAntigravityGoogleAccountContext(input: {
   accessToken: string;
   fetchImpl?: typeof fetch;
   requestTimeoutMs?: number;
+  allowOnboarding?: boolean;
+  signal?: AbortSignal;
 }): Promise<AntigravityGoogleAccountContext> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const requestTimeoutMs = input.requestTimeoutMs ?? 20_000;
   const errors: string[] = [];
-  for (const endpoint of codeAssistContextEndpoints) {
+  let requestCount = 0;
+  contextRequests: for (const endpoint of codeAssistContextEndpoints) {
     for (const payload of codeAssistMetadataCandidates) {
+      if (requestCount >= 4) break contextRequests;
+      requestCount += 1;
       try {
-        const response = await fetchWithHardTimeout(
-          fetchImpl(`${endpoint}/v1internal:loadCodeAssist`, {
+        const { response, body } = await requestJson<LoadCodeAssistResponse>({ fetchImpl, url: `${endpoint}/v1internal:loadCodeAssist`, init: {
             method: "POST",
             headers: codeAssistHeaders(input.accessToken),
             body: JSON.stringify(buildLoadCodeAssistPayload(payload))
-          }),
-          requestTimeoutMs,
-          "Antigravity Code Assist context request"
-        );
-        const body = await readJsonWithHardTimeout<LoadCodeAssistResponse>(response, requestTimeoutMs, "Antigravity Code Assist context response");
+          }, timeoutMs: requestTimeoutMs, label: "Antigravity Code Assist context request", signal: input.signal });
         if (!response.ok) {
+          if ([401, 403, 429].includes(response.status)) {
+            throw providerHttpError(response.status, "Antigravity Code Assist context", response.headers.get("Retry-After"));
+          }
           errors.push(`HTTP ${response.status}`);
           continue;
         }
         let googleProjectId = extractProjectId(body);
-        if (!googleProjectId) {
+        if (!googleProjectId && input.allowOnboarding === true) {
           const tierId = shouldAttemptOnboard(body);
           if (tierId) {
             googleProjectId = await onboardCodeAssistProject({
@@ -822,8 +797,9 @@ export async function fetchAntigravityGoogleAccountContext(input: {
               tierId,
               metadata: payload.metadata ?? {},
               fetchImpl,
-              requestTimeoutMs
+              requestTimeoutMs, signal: input.signal
             }).catch((error) => {
+              if (error instanceof ProviderRequestError || input.signal?.aborted) throw error;
               errors.push(error instanceof Error ? error.message : String(error));
               return null;
             });
@@ -837,6 +813,7 @@ export async function fetchAntigravityGoogleAccountContext(input: {
           errorReason: null
         };
       } catch (error) {
+        if (error instanceof ProviderRequestError || input.signal?.aborted) throw error;
         errors.push(error instanceof Error ? error.message : String(error));
       }
     }
@@ -857,6 +834,7 @@ export async function refreshAntigravityGoogleAccessToken(input: {
   fetchImpl?: typeof fetch;
   now?: () => number;
   requestTimeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<AntigravityGoogleOAuthTokens> {
   const params = new URLSearchParams({
     client_id: input.clientId,
@@ -866,23 +844,23 @@ export async function refreshAntigravityGoogleAccessToken(input: {
   if (input.clientSecret) params.set("client_secret", input.clientSecret);
 
   const fetchImpl = input.fetchImpl ?? fetch;
-  const response = await fetchWithHardTimeout(
-    fetchImpl(googleTokenUrl, {
+  const { response, body } = await requestJson<TokenResponse>({ fetchImpl, url: googleTokenUrl, init: {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: params
-    }),
-    input.requestTimeoutMs ?? 20_000,
-    "Google refresh token exchange"
-  );
-  const body = await readJsonWithHardTimeout<TokenResponse>(response, input.requestTimeoutMs ?? 20_000, "Google refresh token response");
+    }, timeoutMs: input.requestTimeoutMs ?? 20_000, label: "Google refresh token exchange", signal: input.signal });
   if (!response.ok || typeof body.access_token !== "string") {
     const description = typeof body.error_description === "string"
       ? body.error_description
       : typeof body.error === "string"
         ? body.error
         : "refresh token exchange failed";
-    throw new Error(`Google refresh token exchange failed: ${description}.`);
+    if (body.error === "invalid_grant") {
+      throw new ProviderRequestError({ category: "unauthorized", statusCode: response.status,
+        retryAfterSeconds: null, requiresReauth: true, retryable: false,
+        message: "Google refresh token exchange failed: invalid_grant." });
+    }
+    throw providerHttpError(response.status, `Google refresh token exchange: ${description}`, response.headers.get("Retry-After"));
   }
   const nowSeconds = input.now ? input.now() : Math.floor(Date.now() / 1000);
   return {

@@ -1,26 +1,49 @@
-# Egoist Account Manager — application map
+# Egoist 3.2.0 RC — карта функций и состояний
 
-## Actors and flows
+Версия результата: 3.2.0-rc.1. Исходная точка: 3.1.10, commit d315ba1. Эта карта описывает текущую ветку реализации, а не гарантирует совместимость с каждой версией внешних IDE.
 
-- Пользователь добавляет или импортирует разрешённый профиль, отдельно видит сохранность входа и свежесть quotas, затем выбирает активный аккаунт.
-- Switch flow: capture exact Codex lifecycle → staged auth activation → relaunch → runtime identity proof → commit или verified rollback.
-- Session sync: распознанная активная Codex-сессия локально снимается в DPAPI-vault каждые 30 секунд и перед suspend/lock/quit; операция не запускает app-server и не управляет процессами Codex.
-- Quota refresh: общий non-rotating probe выполняется каждые 3 минуты; отдельный live-tray цикл `1/3/5/10/15/off` проверяет только активный профиль и пропускает уже свежий общий snapshot. Последний успешный снимок сохраняется отдельно от transient transport error, exponential backoff подавляет повторный spam, а зависшие запросы ограничены timeout.
-- Repair flow: validate sealed auth → repeat official quota probe → при provider revoke открыть device-code reauth того же профиля без удаления или дубля.
-- Device-code flow: main копирует валидированный код → открывает официальный allowlisted URL → пользователь выбирает аккаунт и вставляет `Ctrl+V`; неизменённый код очищается по TTL или при выходе.
-- Codex onboarding: renderer/preload/IPC предлагают только официальные browser, device-code, API-key и Enterprise-token flows. Каждый подтверждённый профиль живёт в manager-owned `CODEX_HOME`, а last-known-good credential запечатывается DPAPI; импорт текущей сессии и произвольного `auth.json` публично отсутствует.
-- Overview показывает live quota/source/readiness и «План продолжения»: кандидат считается готовым только при защищённом входе, fresh official snapshot и известном минимальном остатке; stale/unknown/error профили получают явную причину и `—`, а не ложный `0%`. «Ближайший сброс» выбирает ранний будущий provider window среди всех защищённых, неархивных Codex-профилей и показывает точное время, источник и полноту выборки, поэтому активный профиль больше не подменяет общий fleet-state. Accounts сохраняет 3×3 сетку при `1460×900`, включает внутренний scroll для 10+ записей и компактный list-mode; обычный badge показывает общее число, а `показано из всего` появляется только при поиске. Smart-order фиксирован как active → usable/readiness → plan priority → remaining quota → nearest reset → freshness; доступны отдельные сортировки по подписке, остатку, сбросу, свежести, дате добавления и имени. Инспектор сразу показывает все шесть действий без accordion, закрывается по `Escape` и возвращает keyboard focus; Activity — единый journal и четыре объяснённые стадии safety-chain без клиппинга; Settings оставляет только ежедневные параметры в естественном прокручиваемом потоке.
-- Windows shell: tray включён для новых установок и показывает крупный точный процент фактически ограничивающего подтверждённого quota window в 16/20/24/32px representations, отдельные error/stale/unknown glyph и пассивный privacy-aware hover surface без системной серой tooltip. Single-digit glyph использует свободную цифру на тёмной плитке и короткий state-rail вместо рамки. Hover-панель 252×144 px показывает активный Codex-профиль, одну актуальную шкалу и reset-time, сама появляется и исчезает, не принимает focus/мышь и не содержит действий; её top-level canvas прозрачен, а граница не имеет внешней тени или backdrop blur. Отдельный click popup сохраняет refresh и открытие Manager. Windows-toast отсутствуют; in-app очередь показывает milestones, rollback/failure и deduplicated quota threshold со звуком только для значимого результата. AppUserModelId, shortcuts и installer используют единый ICO/PNG.
+## Основные поверхности
 
-## Implementation map
+| Поверхность | Действия | Единое правило |
+|---|---|---|
+| Профили | Плотная таблица по умолчанию, дополнительный вид карточек, поиск, провайдер, сортировка, общий inspector | Выбранная строка и выбранный для IDE профиль — разные состояния |
+| Обзор | Остатки, ошибки, выбранные профили, рекомендации | Общие quota selection и readiness из shared |
+| Журнал | Фазы транзакций, evidence, сохранённый snapshot, ручной откат | Failed, rolled_back и recovery_required не означают успешного переключения |
+| Настройки | RU/EN, privacy, motion, tray, расписание обновления | Технические пути существующего хранилища сохраняются |
+| Tray | Остаток ограничивающего известного окна, профиль, свежесть, ручное действие | Unknown не превращается в 100%; выбранный профиль не получает runtime proof автоматически |
 
-- `src/main/` — privileged lifecycle, vault, storage, diagnostics и IPC.
-- `src/renderer/` — React UI; `v306.css` задаёт clarity-first visual system, `v307.css` фиксирует длинную identity, `v308.css` владеет device-code/card/inspector precision layer, `v309.css` — quota/continuation и notification queue, `v310.css` — viewport-fit/onboarding/reset/accounts polish, `tray-popover.css` — интерактивная click surface, а `tray-hover.css`/`TrayHoverPopover.tsx` — пассивная 252×144 single-window hover surface. `src/shared/accountListPresentation.ts` владеет provider-neutral quota summary и детерминированными account orders; `src/shared/liveTray.ts` — provider-window selection и dependency-free multi-DPI BGRA renderer, `traySurfacePosition.ts` — edge-aware расположением.
-- `scripts/run-windows-sandbox-release-test.ps1` воспроизводит guest-local verified install 3.1.5 → running upgrade 3.1.6 → uninstall → reinstall → portable gate в disposable Sandbox. `scripts/run-windows-sandbox-live-e2e.ps1` экспортирует только inactive ready-кандидаты, оставляет в госте ровно две identity-verified сессии, выполняет четыре UI-переключения и fault-сценарии hang/crash/rejected-auth rollback. Оба контура возвращают redacted JSON; live-контур дополнительно доказывает неизменность host PID/auth и удаление encrypted stage.
-- `scripts/generate-icons.mjs` собирает renderer/public PNG и многоразмерный ICO из alpha-master без ручной постобработки отдельных размеров.
-- `tests/` и Playwright smoke — deterministic behavior/package evidence; `release/` — generated artifacts.
+Стрелки, Home/End перемещают выбор таблицы; Enter открывает inspector. Переключение запускает явно обозначенная кнопка. При обновлении данных сохраняются выбор и фокус. Диалоги поддерживают Escape, цикл фокуса и возврат фокуса. Закрытие окна незавершённого входа скрывает его; вход можно продолжить.
 
-## States to preserve
+## Аккаунт, credentials и наблюдение
 
-- loading/refreshing/stale/current-error quotas, credential ready/needs reauth, active/recommended, archived, recovery required, switch phase, rollback и offline. Историческая ошибка старше свежего snapshot не является repair-state.
-- Credential-store modes `file`, `keyring`, `auto`, `ephemeral` сохраняют fail-closed semantics; manager не переписывает пользовательский config.
+| Состояние | Что известно | Доступность |
+|---|---|---|
+| needs_review | Credentials сохранены либо локально обнаружены, identity ещё не проверена | Проверка/повторный вход; автоматические действия исключены |
+| ready | Identity credentials проверена указанным методом | Ручное применение при готовом адаптере |
+| needs_reauth / drifted | Авторизация недействительна либо материал изменился | Повторный вход/диагностика |
+| selected (legacy isActive) | Приложение выбрало профиль | Не доказывает identity работающей IDE |
+| runtime unsupported | Профиль применён, но проверяемый runtime identity недоступен | Сохранён snapshot, повторная проверка/ручной откат; auto-switch заблокирован |
+| runtime verified | Привязанный Antigravity GetUserStatus подтвердил email | Именно runtime email, без утверждения о workspace/subject |
+| recovery_required | Откат не доказан либо восстановление неоднозначно | Чтение/диагностика сохраняются; новые изменения провайдера заблокированы |
+
+Evidence хранит отдельно profileApplied, credentials/credentialMethod, launch, runtime/runtimeSource, observedEmail и сведения о привязанном процессе. Независимый Codex app-server является probe credentials, а не доказательством аккаунта Codex Desktop.
+
+## Операционные потоки
+
+- Вход Codex → новый owned profile → официальный probe → encrypted vault. Повторный вход сохраняет новые credentials в vault; Desktop обновляется только отдельным применением.
+- Импорт .cam-export → полная расшифровка/валидация → preview с конфликтами → одно атомарное apply. Новые внутренние UUID, конфликты пропускаются; plaintext auth.json не создаётся.
+- Применение → provider lock + cross-process write lock → проверка credentials → quiesce → sealed snapshot полного write-set → запись/readback → запуск → runtime evidence → commit либо verified rollback.
+- Авария → startup recovery с тем же координатором → проверка полного snapshot/исходного отсутствия файлов → очистка только owned transient stages. Неоднозначный результат требует recovery.
+- Обновление лимитов → общий scheduler → provider adapter → identity + account/version/epoch checks → last-good snapshot либо отдельная ошибка. Максимум два независимых probes, записи одного провайдера сериализуются. Background refresh не запускает inference.
+
+## Квоты
+
+Сохраняются все buckets, scope, modelId, реальная windowDurationMins, source, capturedAt и дробные значения. Отображение округляет данные, а не хранилище. Unknown: «—»; положительный остаток менее 1%: «<1%». Reset timer, истёкший без нового наблюдения, означает необходимость обновить данные.
+
+Рекомендация требует известного подходящего модельного окна не старше 15 минут. Last-good, последняя попытка и последняя ошибка независимы; 401, 403 и 429 не объединяются в «истёк токен».
+
+## Границы продукта
+
+GodMode, подмена fingerprint и quota warmup/inference исключены из обычного интерфейса. Нет обязательного аккаунта Egoist, телеметрии, новой облачной инфраструктуры или монетизации. Настоящая IDE и provider network не вызываются из изолированного test probe.
+
+Связанные материалы: [архитектура](ARCHITECTURE.md), [аудит и результаты](releases/3.2.0-rc.1.md), [рынок и источники](research-3.2.0.md), [benchmark protocol](benchmark-3.2.0.md).

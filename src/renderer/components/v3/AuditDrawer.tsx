@@ -14,7 +14,8 @@ import {
   XCircle
 } from "lucide-react";
 import type { ManagedAccount, SwitchHistoryItem, SwitchTransaction, SwitchTransactionPhase } from "../../../shared/types";
-import { verificationSummary } from "./ActivityPage";
+import { verificationSummary, matchesActivityFilter } from "./ActivityPage";
+import { displayMetadata } from "../../displayPrivacy";
 
 type ActivityFilter = "all" | "success" | "rollback" | "error";
 
@@ -35,7 +36,7 @@ const compactStages = [
   },
   {
     id: "launch",
-    labels: ["Launch Codex", "Запустить Codex"],
+    labels: ["Launch IDE", "Запустить IDE"],
     descriptions: ["Clean Desktop restart", "Чистый перезапуск Desktop"],
     phases: ["launching"] as SwitchTransactionPhase[],
     icon: Rocket
@@ -76,6 +77,7 @@ function statusIcon(transaction: SwitchTransaction) {
 }
 
 function statusLabel(transaction: SwitchTransaction, isEnglish: boolean): string {
+  if (transaction.status === "committed") return transaction.verification?.runtime === "verified" ? (isEnglish ? "Runtime confirmed" : "IDE подтверждена") : (isEnglish ? "Profile applied" : "Профиль применён");
   const labels: Record<SwitchTransaction["status"], [string, string]> = {
     pending: ["Ready", "Готово"],
     running: ["In progress", "В процессе"],
@@ -89,12 +91,7 @@ function statusLabel(transaction: SwitchTransaction, isEnglish: boolean): string
   return labels[transaction.status][isEnglish ? 0 : 1];
 }
 
-function matchesFilter(transaction: SwitchTransaction, filter: ActivityFilter): boolean {
-  if (filter === "all") return true;
-  if (filter === "success") return transaction.status === "committed";
-  if (filter === "rollback") return transaction.status === "rolled_back" || transaction.status === "aborted";
-  return transaction.status === "failed" || transaction.status === "recovery_required";
-}
+
 
 export interface AuditDrawerProps {
   open: boolean;
@@ -104,6 +101,7 @@ export interface AuditDrawerProps {
   accounts: ManagedAccount[];
   isEnglish: boolean;
   displayEmail?: (email: string) => string;
+  privacyMode?: boolean;
 }
 
 export function AuditDrawer({
@@ -112,19 +110,20 @@ export function AuditDrawer({
   transactions,
   accounts,
   isEnglish,
+  privacyMode = false,
   displayEmail = (e) => e
 }: AuditDrawerProps) {
   const [filter, setFilter] = useState<ActivityFilter>("all");
 
   const successful = transactions.filter((item) => item.status === "committed").length;
-  const recovered = transactions.filter((item) => item.status === "rolled_back").length;
   const problems = transactions.filter((item) => item.status === "failed" || item.status === "recovery_required").length;
 
-  const visibleTransactions = useMemo(() => transactions.filter((item) => matchesFilter(item, filter)), [filter, transactions]);
+  const visibleTransactions = useMemo(() => transactions.filter((item) => matchesActivityFilter(item, filter)), [filter, transactions]);
 
   const accountLabel = (id: string | null) => {
     if (!id) return isEnglish ? "External session" : "Внешняя сессия";
-    return accounts.find((account) => account.id === id)?.label ?? id.slice(0, 8);
+    const label = accounts.find((account) => account.id === id)?.label ?? id.slice(0, 8);
+    return displayMetadata(label, privacyMode, isEnglish ? "en" : "ru");
   };
 
   const accountEmail = (id: string | null) => {
@@ -136,7 +135,7 @@ export function AuditDrawer({
   if (!open) return null;
 
   return (
-    <div className="audit-drawer-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label={isEnglish ? "Switch Audit Journal" : "Журнал аудита переключений"}>
+    <div className="audit-drawer-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label={isEnglish ? "Switch audit log" : "Журнал аудита переключений"}>
       <aside className="audit-drawer-panel" onClick={(e) => e.stopPropagation()}>
         {/* Drawer Header */}
         <div className="audit-drawer-header">
@@ -145,8 +144,8 @@ export function AuditDrawer({
               <Activity size={18} />
             </span>
             <div>
-              <h3>{isEnglish ? "Switch Audit Journal" : "Журнал аудита"}</h3>
-              <p>{isEnglish ? "Verified transactions and session rollback safety" : "Подтверждённые транзакции и безопасность отката"}</p>
+              <h3>{isEnglish ? "Switch audit log" : "Журнал аудита"}</h3>
+              <p>{isEnglish ? "Profile changes and their observed evidence" : "Изменения профилей и фактические подтверждения"}</p>
             </div>
           </div>
           <button className="icon-btn audit-close-btn" onClick={onClose} aria-label={isEnglish ? "Close journal" : "Закрыть журнал"}>
@@ -158,10 +157,10 @@ export function AuditDrawer({
         <div className="audit-safety-summary">
           <div className="audit-safety-header">
             <ShieldCheck size={16} />
-            <strong>{isEnglish ? "Four-stage safety prevents Codex from launching unverified" : "Четыре этапа не дают Codex запуститься"}</strong>
+            <strong>{isEnglish ? "Separate levels of confirmation" : "Раздельные уровни подтверждения"}</strong>
           </div>
           <div className="switch-stage-copy">
-            <span>{isEnglish ? "Current and target identity verification, atomic backup and safe rollback." : "Резервная копия и замена auth с гарантированным откатом при сбое."}</span>
+            <span>{isEnglish ? "Applying a profile and launching the IDE do not confirm its runtime account. An unconfirmed account requires attention." : "Применение профиля и запуск IDE не подтверждают её фактический аккаунт. Неподтверждённый аккаунт требует внимания."}</span>
           </div>
           <div className="audit-stages-mini-grid">
             {compactStages.map((stage) => {
@@ -185,12 +184,12 @@ export function AuditDrawer({
             <small>{transactions.length}</small>
           </button>
           <button className={filter === "success" ? "is-active" : ""} onClick={() => setFilter("success")}>
-            <span>{isEnglish ? "Verified" : "Успех"}</span>
+            <span>{isEnglish ? "Applied" : "Применено"}</span>
             <small>{successful}</small>
           </button>
           <button className={filter === "rollback" ? "is-active" : ""} onClick={() => setFilter("rollback")}>
-            <span>{isEnglish ? "Rollback" : "Откат"}</span>
-            <small>{recovered}</small>
+            <span>{isEnglish ? "Rollback / cancel" : "Откат / отмена"}</span>
+            <small>{transactions.filter((item) => matchesActivityFilter(item, "rollback")).length}</small>
           </button>
           <button className={filter === "error" ? "is-active" : ""} onClick={() => setFilter("error")}>
             <span>{isEnglish ? "Attention" : "Сбой"}</span>
@@ -235,7 +234,7 @@ export function AuditDrawer({
                 <div className="audit-tx-summary">
                   <span>{verificationSummary(tx, isEnglish)}</span>
                   {tx.errorMessage && (
-                    <p className="audit-tx-error">{tx.errorMessage}</p>
+                    <p className="audit-tx-error">{displayMetadata(tx.errorMessage, privacyMode, isEnglish ? "en" : "ru")}</p>
                   )}
                 </div>
               </div>

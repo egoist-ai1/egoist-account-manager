@@ -15,6 +15,8 @@ interface RefreshBackoffEntry {
   lastReason: string;
 }
 
+export const MAX_PROVIDER_RETRY_AFTER_MS = 2_147_483_647;
+
 export class RefreshBackoff {
   private readonly entries = new Map<string, RefreshBackoffEntry>();
   private readonly nowMs: () => number;
@@ -36,13 +38,17 @@ export class RefreshBackoff {
     };
   }
 
-  recordFailure(accountId: string, reason: string): void {
+  recordFailure(accountId: string, reason: string, provider: { retryAfterSeconds?: number | null } = {}): void {
     const previous = this.entries.get(accountId);
     const failures = (previous?.failures ?? 0) + 1;
-    const delayMs = Math.min(this.options.maxDelayMs, this.options.baseDelayMs * 2 ** (failures - 1));
+    const exponentialMs = Math.min(this.options.maxDelayMs, this.options.baseDelayMs * 2 ** (failures - 1));
+    const retryAfter = provider.retryAfterSeconds;
+    const providerMs = typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter > 0
+      ? Math.min(MAX_PROVIDER_RETRY_AFTER_MS, Math.ceil(retryAfter * 1000)) : 0;
+    const delayMs = Math.max(exponentialMs, providerMs);
     this.entries.set(accountId, {
       failures,
-      blockedUntilMs: this.nowMs() + delayMs,
+      blockedUntilMs: Math.max(previous?.blockedUntilMs ?? 0, this.nowMs() + delayMs),
       lastReason: reason
     });
   }

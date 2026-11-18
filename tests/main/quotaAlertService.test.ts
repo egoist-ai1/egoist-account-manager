@@ -5,10 +5,11 @@ import type { ManagedAccount } from "../../src/shared/types";
 const now = 2_000_000;
 
 function account(input: Partial<ManagedAccount> & Pick<ManagedAccount, "id" | "label">): ManagedAccount {
+  const { id, label, ...rest } = input;
   return {
-    id: input.id,
+    id,
     platform: input.platform ?? "codex",
-    label: input.label,
+    label,
     email: input.email ?? `${input.id}@example.com`,
     authMode: input.authMode ?? "chatgpt",
     providerAccountId: null,
@@ -42,7 +43,10 @@ function account(input: Partial<ManagedAccount> & Pick<ManagedAccount, "id" | "l
     notes: null,
     archived: input.archived ?? false,
     favorite: input.favorite ?? false,
-    antigravity: null
+    antigravity: null,
+    runtimeVerification: { profileApplied: true, credentials: "online_verified", credentialMethod: "fixture", launch: "process_started",
+      runtime: "verified", runtimeSource: "fixture", observedEmail: input.email ?? `${input.id}@example.com`, observedAt: now, runtimePid: 1, message: "fixture" },
+    ...rest
   };
 }
 
@@ -121,5 +125,36 @@ describe("QuotaAlertService", () => {
 
     expect(alerts).toHaveLength(1);
     expect(alerts[0].recommendedAccountId).toBeNull();
+  });
+
+  it("keeps fractional values and blocks an automatic recommendation for unconfirmed runtime", () => {
+    const { service } = harness();
+    const alerts = service.evaluate([
+      account({ id: "active", label: "main", isActive: true, runtimeVerification: null, primaryUsedPercent: 99.6, fiveHourUsedPercent: 99.6 }),
+      account({ id: "spare", label: "reserve", primaryUsedPercent: 10, fiveHourUsedPercent: 10 })
+    ], 10);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].remainingPercent).toBeCloseTo(0.4);
+    expect(alerts[0].recommendedAccountId).toBeNull();
+  });
+
+  it("does not notify using the last good observation after a current failure or reset deadline", () => {
+    const { service } = harness();
+    expect(service.evaluate([
+      account({ id: "failed", label: "failed", isActive: true, primaryUsedPercent: 99, fiveHourUsedPercent: 99, lastRefreshError: "HTTP 429", lastRefreshErrorAt: now }),
+      account({ id: "reset", label: "reset", isActive: true, primaryUsedPercent: 99, fiveHourUsedPercent: 99, secondaryResetsAt: now - 1, weeklyResetsAt: now - 1 })
+    ], 10)).toEqual([]);
+  });
+
+  it("does not treat an unrelated model alias as the selected Codex aggregate quota", () => {
+    const { service } = harness();
+    const window = (usedPercent: number) => ({ usedPercent, windowDurationMins: 300, resetsAt: now + 3600 });
+    expect(service.evaluate([account({ id: "main", label: "main", isActive: true, quotaSnapshot: {
+      limitId: "codex", limitName: "Codex", primary: window(20), secondary: null, credits: null, planType: "plus", rateLimitReachedType: null,
+      capturedAt: now - 10, buckets: [
+        { limitId: "codex", limitName: "Codex", primary: window(20), secondary: null },
+        { limitId: "metered-alias", limitName: "Other model", modelId: "other-model", primary: window(100), secondary: null }
+      ]
+    } })], 10)).toEqual([]);
   });
 });

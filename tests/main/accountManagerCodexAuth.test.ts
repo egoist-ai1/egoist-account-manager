@@ -189,6 +189,58 @@ afterEach(() => {
 });
 
 describe.skipIf(process.platform !== "win32")("AccountManager Codex auth modes", () => {
+  it("reuses a saved profile when importing its rotated current session", async () => {
+    const dir = tempDir();
+    const codexHome = path.join(dir, "global");
+    const store = new AccountStore(dir);
+    const vault = new Vault(dir);
+    const original = chatGptAuth("account-one", "first@example.com", "original");
+    const rotated = chatGptAuth("account-one", "first@example.com", "rotated");
+    const account = addChatGptAccount(store, vault, dir, "one", "first@example.com", "account-one", original);
+    const manager = new AccountManager(store, vault, dir, null, { codexHome });
+    fs.mkdirSync(codexHome);
+    fs.writeFileSync(getAuthFilePath(codexHome), rotated);
+    try {
+      expect(await manager.importCurrentCodexSession()).toMatchObject({ imported: true, account: { id: account.id, isActive: true } });
+      expect(store.list()).toHaveLength(1);
+      expect(vault.decryptUtf8(store.get(account.id)!.encryptedAuthJson)).toBe(rotated);
+    } finally { await manager.shutdown(); store.close(); }
+  });
+
+  it("leaves saved credentials intact when a different user signs into the same workspace", () => {
+    const dir = tempDir();
+    const codexHome = path.join(dir, "global");
+    const store = new AccountStore(dir);
+    const vault = new Vault(dir);
+    const original = chatGptAuth("shared", "first@example.com", "first");
+    const profile = addChatGptAccount(store, vault, dir, "first", "first@example.com", "shared", original);
+    store.setActive(profile.id);
+    const manager = new AccountManager(store, vault, dir, null, { codexHome });
+    const claims = Buffer.from(JSON.stringify({ email: "second@example.com" })).toString("base64url");
+    fs.mkdirSync(codexHome);
+    fs.writeFileSync(getAuthFilePath(codexHome), JSON.stringify({ tokens: {
+      account_id: "shared", id_token: `header.${claims}.sig`, access_token: "fixture"
+    } }));
+    try {
+      expect(manager.syncActiveCodexSession().status).toBe("unmanaged");
+      expect(vault.decryptUtf8(store.get(profile.id)!.encryptedAuthJson)).toBe(original);
+    } finally { store.close(); }
+  });
+
+  it.each(["keyring", "auto", "ephemeral"])("ignores a leftover auth file in %s store mode", async (mode) => {
+    const dir = tempDir();
+    const codexHome = path.join(dir, "global");
+    const store = new AccountStore(dir);
+    const manager = new AccountManager(store, new Vault(dir), dir, null, { codexHome });
+    fs.mkdirSync(codexHome);
+    fs.writeFileSync(path.join(codexHome, "config.toml"), `cli_auth_credentials_store = "${mode}"\n`);
+    fs.writeFileSync(getAuthFilePath(codexHome), chatGptAuth("old", "old@example.com", "old"));
+    try {
+      expect(await manager.importCurrentCodexSession()).toMatchObject({ imported: false, account: null });
+      expect(manager.syncActiveCodexSession().status).toBe("unsupported_store");
+      expect(store.list()).toHaveLength(0);
+    } finally { await manager.shutdown(); store.close(); }
+  });
   it.each([
     ["empty auth", "{}", "invalid"],
     ["empty tokens", '{"tokens":{}}', "invalid"],
@@ -396,7 +448,7 @@ describe.skipIf(process.platform !== "win32")("AccountManager Codex auth modes",
       expect(fs.existsSync(getAuthFilePath(globalCodexHome))).toBe(false);
       const refreshed = await manager.refreshAccount(account.id);
       expect(refreshed.credentialState).toBe("ready");
-      expect(refreshed.status).toBe("active");
+      expect(refreshed.status).toBe("unknown");
       expect(refreshed.lastRefreshError).toBeNull();
       expect(vault.decryptUtf8(store.get(account.id)!.encryptedAuthJson)).toBe(authJson);
       expect(fs.existsSync(getAuthFilePath(account.profileDir))).toBe(false);
@@ -427,6 +479,34 @@ describe.skipIf(process.platform !== "win32")("AccountManager Codex auth modes",
       await manager.shutdown();
       store.close();
     }
+  });
+
+  it("validates the active profile without rotating the running desktop session from a private copy", async () => {
+    const dir = tempDir();
+    const store = new AccountStore(dir);
+    const vault = new Vault(dir);
+    const initial = JSON.stringify({ ...JSON.parse(chatGptAuth("owner", "me@example.com", "stable")), ROTATE_TO: "fixture-replacement" });
+    const account = addChatGptAccount(store, vault, dir, "active-owner", "me@example.com", "owner", initial);
+    store.setActive(account.id);
+    const manager = new AccountManager(store, vault, dir, installFakeCodex(dir), { codexHome: path.join(dir, "global") });
+    try {
+      expect((await manager.validateAuth(account.id)).state).toBe("authorized");
+      expect(vault.decryptUtf8(store.get(account.id)!.encryptedAuthJson)).toBe(initial);
+    } finally { await manager.shutdown(); store.close(); }
+  });
+
+  it("keeps the old profile when reauthentication signs in as another user", async () => {
+    const dir = tempDir();
+    const store = new AccountStore(dir);
+    const vault = new Vault(dir);
+    const initial = chatGptAuth("existing", "original@example.com", "stable");
+    const account = addChatGptAccount(store, vault, dir, "previous", "original@example.com", "existing", initial);
+    const manager = new AccountManager(store, vault, dir, installFakeCodex(dir), { codexHome: path.join(dir, "global") });
+    try {
+      await expect(manager.reauthenticateAccount(account.id, { type: "enterpriseAccessToken", credential: "synthetic" })).rejects.toThrow(/different account/i);
+      expect(vault.decryptUtf8(store.get(account.id)!.encryptedAuthJson)).toBe(initial);
+      expect(store.get(account.id)?.profileDir).toBe(account.profileDir);
+    } finally { await manager.shutdown(); store.close(); }
   });
 
   it("classifies the app-server not-authenticated response as reauthentication required", async () => {
@@ -1359,7 +1439,7 @@ describe.skipIf(process.platform !== "win32")("AccountManager Codex auth modes",
 
       const firstSwitch = managerOne.switchAccount(oneSecond.account!.id);
       await quiesceEntered;
-      await expect(managerTwo.switchAccount(twoSecond.account!.id)).rejects.toThrow("Another Egoist Account Manager process");
+      await expect(managerTwo.switchAccount(twoSecond.account!.id)).rejects.toThrow("Another Egoist process");
       expect(storeTwo.get(twoFirst.account!.id)?.isActive).toBe(true);
       expect(managerTwo.listSwitchTransactions()).toEqual([]);
 

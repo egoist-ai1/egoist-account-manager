@@ -2,20 +2,64 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { AccountManager } from "../../src/main/accountManager";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AccountManager, type AccountManagerDependencies } from "../../src/main/accountManager";
 import { AccountStore } from "../../src/main/db";
 import { Vault } from "../../src/main/security";
 import { ANTIGRAVITY_AUTH_STATE_KEY } from "../../src/main/services/antigravityAccountAdapter";
 import { parseAntigravityUnifiedOAuthToken } from "../../src/main/services/antigravityUnifiedState";
+import { buildAntigravityCredentialStorePayload, type AntigravityCredentialStoreTokenInput } from "../../src/main/services/antigravityCredentialStore";
 
 const tempDirs: string[] = [];
+const openStores = new Set<AccountStore>();
 
 function tempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cam-manager-ag-"));
   tempDirs.push(dir);
   return dir;
 }
+
+function createManager(store: AccountStore, vault: Vault, appDir: string, codexPath: string | null = null,
+  dependencies: AccountManagerDependencies = {}): AccountManager {
+  if (!openStores.has(store)) {
+    const close = store.close.bind(store);
+    store.close = () => { if (openStores.delete(store)) close(); };
+    openStores.add(store);
+  }
+  let credentialPayload: string | null = null;
+  return new AccountManager(store, vault, appDir, codexPath, {
+    codexHome: path.join(appDir, "codex-fixture"),
+    antigravityPathInput: { platform: "win32", home: appDir,
+      get appData() { return path.dirname(store.list().find(account => account.platform === "antigravity")?.profileDir ?? path.join(appDir, "Antigravity IDE")); } },
+    readAntigravityCredentialStorePayload: vi.fn(() => credentialPayload === null ? null : { payload: credentialPayload, strategy: "windows-credential-manager" as const }),
+    writeAntigravityCredentialStoreToken: vi.fn((input: AntigravityCredentialStoreTokenInput) => {
+      credentialPayload = buildAntigravityCredentialStorePayload(input);
+      return { applied: true, strategy: "windows-credential-manager" as const };
+    }),
+    restoreAntigravityCredentialStorePayload: vi.fn(snapshot => { credentialPayload = snapshot.existed ? snapshot.value : null; }),
+    detectAntigravityLiveSession: async () => null,
+    fetchAntigravityLiveQuota: async () => null,
+    quiesceAntigravity: vi.fn(() => ({ supported: true, attempted: true, wasRunning: true, quiesced: true, reason: "fixture" })),
+    launchAntigravity: vi.fn(() => ({ supported: true, attempted: true, restarted: true, exePath: "fixture.exe", reason: "fixture" })),
+    verifyAntigravityRuntimeIdentity: async () => ({ runtime: "unsupported", runtimeSource: null, observedEmail: null,
+      observedAt: null, runtimePid: null, message: "Аккаунт работающей IDE не подтверждён" }),
+    fetchAntigravityGoogleUserInfo: async ({ accessToken }) => {
+      for (const account of store.list()) {
+        const record = JSON.parse(vault.decryptUtf8(store.get(account.id)!.encryptedAuthJson)) as {
+          googleOAuth?: { accessToken?: string; accountId?: string; email?: string };
+          credentials?: { accessToken?: string; accountId?: string; email?: string }
+        };
+        const token = record.googleOAuth ?? record.credentials;
+        if (token?.accessToken === accessToken) return { id: token.accountId ?? null, email: token.email ?? account.email, verifiedEmail: true, name: "Fixture" };
+      }
+      throw new Error("No provider identity configured for this fixture token");
+    },
+    fetchAntigravityQuota: async () => { throw new Error("Quota provider network is disabled in this fixture"); },
+    ...dependencies
+  });
+}
+
+beforeEach(() => vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("Unconfigured provider network is forbidden in manager fixtures"); })));
 
 function createAntigravityProfile(appData: string): string {
   const userDataDir = path.join(appData, "Antigravity IDE");
@@ -57,7 +101,10 @@ function onceAccountsUpdated(manager: AccountManager): Promise<void> {
 }
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  vi.unstubAllGlobals();
+  for (const store of openStores) store.close();
+  openStores.clear();
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
 });
 
 describe("AccountManager Antigravity credentials", () => {
@@ -65,7 +112,7 @@ describe("AccountManager Antigravity credentials", () => {
     const appDir = tempDir();
     const store = new AccountStore(appDir);
     const detector = vi.fn(async () => null);
-    const manager = new AccountManager(store, new Vault(appDir), appDir, null, { detectAntigravityLiveSession: detector });
+    const manager = createManager(store, new Vault(appDir), appDir, null, { detectAntigravityLiveSession: detector });
     try {
       for (let i = 0; i < 100; i += 1) expect(manager.list()).toEqual([]);
       expect(detector).not.toHaveBeenCalled();
@@ -79,7 +126,7 @@ describe("AccountManager Antigravity credentials", () => {
     const storagePath = path.join(antigravityAppData, "Antigravity IDE", "User", "globalStorage", "storage.json");
     fs.writeFileSync(storagePath, JSON.stringify({ account: { email: "local-ag@example.com" }, refreshToken: "do-not-store" }), "utf8");
     const store = new AccountStore(appDir);
-    const manager = new AccountManager(store, new Vault(appDir), appDir, "codex");
+    const manager = createManager(store, new Vault(appDir), appDir, "codex");
 
     const result = await manager.importAntigravityFromIde({
       platform: "win32",
@@ -97,13 +144,13 @@ describe("AccountManager Antigravity credentials", () => {
     store.close();
   });
 
-  it("imports credentials through the guarded adapter and stores only encrypted vault state", async () => {
+  it("imports credentials into the vault without applying them to the IDE", async () => {
     const appDir = tempDir();
     const antigravityAppData = tempDir();
     const stateDbPath = createAntigravityProfile(antigravityAppData);
     const store = new AccountStore(appDir);
     const vault = new Vault(appDir);
-    const manager = new AccountManager(store, vault, appDir, "codex", {
+    const manager = createManager(store, vault, appDir, "codex", {
       fetchAntigravityQuota: async () => ({
         limits: {
           limitId: "gemini-3-pro",
@@ -154,13 +201,13 @@ describe("AccountManager Antigravity credentials", () => {
     expect(result.account.platform).toBe("antigravity");
     expect(result.account.antigravity).toMatchObject({
       googleProjectId: "project-1",
-      fingerprintId: "fingerprint-1",
+      fingerprintId: null,
       ideStateDetected: true
     });
-    expect(parseAntigravityUnifiedOAuthToken(readStateValue(stateDbPath, ANTIGRAVITY_AUTH_STATE_KEY)!)).toMatchObject({
-      accessToken: "access-secret-token-123456",
-      refreshToken: "refresh-secret-token-123456"
-    });
+    expect(readStateValue(stateDbPath, ANTIGRAVITY_AUTH_STATE_KEY)).toBeNull();
+    expect(result.account.credentialState).toBe("needs_review");
+    expect(result.account.isActive).toBe(false);
+    expect(fs.readFileSync(path.join(antigravityAppData, "Antigravity IDE", "machineid"), "utf8")).toBe("machine-old");
     expect(rawSaved?.encryptedAuthJson).not.toContain("refresh-secret-token-123456");
     expect(JSON.stringify(result)).not.toContain("refresh-secret-token-123456");
     expect(JSON.stringify(result)).not.toContain("access-secret-token-123456");
@@ -169,13 +216,13 @@ describe("AccountManager Antigravity credentials", () => {
     store.close();
   });
 
-  it("imports Google OAuth Antigravity login into encrypted storage and attaches IDE state", async () => {
+  it("imports Google OAuth into encrypted storage and refreshes quota without attaching IDE credentials", async () => {
     const appDir = tempDir();
     const antigravityAppData = tempDir();
     const stateDbPath = createAntigravityProfile(antigravityAppData);
     const store = new AccountStore(appDir);
     const vault = new Vault(appDir);
-    const manager = new AccountManager(store, vault, appDir, "codex", {
+    const manager = createManager(store, vault, appDir, "codex", {
       fetchAntigravityQuota: async () => ({
         limits: {
           limitId: "gemini-3-pro",
@@ -243,11 +290,9 @@ describe("AccountManager Antigravity credentials", () => {
     expect(result.account?.antigravity?.googleProjectId).toBe("project-oauth");
     await updated;
     expect(store.get(result.account!.id)?.primaryUsedPercent).toBe(70);
-    expect(store.get(result.account!.id)?.planType).toBe("unknown");
-    expect(parseAntigravityUnifiedOAuthToken(readStateValue(stateDbPath, ANTIGRAVITY_AUTH_STATE_KEY)!)).toMatchObject({
-      accessToken: "access-token-oauth-secret",
-      refreshToken: "refresh-token-oauth-secret"
-    });
+    expect(store.get(result.account!.id)?.planType).toBe("pro");
+    expect(readStateValue(stateDbPath, ANTIGRAVITY_AUTH_STATE_KEY)).toBeNull();
+    expect(store.get(result.account!.id)?.isActive).toBe(false);
     expect(saved?.encryptedAuthJson).not.toContain("access-token-oauth-secret");
     expect(saved?.encryptedAuthJson).not.toContain("refresh-token-oauth-secret");
     expect(JSON.stringify(result)).not.toContain("access-token-oauth-secret");
@@ -266,7 +311,7 @@ describe("AccountManager Antigravity credentials", () => {
     const store = new AccountStore(appDir);
     const vault = new Vault(appDir);
     const pendingQuota = vi.fn(async () => new Promise<never>(() => undefined));
-    const manager = new AccountManager(store, vault, appDir, "codex", {
+    const manager = createManager(store, vault, appDir, "codex", {
       fetchAntigravityQuota: pendingQuota
     });
 
@@ -316,7 +361,7 @@ describe("AccountManager Antigravity credentials", () => {
     const store = new AccountStore(appDir);
     const vault = new Vault(appDir);
     const logs: string[] = [];
-    const manager = new AccountManager(store, vault, appDir, "codex", {
+    const manager = createManager(store, vault, appDir, "codex", {
       fetchAntigravityQuota: async () => ({
         limits: {
           limitId: "gemini-3-pro",
@@ -374,7 +419,7 @@ describe("AccountManager Antigravity credentials", () => {
     await updated;
 
     expect(result.status.diagnostics.profileKind).toBe("hub");
-    expect(result.status.readyForWriteActions).toBe(false);
+    expect(result.status.readyForWriteActions).toBe(true);
     expect(result.account?.antigravity?.ideStateDetected).toBe(true);
     expect(fs.existsSync(path.join(antigravityAppData, "Antigravity", "User", "globalStorage", "state.vscdb"))).toBe(false);
     expect(logs.join("\n")).not.toContain("unified auth state update failed");
@@ -383,13 +428,13 @@ describe("AccountManager Antigravity credentials", () => {
     store.close();
   });
 
-  it("downgrades stale Antigravity accounts without verified Code Assist quota", () => {
+  it("keeps listing read-only while freshness/readiness handles missing quota separately", () => {
     const appDir = tempDir();
     const antigravityAppData = tempDir();
     createAntigravityProfile(antigravityAppData);
     const store = new AccountStore(appDir);
     const vault = new Vault(appDir);
-    const manager = new AccountManager(store, vault, appDir, "codex");
+    const manager = createManager(store, vault, appDir, "codex");
 
     const stale = store.upsert({
       id: "ag_stale",
@@ -431,20 +476,20 @@ describe("AccountManager Antigravity credentials", () => {
     expect(stale.status).toBe("active");
     const listed = manager.list().find((account) => account.id === stale.id);
     expect(listed).toMatchObject({
-      planType: "unknown",
-      status: "unknown"
+      planType: "pro",
+      status: "active"
     });
 
     store.close();
   });
 
-  it("downgrades generic Antigravity pro plans even after a quota refresh", () => {
+  it("preserves a stored raw plan rather than rewriting it during a read", () => {
     const appDir = tempDir();
     const antigravityAppData = tempDir();
     createAntigravityProfile(antigravityAppData);
     const store = new AccountStore(appDir);
     const vault = new Vault(appDir);
-    const manager = new AccountManager(store, vault, appDir, "codex");
+    const manager = createManager(store, vault, appDir, "codex");
 
     const account = store.upsert({
       id: "ag_generic_pro",
@@ -496,7 +541,7 @@ describe("AccountManager Antigravity credentials", () => {
     expect(account.planType).toBe("pro");
     const listed = manager.list().find((item) => item.id === account.id);
     expect(listed).toMatchObject({
-      planType: "unknown",
+      planType: "pro",
       status: "active"
     });
 
@@ -509,7 +554,7 @@ describe("AccountManager Antigravity credentials", () => {
     createAntigravityProfile(antigravityAppData);
     const store = new AccountStore(appDir);
     const vault = new Vault(appDir);
-    const manager = new AccountManager(store, vault, appDir, "codex", {
+    const manager = createManager(store, vault, appDir, "codex", {
       fetchAntigravityQuota: async () => ({
         limits: {
           limitId: "claude-sonnet",
@@ -566,7 +611,7 @@ describe("AccountManager Antigravity credentials", () => {
     await updated;
     const refreshed = await manager.refreshAccount(imported.account!.id);
     expect(refreshed.primaryUsedPercent).toBe(25);
-    expect(refreshed.planType).toBe("unknown");
+    expect(refreshed.planType).toBe("pro");
     expect(refreshed.status).toBe("active");
 
     store.close();
@@ -592,7 +637,7 @@ describe("AccountManager Antigravity credentials", () => {
       }
       return new Response(JSON.stringify({ error: "unexpected" }), { status: 500, headers: { "Content-Type": "application/json" } });
     }) as typeof fetch;
-    const manager = new AccountManager(store, vault, appDir, "codex", {
+    const manager = createManager(store, vault, appDir, "codex", {
       fetchAntigravityQuota: async (input) => {
         quotaAccessTokens.push(input.accessToken);
         return {
@@ -679,7 +724,7 @@ describe("AccountManager Antigravity credentials", () => {
     const antigravityAppData = tempDir();
     const stateDbPath = createAntigravityProfile(antigravityAppData);
     const store = new AccountStore(appDir);
-    const manager = new AccountManager(store, new Vault(appDir), appDir, "codex");
+    const manager = createManager(store, new Vault(appDir), appDir, "codex");
     const logs: string[] = [];
     manager.on("log", (message) => logs.push(String(message)));
 
@@ -704,10 +749,13 @@ describe("AccountManager Antigravity credentials", () => {
       home: path.dirname(antigravityAppData)
     });
 
+    await expect(manager.validateAuth(first.account.id)).resolves.toMatchObject({ state: "authorized" });
     const switched = await manager.switchAccount(first.account.id);
     expect(switched.id).toBe(first.account.id);
     expect(switched.isActive).toBe(true);
-    expect(logs.join("\n")).toContain("f***@example.com");
+    expect(switched.runtimeVerification).toMatchObject({ profileApplied: true, credentials: "online_verified",
+      launch: "process_started", runtime: "unsupported", message: "Аккаунт работающей IDE не подтверждён" });
+    expect(logs.join("\n")).toContain("Аккаунт работающей IDE не подтверждён");
     expect(logs.join("\n")).not.toContain("first@example.com");
     expect(logs.join("\n")).not.toContain("refresh-secret-token-first");
     expect(parseAntigravityUnifiedOAuthToken(readStateValue(stateDbPath, ANTIGRAVITY_AUTH_STATE_KEY)!)).toMatchObject({
@@ -724,23 +772,24 @@ describe("AccountManager Antigravity credentials", () => {
     store.close();
   });
 
-  it("switches a Hub Google OAuth Antigravity account through Credential Manager and restart", async () => {
+  it("refuses a Hub switch if Credential Manager readback does not match", async () => {
     const appDir = tempDir();
     const home = tempDir();
     const antigravityAppData = path.join(home, "AppData", "Roaming");
     createAntigravityHubProfile(antigravityAppData, home);
     const store = new AccountStore(appDir);
     const writeCredential = vi.fn(() => ({ applied: true as const, strategy: "windows-credential-manager" as const }));
-    const restart = vi.fn(() => ({
+    const launch = vi.fn(() => ({
       supported: true,
       attempted: true,
       restarted: true,
       exePath: "C:\\Users\\User\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe",
       reason: "ok"
     }));
-    const manager = new AccountManager(store, new Vault(appDir), appDir, "codex", {
+    const manager = createManager(store, new Vault(appDir), appDir, "codex", {
       writeAntigravityCredentialStoreToken: writeCredential,
-      restartAntigravityIntegration: restart,
+      launchAntigravity: launch,
+      quiesceAntigravity: () => ({ supported: true, attempted: false, wasRunning: false, quiesced: true, reason: "fixture" }),
       fetchAntigravityQuota: async () => ({
         limits: {
           limitId: "gemini-3-pro",
@@ -795,11 +844,10 @@ describe("AccountManager Antigravity credentials", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     writeCredential.mockClear();
-    const switched = await manager.switchAccount(imported.account!.id);
-
-    expect(switched.isActive).toBe(true);
+    await expect(manager.switchAccount(imported.account!.id)).rejects.toThrow(/readback mismatch/);
+    expect(store.get(imported.account!.id)?.isActive).toBe(false);
     expect(writeCredential).toHaveBeenCalledTimes(1);
-    expect(restart).toHaveBeenCalledTimes(1);
+    expect(launch).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(antigravityAppData, "Antigravity", "User", "globalStorage", "state.vscdb"))).toBe(false);
 
     store.close();
@@ -810,7 +858,7 @@ describe("AccountManager Antigravity credentials", () => {
     const antigravityAppData = tempDir();
     createAntigravityProfile(antigravityAppData);
     const store = new AccountStore(appDir);
-    const manager = new AccountManager(store, new Vault(appDir), appDir, "codex");
+    const manager = createManager(store, new Vault(appDir), appDir, "codex");
 
     const active = await manager.importAntigravityCredentials({
       email: "active@example.com",
@@ -822,9 +870,10 @@ describe("AccountManager Antigravity credentials", () => {
       appData: antigravityAppData,
       home: path.dirname(antigravityAppData)
     });
+    await manager.validateAuth(active.account.id);
     await manager.switchAccount(active.account.id);
 
-    await expect(manager.deleteAccount(active.account.id)).rejects.toThrow(/Active account/);
+    await expect(manager.deleteAccount(active.account.id)).rejects.toThrow(/Selected account/);
     expect(store.get(active.account.id)?.isActive).toBe(true);
 
     store.close();
@@ -835,7 +884,7 @@ describe("AccountManager Antigravity credentials", () => {
     const antigravityAppData = tempDir();
     createAntigravityProfile(antigravityAppData);
     const store = new AccountStore(appDir);
-    const manager = new AccountManager(store, new Vault(appDir), appDir, "codex");
+    const manager = createManager(store, new Vault(appDir), appDir, "codex");
     try {
       const first = await manager.importAntigravityCredentials({
         email: "rollback-first@example.com",
@@ -858,6 +907,8 @@ describe("AccountManager Antigravity credentials", () => {
         home: path.dirname(antigravityAppData)
       });
 
+      await manager.validateAuth(first.account.id);
+      await manager.validateAuth(second.account.id);
       await manager.switchAccount(first.account.id);
       await manager.switchAccount(second.account.id);
       const switchEvent = manager.getSwitchHistory().find((event) => event.accountId === second.account.id && event.status === "completed");
@@ -886,8 +937,8 @@ describe("AccountManager Antigravity credentials", () => {
     createAntigravityProfile(antigravityAppData);
     const sourceStore = new AccountStore(sourceDir);
     const targetStore = new AccountStore(targetDir);
-    const sourceManager = new AccountManager(sourceStore, new Vault(sourceDir), sourceDir, "codex");
-    const targetManager = new AccountManager(targetStore, new Vault(targetDir), targetDir, "codex");
+    const sourceManager = createManager(sourceStore, new Vault(sourceDir), sourceDir, "codex");
+    const targetManager = createManager(targetStore, new Vault(targetDir), targetDir, "codex");
 
     await sourceManager.importAntigravityCredentials({
       label: "AG перенос",
@@ -896,7 +947,7 @@ describe("AccountManager Antigravity credentials", () => {
       refreshToken: "refresh-secret-token-transfer",
       accessToken: "access-secret-token-transfer",
       googleProjectId: "project-transfer",
-      fingerprintId: "fingerprint-transfer"
+      fingerprintId: null
     }, {
       platform: "win32",
       appData: antigravityAppData,
@@ -911,7 +962,7 @@ describe("AccountManager Antigravity credentials", () => {
     expect(imported?.platform).toBe("antigravity");
     expect(imported?.antigravity).toMatchObject({
       googleProjectId: "project-transfer",
-      fingerprintId: "fingerprint-transfer"
+      fingerprintId: null
     });
     expect(JSON.stringify(targetStore.list())).not.toContain("refresh-secret-token-transfer");
 

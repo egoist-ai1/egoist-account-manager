@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { spawn, type ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import { describe, expect, it, vi } from "vitest";
 import {
+  createWindowsDesktopLifecycleAdapter,
   WindowsDesktopLifecycleService,
   resolveWindowsDesktopSnapshot,
   type WindowsDesktopLifecycleAdapter,
@@ -7,6 +11,11 @@ import {
   type WindowsDesktopSnapshot,
   type WindowsProcessSnapshot
 } from "../../src/main/services/windowsDesktopLifecycleService";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawn: vi.fn(actual.spawn) };
+});
 
 function desktopPackage(
   name: "OpenAI.Codex" | "OpenAI.ChatGPT",
@@ -243,6 +252,45 @@ describe("WindowsDesktopLifecycleService", () => {
     expect(adapter.terminateCalls).toEqual([]);
   });
 
+  it("preserves a visible window that remains after the graceful close timeout", async () => {
+    const codex = desktopPackage("OpenAI.Codex");
+    const root = desktopProcess(310, 1, "2026-07-30T12:10:00.000Z", codex.executablePath!);
+    const adapter = new FakeAdapter(snapshot([codex], [{ ...root, mainWindowHandle: 9001 }]));
+    adapter.afterClose = () => {
+      adapter.current.processes = [{ ...root, mainWindowHandle: 9002 }];
+    };
+    const service = new WindowsDesktopLifecycleService(adapter, { gracefulTimeoutMs: 0, forceTimeoutMs: 0 });
+
+    await expect(service.quiesce("exact-tree-fallback")).resolves.toMatchObject({
+      status: "blocked",
+      remainingProcessCount: 1,
+      gracefulCloseAccepted: true,
+      usedExactTreeFallback: false
+    });
+    expect(adapter.closeCalls.map((process) => process.pid)).toEqual([310]);
+    expect(adapter.terminateCalls).toEqual([]);
+    expect(adapter.current.processes[0]?.mainWindowHandle).toBe(9002);
+  });
+
+  it("blocks when the selected desktop starts a new root during graceful closure", async () => {
+    const codex = desktopPackage("OpenAI.Codex");
+    const root = desktopProcess(320, 1, "2026-07-30T12:10:00.000Z", codex.executablePath!);
+    const replacement = desktopProcess(321, 1, "2026-07-30T12:10:01.000Z", codex.executablePath!);
+    const adapter = new FakeAdapter(snapshot([codex], [root]));
+    adapter.afterClose = () => {
+      adapter.current.processes = [replacement];
+    };
+    const service = new WindowsDesktopLifecycleService(adapter, { gracefulTimeoutMs: 0, forceTimeoutMs: 0 });
+
+    await expect(service.quiesce("exact-tree-fallback")).resolves.toMatchObject({
+      status: "blocked",
+      remainingProcessCount: 1,
+      usedExactTreeFallback: false
+    });
+    expect(adapter.closeCalls.map((process) => process.pid)).toEqual([320]);
+    expect(adapter.terminateCalls).toEqual([]);
+  });
+
   it("treats a reused PID with a different creation time as a vanished captured process", async () => {
     const codex = desktopPackage("OpenAI.Codex");
     const root = desktopProcess(400, 1, "2026-07-30T12:20:00.000Z", codex.executablePath!);
@@ -326,6 +374,56 @@ describe("WindowsDesktopLifecycleService", () => {
     await expect(service.launchAndWaitReady()).rejects.toThrow("stable visible window");
   });
 
+  it("rejects a preexisting root even when launch changes its window handle", async () => {
+    const codex = desktopPackage("OpenAI.Codex");
+    const root = {
+      ...desktopProcess(610, 1, "2026-07-30T12:40:00.000Z", codex.executablePath!),
+      mainWindowHandle: 12345
+    };
+    const adapter = new FakeAdapter(snapshot([codex], [root]));
+    adapter.afterLaunch = () => {
+      adapter.current.processes = [{ ...root, mainWindowHandle: 12346 }];
+    };
+    const service = new WindowsDesktopLifecycleService(adapter, {
+      launchReadinessTimeoutMs: 0,
+      readinessStableSamples: 1
+    });
+
+    await expect(service.launchAndWaitReady()).rejects.toThrow("stable visible window");
+    expect(adapter.launchCalls).toEqual([codex.packageFullName]);
+  });
+
+  it("accepts a new process that reuses an old PID with a new creation time", async () => {
+    const codex = desktopPackage("OpenAI.Codex");
+    const root = {
+      ...desktopProcess(620, 1, "2026-07-30T12:40:00.000Z", codex.executablePath!),
+      mainWindowHandle: 12345
+    };
+    const adapter = new FakeAdapter(snapshot([codex], [root]));
+    adapter.afterLaunch = () => {
+      adapter.current.processes = [{ ...root, creationDate: "2026-07-30T12:40:01.000Z", mainWindowHandle: 12346 }];
+    };
+    const service = new WindowsDesktopLifecycleService(adapter, { launchReadinessTimeoutMs: 0, readinessStableSamples: 1 });
+
+    await expect(service.launchAndWaitReady()).resolves.toMatchObject({ rootPid: 620, visibleWindowHandle: 12346 });
+  });
+
+  it("reuses an existing root when readiness reuse is explicitly allowed", async () => {
+    const codex = desktopPackage("OpenAI.Codex");
+    const root = {
+      ...desktopProcess(630, 1, "2026-07-30T12:40:00.000Z", codex.executablePath!),
+      mainWindowHandle: 12345
+    };
+    const adapter = new FakeAdapter(snapshot([codex], [root]));
+    const service = new WindowsDesktopLifecycleService(adapter, { launchReadinessTimeoutMs: 0, readinessStableSamples: 1 });
+
+    await expect(service.launchAndWaitReady(undefined, { allowExistingRoot: true })).resolves.toMatchObject({
+      rootPid: 630,
+      visibleWindowHandle: 12345
+    });
+    expect(adapter.launchCalls).toEqual([codex.packageFullName]);
+  });
+
   it("captures companion processes from AppData Local OpenAI Codex and terminates them with exact-tree-fallback", async () => {
     const codex = desktopPackage("OpenAI.Codex");
     const root = desktopProcess(700, 1, "2026-07-30T13:00:00.000Z", codex.executablePath!);
@@ -371,6 +469,22 @@ describe("WindowsDesktopLifecycleService", () => {
     expect(adapter.terminateCalls.map((p) => p.pid).sort()).toEqual([700, 701, 702, 703]);
   });
 
+  it("preserves Codex CLI processes owned by a running terminal", async () => {
+    const codex = desktopPackage("OpenAI.Codex");
+    const root = desktopProcess(710, 1, "2026-07-30T13:00:00.000Z", codex.executablePath!);
+    const terminal = desktopProcess(711, 1, "2026-07-30T13:00:00.000Z", "C:\\Windows\\Terminal.exe", "Terminal.exe", "Terminal.exe");
+    const cli = desktopProcess(712, 711, "2026-07-30T13:00:01.000Z", "C:\\Users\\test\\AppData\\Local\\OpenAI\\Codex\\bin\\codex.exe");
+    const adapter = new FakeAdapter(snapshot([codex], [root, terminal, cli]));
+    const service = new WindowsDesktopLifecycleService(adapter, { gracefulTimeoutMs: 0, forceTimeoutMs: 0 });
+
+    await expect(service.quiesce("exact-tree-fallback")).resolves.toMatchObject({
+      status: "quiesced",
+      capturedProcessCount: 1
+    });
+    expect(adapter.terminateCalls.map((process) => process.pid)).toEqual([710]);
+    expect(adapter.current.processes.map((process) => process.pid)).toEqual([711, 712]);
+  });
+
   it("captures and terminates orphaned companion processes when root has already exited", async () => {
     const codex = desktopPackage("OpenAI.Codex");
     const orphanedServer = desktopProcess(
@@ -405,4 +519,34 @@ describe("WindowsDesktopLifecycleService", () => {
     });
     expect(adapter.terminateCalls.map((p) => p.pid).sort()).toEqual([801, 802]);
   });
+});
+
+describe("WindowsDesktopLifecycleAdapter", () => {
+  it.each(["requestGracefulClose", "terminateExact", "terminateExactBatch"] as const)(
+    "revalidates the full process identity before %s",
+    async (operation) => {
+      const codex = desktopPackage("OpenAI.Codex");
+      const root = desktopProcess(100, 1, "2026-07-30T12:00:00.000Z", codex.executablePath!);
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new PassThrough(),
+        stderr: new PassThrough()
+      });
+      let script = "";
+      vi.mocked(spawn).mockImplementationOnce((_command, args) => {
+        script = Buffer.from((args as string[]).at(-1)!, "base64").toString("utf16le");
+        queueMicrotask(() => {
+          child.stdout.end('{"status":"mismatch"}');
+          child.emit("exit", 0);
+        });
+        return child as unknown as ChildProcess;
+      });
+
+      const adapter = createWindowsDesktopLifecycleAdapter("win32");
+      if (operation === "terminateExactBatch") await adapter[operation]!([root]);
+      else await expect(adapter[operation](root)).resolves.toBe("mismatch");
+
+      expect(script).toContain("$nameMatches -and $pathMatches -and $dateMatches");
+      expect(script).not.toMatch(/\.EndsWith\(|taskkill\.exe/);
+    }
+  );
 });

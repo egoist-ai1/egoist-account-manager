@@ -49,9 +49,27 @@ export interface RateLimitWindow {
   usedPercent: number;
   windowDurationMins: number | null;
   resetsAt: number | null;
+  label?: string | null;
+  scope?: string | null;
+}
+
+export interface RateLimitBucket {
+  limitId: string | null;
+  limitName: string | null;
+  modelId?: string | null;
+  scope?: string | null;
+  primary: RateLimitWindow | null;
+  secondary: RateLimitWindow | null;
+  ordinaryUsageAllowed?: boolean | null;
+  accountId?: string | null;
+  spendControlReached?: boolean | null;
+  rateLimitReachedType?: string | null;
+  individualLimit?: unknown;
 }
 
 export interface RateLimitSnapshot {
+  rawPlanType?: string | null;
+  normalModelSlug?: string | null;
   limitId: string | null;
   limitName: string | null;
   primary: RateLimitWindow | null;
@@ -59,6 +77,13 @@ export interface RateLimitSnapshot {
   credits: { hasCredits: boolean; unlimited: boolean; balance: string | null } | null;
   planType: PlanType | null;
   rateLimitReachedType: string | null;
+  buckets?: RateLimitBucket[];
+  ordinaryUsageAllowed?: boolean | null;
+  accountId?: string | null;
+  spendControlReached?: boolean | null;
+  individualLimit?: unknown;
+  source?: string | null;
+  capturedAt?: number | null;
 }
 
 export interface AntigravityAccountDetails {
@@ -307,6 +332,8 @@ export interface ManagedAccount {
   tags?: string[];
   favorite?: boolean;
   archived?: boolean;
+  quotaSnapshot?: RateLimitSnapshot | null;
+  runtimeVerification?: SwitchVerificationEvidence | null;
   antigravity?: AntigravityAccountDetails | null;
 }
 
@@ -489,8 +516,24 @@ export interface AccountExportResult {
   filePath: string;
 }
 
+export interface AccountImportPreview {
+  previewId: string;
+  total: number;
+  importableCount: number;
+  skippedCount: number;
+  expiresAt: number;
+  entries: Array<{
+    email: string;
+    label: string;
+    platform: AccountPlatform;
+    action: "import" | "skip";
+    reason: string | null;
+  }>;
+}
+
 export interface AccountImportResult {
   importedCount: number;
+  skippedCount?: number;
   accounts: ManagedAccount[];
 }
 
@@ -552,6 +595,21 @@ export type SwitchTransactionPhase =
   | "failed"
   | "recovery_required";
 
+export interface SwitchVerificationEvidence {
+  profileApplied: boolean;
+  credentials: "not_checked" | "material_consistent" | "probe_observed" | "online_verified";
+  credentialMethod: string | null;
+  launch: "not_requested" | "process_started" | "window_observed";
+  runtime: "pending" | "verified" | "unsupported" | "mismatch";
+  runtimeSource: string | null;
+  observedEmail: string | null;
+  observedAccountId?: string | null;
+  observedAt: number | null;
+  runtimePid: number | null;
+  runtimeCreationTime?: string | null;
+  message: string;
+}
+
 export interface SwitchTransaction {
   id: string;
   platform: AccountPlatform;
@@ -561,6 +619,7 @@ export interface SwitchTransaction {
   phase: SwitchTransactionPhase;
   targetFingerprint: string | null;
   previousFingerprint: string | null;
+  verification?: SwitchVerificationEvidence | null;
   backupPath: string | null;
   errorCode: string | null;
   errorMessage: string | null;
@@ -659,6 +718,9 @@ export interface AppApi {
   refreshAllAccounts(): Promise<ManagedAccount[]>;
   exportAccounts(passphrase: string): Promise<AccountExportResult>;
   importAccounts(passphrase: string): Promise<AccountImportResult>;
+  previewImport(passphrase: string): Promise<AccountImportPreview | null>;
+  applyImport(previewId: string): Promise<AccountImportResult>;
+  verifyRuntimeAccount(accountId: string): Promise<SwitchVerificationEvidence>;
   openProfileFolder(accountId: string): Promise<void>;
   prepareSwitch(accountId: string): Promise<SwitchPreparationResult>;
   cancelSwitch(transactionId: string): Promise<SwitchTransaction>;

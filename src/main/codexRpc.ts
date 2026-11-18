@@ -5,6 +5,7 @@ import path from "node:path";
 import type { PlanType, RateLimitSnapshot } from "../shared/types.js";
 import { appVersion } from "../shared/releaseNotes.js";
 import { ensureExecutableCodexPath } from "./processManager.js";
+import { ProviderRequestError, providerHttpError } from "../shared/quotaRefreshError.js";
 
 type RpcResponse<T> = { id: number; result?: T; error?: { code: number; message: string; data?: unknown } };
 type Notification = { method: string; params?: unknown };
@@ -43,6 +44,8 @@ export type LoginResponse =
 export interface RateLimitsResponse {
   rateLimits: RateLimitSnapshot;
   rateLimitsByLimitId: Record<string, RateLimitSnapshot | undefined> | null;
+  accountId?: string | null;
+  ordinaryUsageAllowed?: boolean | null;
 }
 
 interface PendingCall {
@@ -176,7 +179,7 @@ export class CodexRpcClient extends EventEmitter {
       this.initializeResponse = await this.request<CodexInitializeResponse>("initialize", {
         clientInfo: {
           name: "egoist_codex_account_manager",
-          title: "Egoist Account Manager",
+          title: "Квессер",
           version: appVersion
         },
         capabilities: {
@@ -229,9 +232,14 @@ export class CodexRpcClient extends EventEmitter {
     return this.request<LoginResponse>("account/login/start", input);
   }
 
-  async readRateLimits(): Promise<RateLimitsResponse> {
-    await this.start();
-    return this.request<RateLimitsResponse>("account/rateLimits/read", undefined, 15_000);
+  async readRateLimits(options?: { excludeResetCreditDetails?: boolean }): Promise<RateLimitsResponse> {
+    try {
+      await this.start();
+      return await this.request<RateLimitsResponse>("account/rateLimits/read", options?.excludeResetCreditDetails === true
+        ? { excludeResetCreditDetails: true } : undefined, 15_000);
+    } catch (error) {
+      throw normalizeCodexQuotaError(error);
+    }
   }
 
   private request<T>(method: string, params: unknown, timeoutMs = 45_000): Promise<T> {
@@ -306,7 +314,7 @@ export class CodexRpcClient extends EventEmitter {
       }
       clearTimeout(pending.timer);
       this.pending.delete(message.id);
-      if (message.error) pending.reject(new Error(message.error.message));
+      if (message.error) pending.reject(Object.assign(new Error(message.error.message), { code: message.error.code, data: message.error.data }));
       else pending.resolve(message.result);
       return;
     }
@@ -325,11 +333,29 @@ export class CodexRpcClient extends EventEmitter {
         id,
         error: {
           code: -32601,
-          message: `Client-side server request is not supported by Egoist Account Manager: ${method}`
+          message: `Client-side server request is not supported by Квессер: ${method}`
         }
       })}\n`
     );
   }
+}
+
+function normalizeCodexQuotaError(error: unknown): unknown {
+  if (error instanceof ProviderRequestError || !error || typeof error !== "object") return error;
+  const original = error as { message?: unknown; code?: unknown; data?: unknown; statusCode?: unknown };
+  const data = original.data && typeof original.data === "object"
+    ? original.data as { statusCode?: unknown; retryAfterSeconds?: unknown; retryAfter?: unknown } : null;
+  const explicitStatus = data?.statusCode ?? original.statusCode;
+  const status = typeof explicitStatus === "number" ? explicitStatus
+    : typeof explicitStatus === "string" && /^(401|403|429)$/.test(explicitStatus.trim()) ? Number(explicitStatus) : null;
+  const statusLine = typeof original.message === "string"
+    ? original.message.match(/\b(?:HTTP(?:\s+status(?:\s+code)?)?|status(?:\s+code)?)\s*[:=]?\s*(401|403|429)\b/i)?.[1] : null;
+  const httpStatus = status !== null && [401, 403, 429].includes(status) ? status : statusLine ? Number(statusLine) : null;
+  if (httpStatus === null) return error;
+  const retryAfter = typeof data?.retryAfterSeconds === "number" && Number.isFinite(data.retryAfterSeconds)
+    ? String(Math.max(0, data.retryAfterSeconds)) : typeof data?.retryAfter === "string" ? data.retryAfter : null;
+  return Object.assign(providerHttpError(httpStatus, "Codex quota request", retryAfter),
+    { code: original.code, data: original.data });
 }
 
 export function getAuthFilePath(codexHome: string): string {
@@ -340,32 +366,39 @@ export function selectBestRateLimit(response: RateLimitsResponse): RateLimitSnap
   const entries = Object.entries(response.rateLimitsByLimitId ?? {}).filter((entry): entry is [string, RateLimitSnapshot] => Boolean(entry[1]));
   const byCodex = entries.find(([id]) => id.toLowerCase() === "codex")?.[1]
     ?? entries.find(([id]) => id.toLowerCase().includes("codex"))?.[1];
-  if (byCodex) return byCodex;
-  return entries.find(([, snapshot]) => {
+  const selected = byCodex ?? entries.find(([, snapshot]) => {
     const durations = [snapshot.primary?.windowDurationMins, snapshot.secondary?.windowDurationMins];
     return durations.includes(300) && durations.includes(10_080);
   })?.[1] ?? response.rateLimits;
+  const accountMetadata = {
+    ...(response.accountId !== undefined ? { accountId: response.accountId } : {}),
+    ...(response.ordinaryUsageAllowed !== undefined ? { ordinaryUsageAllowed: response.ordinaryUsageAllowed } : {})
+  };
+  return { ...selected, ...accountMetadata, rawPlanType: selected.planType,
+    source: "codex_app_server", buckets: entries.length > 0
+    ? entries.map(([id, snapshot]) => ({ ...snapshot, limitId: snapshot.limitId ?? id,
+      modelId: "normalModelSlug" in snapshot && typeof snapshot.normalModelSlug === "string" ? snapshot.normalModelSlug : null,
+      ...accountMetadata }))
+    : selected.buckets ?? [{ ...selected, modelId: selected.normalModelSlug ?? null }] };
 }
 
 export function normalizeCodexPlanType(planType: PlanType | null | undefined, snapshot?: RateLimitSnapshot | null): PlanType {
-  const candidates = [
-    snapshot?.planType,
-    snapshot?.limitId,
-    snapshot?.limitName,
-    planType
-  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
-  const normalized = candidates.map((value) => value.toLowerCase().replace(/[\s_-]+/g, ""));
-  if (normalized.some((value) => value.includes("20") || value.includes("prox20") || value.includes("pro20"))) return "pro-x20";
-  if (normalized.some((value) => value.includes("10") || value === "prolite" || value.includes("prox10") || value.includes("pro10"))) return "pro-x10";
-  const direct = planType?.trim();
-  if (!direct) return "unknown";
-  if (direct.toLowerCase() === "pro") return "pro-x20";
-  return direct;
+  const raw = planType?.trim() && planType !== "unknown" ? planType.trim() : snapshot?.planType?.trim();
+  if (!raw) return "unknown";
+  const known = ["free", "go", "standard", "plus", "pro", "prolite", "promax", "team", "self_serve_business_prolite",
+    "self_serve_business_usage_based", "business", "ent26", "enterprise_cbp_automation", "enterprise_cbp_usage_based",
+    "enterprise", "edu", "edu_plus", "edu_pro", "unknown"];
+  return known.includes(raw.toLowerCase()) ? raw.toLowerCase() : raw;
 }
 
-export function classifyRateLimit(snapshot: RateLimitSnapshot): { status: "active" | "near_limit" | "limited"; reason: string | null } {
-  if (snapshot.rateLimitReachedType) return { status: "limited", reason: snapshot.rateLimitReachedType };
-  const used = Math.max(snapshot.primary?.usedPercent ?? 0, snapshot.secondary?.usedPercent ?? 0);
+export function classifyRateLimit(snapshot: RateLimitSnapshot): { status: "active" | "near_limit" | "limited" | "unknown"; reason: string | null } {
+  if (snapshot.ordinaryUsageAllowed === false) return { status: "limited", reason: "Ordinary usage is not allowed by the provider" };
+  if (snapshot.spendControlReached === true) return { status: "limited", reason: "Provider spend control reached" };
+  if (snapshot.rateLimitReachedType && snapshot.rateLimitReachedType !== "none") return { status: "limited", reason: snapshot.rateLimitReachedType };
+  const windows = [snapshot.primary, snapshot.secondary].filter((window) => window && Number.isFinite(window.usedPercent));
+  if (windows.length === 0) return { status: "unknown", reason: "Provider returned no known usage windows" };
+  const used = Math.max(...windows.map((window) => window!.usedPercent));
+  if (used >= 100) return { status: "limited", reason: "Quota window is exhausted" };
   if (used >= 90) return { status: "near_limit", reason: "Usage is above 90%" };
   return { status: "active", reason: null };
 }

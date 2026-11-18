@@ -7,6 +7,7 @@ export interface AntigravityPathInput {
   platform?: NodeJS.Platform;
   appData?: string;
   home?: string;
+  target?: "hub" | "ide";
 }
 
 export interface AntigravityPaths {
@@ -61,7 +62,13 @@ export function resolveAntigravityPaths(input: AntigravityPathInput = {}): Antig
   let storageJsonPath = path.join(currentGlobalStorageDir, "storage.json");
   let machineIdPath = path.join(platformDirs.currentIde, "machineid");
 
-  if (fs.existsSync(platformDirs.currentIde) || fs.existsSync(currentStateDbPath)) {
+  if (input.target === "hub") {
+    profileKind = "hub";
+    userDataDir = platformDirs.hub;
+    globalStorageDir = legacyGlobalStorageDir;
+    storageJsonPath = appStoragePath;
+    machineIdPath = installationIdPath;
+  } else if (fs.existsSync(currentStateDbPath) || (!fs.existsSync(legacyStateDbPath) && fs.existsSync(platformDirs.currentIde))) {
     profileKind = "vscode_ide";
   } else if (fs.existsSync(legacyStateDbPath)) {
     profileKind = "legacy_vscode_ide";
@@ -69,7 +76,7 @@ export function resolveAntigravityPaths(input: AntigravityPathInput = {}): Antig
     globalStorageDir = legacyGlobalStorageDir;
     storageJsonPath = path.join(legacyGlobalStorageDir, "storage.json");
     machineIdPath = path.join(platformDirs.hub, "machineid");
-  } else if (fs.existsSync(platformDirs.hub) || fs.existsSync(geminiDataDir) || fs.existsSync(appStoragePath)) {
+  } else if (input.target !== "ide" && (fs.existsSync(platformDirs.hub) || fs.existsSync(geminiDataDir) || fs.existsSync(appStoragePath))) {
     profileKind = "hub";
     userDataDir = platformDirs.hub;
     globalStorageDir = legacyGlobalStorageDir;
@@ -77,7 +84,8 @@ export function resolveAntigravityPaths(input: AntigravityPathInput = {}): Antig
     machineIdPath = installationIdPath;
   }
 
-  const secondaryStateDbPath = profileKind === "vscode_ide" && (fs.existsSync(legacyStateDbPath) || fs.existsSync(platformDirs.hub))
+  const secondaryStateDbPath = input.target ? null
+    : profileKind === "vscode_ide" && (fs.existsSync(legacyStateDbPath) || fs.existsSync(platformDirs.hub))
     ? legacyStateDbPath
     : profileKind === "legacy_vscode_ide" && (fs.existsSync(currentStateDbPath) || fs.existsSync(platformDirs.currentIde))
       ? currentStateDbPath

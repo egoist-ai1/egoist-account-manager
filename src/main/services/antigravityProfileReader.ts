@@ -4,9 +4,10 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
-import type { AntigravityLocalIdentity, AntigravityProfileInspection } from "../../shared/types.js";
+import type { AntigravityLocalIdentity, AntigravityProfileInspection, SwitchVerificationEvidence } from "../../shared/types.js";
 import type { AntigravityPathInput } from "./antigravityPaths.js";
 import { resolveAntigravityPaths } from "./antigravityPaths.js";
+import { inspectAntigravityRuntimeBinding, type AntigravityRuntimeBinding, type AntigravityRuntimeInspectionInput } from "./antigravityProcessService.js";
 import {
   parseAntigravityUnifiedEnterprisePreferences,
   parseAntigravityUnifiedOAuthToken,
@@ -315,6 +316,8 @@ export interface AntigravityLiveSession {
   email: string;
   name: string | null;
   tier: string | null;
+  runtimePid?: number;
+  runtimeCreationTime?: string;
 }
 
 export interface AntigravityLanguageServerEndpoint {
@@ -359,73 +362,78 @@ export function resolveAntigravityLanguageServerEndpoint(input: AntigravityPathI
   }
 }
 
-/**
- * Connect directly to Antigravity's live local language server RPC to detect
- * the account currently active and running in the editor window.
- */
-export async function detectAntigravityLiveSession(input: AntigravityPathInput = {}): Promise<AntigravityLiveSession | null> {
-  const endpoint = resolveAntigravityLanguageServerEndpoint(input);
-  if (!endpoint) return null;
+export interface AntigravityRuntimeVerificationInput extends AntigravityRuntimeInspectionInput {
+  getUserStatus?: (binding: AntigravityRuntimeBinding) => Promise<AntigravityLiveSession | null>;
+}
 
-  try {
+function sameRuntime(a: AntigravityRuntimeBinding, b: AntigravityRuntimeBinding | null): boolean {
+  return b !== null && a.port === b.port && a.csrf === b.csrf && a.runtimePid === b.runtimePid
+    && a.runtimeCreationTime === b.runtimeCreationTime && a.idePid === b.idePid
+    && a.ideCreationTime === b.ideCreationTime && a.profilePath.toLowerCase() === b.profilePath.toLowerCase();
+}
+
+function requestBoundRpc<T>(binding: AntigravityRuntimeBinding, method: string): Promise<T | null> {
+  return new Promise((resolve) => {
     const agent = new https.Agent({ rejectUnauthorized: false });
-
-    return await new Promise<AntigravityLiveSession | null>((resolve) => {
-      const req = https.request(
-        {
-          hostname: "127.0.0.1",
-          port: endpoint.port,
-          path: "/exa.language_server_pb.LanguageServerService/GetUserStatus",
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Codeium-Csrf-Token": endpoint.csrf,
-            "Content-Length": "2"
-          },
-          agent,
-          timeout: 2000
-        },
-        (res) => {
-          let body = "";
-          res.on("data", (chunk: Buffer | string) => (body += chunk.toString()));
-          res.on("end", () => {
-            try {
-              if (res.statusCode !== 200) return resolve(null);
-              const data = JSON.parse(body) as {
-                userStatus?: { email?: string; name?: string };
-                userTier?: { name?: string };
-              };
-              const userStatus = data?.userStatus;
-              if (userStatus && typeof userStatus.email === "string" && userStatus.email.includes("@")) {
-                resolve({
-                  email: userStatus.email.trim().toLowerCase(),
-                  name: typeof userStatus.name === "string" ? userStatus.name : null,
-                  tier: data?.userTier?.name ?? null
-                });
-              } else {
-                resolve(null);
-              }
-            } catch {
-              resolve(null);
-            }
-          });
-        }
-      );
-
-      req.on("error", () => resolve(null));
-      req.on("timeout", () => {
-        req.destroy();
-        resolve(null);
+    const finish = (value: T | null) => { agent.destroy(); resolve(value); };
+    const request = https.request({ hostname: "127.0.0.1", port: binding.port,
+      path: `/exa.language_server_pb.LanguageServerService/${method}`, method: "POST",
+      headers: { "Content-Type": "application/json", "X-Codeium-Csrf-Token": binding.csrf, "Content-Length": "2" },
+      agent, timeout: 3_000 }, (response) => {
+      let bytes = 0;
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > 256 * 1024) { request.destroy(); finish(null); return; }
+        chunks.push(chunk);
       });
-      req.write("{}");
-      req.end();
+      response.on("error", () => finish(null));
+      response.on("end", () => {
+        if (response.statusCode !== 200) return finish(null);
+        try { finish(JSON.parse(Buffer.concat(chunks).toString("utf8")) as T); } catch { finish(null); }
+      });
     });
-  } catch {
-    return null;
-  }
+    request.on("error", () => finish(null));
+    request.on("timeout", () => { request.destroy(); finish(null); });
+    request.end("{}");
+  });
+}
+
+async function getBoundUserStatus(binding: AntigravityRuntimeBinding): Promise<AntigravityLiveSession | null> {
+  const result = await requestBoundRpc<{ userStatus?: { email?: unknown; name?: unknown }; userTier?: { name?: unknown } }>(binding, "GetUserStatus");
+  const email = result?.userStatus?.email;
+  if (typeof email !== "string" || !/^[^\s@]+@[^\s@]+$/.test(email.trim())) return null;
+  return { email: email.trim().toLowerCase(), name: typeof result?.userStatus?.name === "string" ? result.userStatus.name : null,
+    tier: typeof result?.userTier?.name === "string" ? result.userTier.name : null,
+    runtimePid: binding.runtimePid, runtimeCreationTime: binding.runtimeCreationTime };
+}
+
+export async function detectAntigravityLiveSession(input: AntigravityRuntimeVerificationInput = {}): Promise<AntigravityLiveSession | null> {
+  const binding = await inspectAntigravityRuntimeBinding(input);
+  if (!binding) return null;
+  const session = await (input.getUserStatus ?? getBoundUserStatus)(binding);
+  if (!session || !sameRuntime(binding, await inspectAntigravityRuntimeBinding(input))) return null;
+  return { ...session, runtimePid: binding.runtimePid, runtimeCreationTime: binding.runtimeCreationTime };
+}
+
+export type AntigravityRuntimeIdentityEvidence = Pick<SwitchVerificationEvidence,
+  "runtime" | "runtimeSource" | "observedEmail" | "observedAt" | "runtimePid" | "runtimeCreationTime" | "message">;
+
+export async function verifyAntigravityRuntimeIdentity(expectedEmail: string, input: AntigravityRuntimeVerificationInput = {}): Promise<AntigravityRuntimeIdentityEvidence> {
+  const session = await detectAntigravityLiveSession(input);
+  if (!session) return { runtime: "unsupported", runtimeSource: null, observedEmail: null, observedAt: null,
+    runtimePid: null, runtimeCreationTime: null, message: "Аккаунт работающей IDE не подтверждён: привязка runtime к профилю недоступна" };
+  const matches = session.email.trim().toLowerCase() === expectedEmail.trim().toLowerCase();
+  return { runtime: matches ? "verified" : "mismatch", runtimeSource: "antigravity.get_user_status.os_bound_email",
+    observedEmail: session.email, observedAt: Math.floor(Date.now() / 1000), runtimePid: session.runtimePid ?? null,
+    runtimeCreationTime: session.runtimeCreationTime ?? null,
+    message: matches ? "Email работающей IDE подтверждён" : "Email работающей IDE отличается от выбранного профиля" };
 }
 
 export interface AntigravityLiveQuotaSummaryResponse {
+  identityEmail?: string;
+  runtimePid?: number;
+  runtimeCreationTime?: string;
   groups?: Array<{
     displayName?: unknown;
     description?: unknown;
@@ -441,64 +449,16 @@ export interface AntigravityLiveQuotaSummaryResponse {
   }>;
 }
 
-/**
- * Connect directly to Antigravity's live local language server RPC to fetch
- * real-time quota telemetry for the active session.
- */
-export async function fetchAntigravityLiveQuota(input: AntigravityPathInput = {}): Promise<AntigravityLiveQuotaSummaryResponse | null> {
-  const endpoint = resolveAntigravityLanguageServerEndpoint(input);
-  if (!endpoint) return null;
-
-  try {
-    const agent = new https.Agent({ rejectUnauthorized: false });
-
-    return await new Promise<AntigravityLiveQuotaSummaryResponse | null>((resolve) => {
-      const req = https.request(
-        {
-          hostname: "127.0.0.1",
-          port: endpoint.port,
-          path: "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary",
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Codeium-Csrf-Token": endpoint.csrf,
-            "Content-Length": "2"
-          },
-          agent,
-          timeout: 4000
-        },
-        (res) => {
-          let body = "";
-          res.on("data", (chunk: Buffer | string) => (body += chunk.toString()));
-          res.on("end", () => {
-            try {
-              if (res.statusCode !== 200) return resolve(null);
-              const data = JSON.parse(body) as {
-                response?: AntigravityLiveQuotaSummaryResponse;
-                groups?: AntigravityLiveQuotaSummaryResponse["groups"];
-              };
-              const groups = data.response?.groups ?? data.groups;
-              if (Array.isArray(groups) && groups.length > 0) {
-                resolve({ groups });
-              } else {
-                resolve(null);
-              }
-            } catch {
-              resolve(null);
-            }
-          });
-        }
-      );
-
-      req.on("error", () => resolve(null));
-      req.on("timeout", () => {
-        req.destroy();
-        resolve(null);
-      });
-      req.write("{}");
-      req.end();
-    });
-  } catch {
-    return null;
-  }
+export async function fetchAntigravityLiveQuota(input: AntigravityRuntimeVerificationInput = {}): Promise<AntigravityLiveQuotaSummaryResponse | null> {
+  const binding = await inspectAntigravityRuntimeBinding(input);
+  if (!binding) return null;
+  const statusReader = input.getUserStatus ?? getBoundUserStatus;
+  const before = await statusReader(binding);
+  if (!before) return null;
+  const data = await requestBoundRpc<{ response?: AntigravityLiveQuotaSummaryResponse; groups?: AntigravityLiveQuotaSummaryResponse["groups"] }>(binding, "RetrieveUserQuotaSummary");
+  const groups = data?.response?.groups ?? data?.groups;
+  if (!Array.isArray(groups) || !groups.length) return null;
+  const after = await statusReader(binding);
+  if (!after || before.email !== after.email || !sameRuntime(binding, await inspectAntigravityRuntimeBinding(input))) return null;
+  return { groups, identityEmail: after.email, runtimePid: binding.runtimePid, runtimeCreationTime: binding.runtimeCreationTime };
 }

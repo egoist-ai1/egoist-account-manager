@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { CodexCredentialStoreDiagnostics, ManagedAccount } from "../../src/shared/types";
-import {
-  formatCredentialStore,
-  formatQuotaReset,
-  selectNearestQuotaReset
-} from "../../src/renderer/components/v3/OverviewPage";
+import type { ManagedAccount } from "../../src/shared/types";
+import { profilePresentation, quotaWindowLabel } from "../../src/renderer/profilePresentation";
+import { formatQuotaReset } from "../../src/renderer/components/v3/OverviewPage";
 
 function managedAccount(input: Partial<ManagedAccount> & Pick<ManagedAccount, "id" | "label">): ManagedAccount {
   const { id, label, ...overrides } = input;
@@ -49,108 +46,32 @@ function managedAccount(input: Partial<ManagedAccount> & Pick<ManagedAccount, "i
   };
 }
 
-function credentialStore(
-  input: Partial<CodexCredentialStoreDiagnostics> = {}
-): CodexCredentialStoreDiagnostics {
-  return {
-    configuredMode: "file",
-    effectiveStore: "file",
-    authJsonPresent: true,
-    managerCompatible: true,
-    message: "compatible",
-    ...input
-  };
-}
-
-describe("OverviewPage presentation model", () => {
-  it("presents the documented default as a file store instead of raw unspecified state", () => {
-    const diagnostics = credentialStore({ configuredMode: "unspecified" });
-
-    expect(formatCredentialStore(diagnostics, false)).toBe("Файл · по умолчанию");
-    expect(formatCredentialStore(diagnostics, true)).toBe("File · default");
+describe("Egoist profile presentation", () => {
+  const now = 1_800_000_000;
+  it("preserves fractional positive quota and never presents unknown as availability", () => {
+    const view = profilePresentation(managedAccount({ id: "fraction", label: "Fraction", weeklyUsedPercent: 99.6 }), now, "ru");
+    expect(view.formatRemaining(view.windows[0].remaining)).toBe("<1%");
+    expect(view.formatRemaining(null)).toBe("—");
+    const unknown = profilePresentation(managedAccount({ id: "unknown", label: "Unknown", weeklyUsedPercent: null }), now, "ru");
+    expect(unknown.readiness.state).toBe("needs_refresh");
+    expect(unknown.readiness.canSwitchManually).toBe(true);
   });
-
-  it("keeps incompatible credential modes explicit", () => {
-    expect(formatCredentialStore(credentialStore({ configuredMode: "keyring", effectiveStore: "keyring" }), false))
-      .toBe("Хранилище Windows");
-    expect(formatCredentialStore(credentialStore({ configuredMode: "auto", effectiveStore: "unknown" }), false))
-      .toBe("Автовыбор");
-    expect(formatCredentialStore(credentialStore({ configuredMode: "invalid", effectiveStore: "unknown" }), false))
-      .toBe("Ошибка настройки");
+  it("uses actual known periods and keeps unreported periods unnamed", () => {
+    expect(quotaWindowLabel(120, "ru")).toBe("2 ч");
+    expect(quotaWindowLabel(10_080, "en")).toBe("weekly");
+    expect(quotaWindowLabel(null, "ru")).toBe("Период неизвестен");
   });
-
-  it("formats reset windows with readable Russian plurals", () => {
-    const now = 1_000_000;
-
-    expect(formatQuotaReset(now + 60, now, false)).toBe("Сброс через 1 минуту");
-    expect(formatQuotaReset(now + 2 * 3600, now, false)).toBe("Сброс через 2 часа");
-    expect(formatQuotaReset(now + 5 * 3600, now, false)).toBe("Сброс через 5 часов");
-    expect(formatQuotaReset(now + 6 * 86_400, now, false)).toBe("Сброс через 6 дней");
-    expect(formatQuotaReset(null, now, false)).toBe("Обновите, чтобы узнать сброс");
+  it("ages without a provider refresh and preserves the last good quota on error", () => {
+    const account = managedAccount({ id: "age", label: "Age", weeklyUsedPercent: 48 });
+    expect(profilePresentation(account, now, "ru").freshness).toBe("Свежий");
+    expect(profilePresentation(account, now + 960, "ru").freshness).toBe("Устарел");
+    const failed = profilePresentation({ ...account, lastRefreshError: "offline", lastRefreshErrorAt: now + 1 }, now + 2, "en");
+    expect(failed.freshness).toBe("Refresh failed");
+    expect(failed.windows[0].remaining).toBe(52);
+    expect(failed.readiness.canAutoSwitch).toBe(false);
   });
-
-  it("selects the nearest truthful reset across protected non-archived profiles", () => {
-    const now = 1_800_000_000;
-    const active = managedAccount({
-      id: "active",
-      label: "Активный",
-      isActive: true,
-      weeklyResetsAt: now + 7 * 86_400
-    });
-    const reserve = managedAccount({
-      id: "reserve",
-      label: "Резерв",
-      weeklyResetsAt: now + 5 * 86_400
-    });
-    const archived = managedAccount({
-      id: "archived",
-      label: "Архивный",
-      archived: true,
-      weeklyResetsAt: now + 86_400
-    });
-    const needsReauth = managedAccount({
-      id: "reauth",
-      label: "Нужен вход",
-      credentialState: "needs_reauth",
-      weeklyResetsAt: now + 2 * 86_400
-    });
-
-    expect(selectNearestQuotaReset([active, reserve, archived, needsReauth], now, "codex")).toMatchObject({
-      accountId: "reserve",
-      accountLabel: "Резерв",
-      resetAt: now + 5 * 86_400,
-      windowType: "weekly",
-      protectedProfiles: 2,
-      profilesWithReset: 2,
-      freshness: "fresh"
-    });
-  });
-
-  it("uses provider windows, excludes another platform and marks an old snapshot honestly", () => {
-    const now = 1_800_000_000;
-    const savedCodex = managedAccount({
-      id: "saved-codex",
-      label: "Сохранённый Codex",
-      lastRefreshAt: now - 3_600,
-      weeklyUsedPercent: null,
-      primaryUsedPercent: 35,
-      primaryResetsAt: now + 3 * 86_400,
-      primaryWindowDurationMins: 10_080
-    });
-    const otherProvider = managedAccount({
-      id: "antigravity",
-      label: "Antigravity",
-      platform: "antigravity",
-      weeklyResetsAt: now + 3_600
-    });
-
-    expect(selectNearestQuotaReset([savedCodex, otherProvider], now, "codex")).toMatchObject({
-      accountId: "saved-codex",
-      resetAt: now + 3 * 86_400,
-      windowType: "weekly",
-      freshness: "saved",
-      protectedProfiles: 1,
-      profilesWithReset: 1
-    });
+  it("does not promise restored quota when a timer elapsed", () => {
+    expect(formatQuotaReset(now - 1, now, false)).toBe("Сброс требует проверки");
+    expect(formatQuotaReset(null, now, true)).toBe("Reset time unknown");
   });
 });

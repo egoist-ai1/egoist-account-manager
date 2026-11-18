@@ -1,4 +1,5 @@
 import { buildProviderQuotaState, type ProviderLimitWindowType } from "./providerAdapter.js";
+import { getAccountQuotaSelection, getAccountReadiness } from "./smartSelection.js";
 import type { ManagedAccount } from "./types.js";
 
 export type AccountListSort = "smart" | "subscription" | "remaining" | "reset" | "freshness" | "added" | "name";
@@ -14,8 +15,9 @@ function finiteTimestamp(value: number | null | undefined): number | null {
 }
 
 export function selectAccountListQuota(account: ManagedAccount, now: number): AccountListQuota {
+  const windowIds = new Set(getAccountQuotaSelection(account).windows.map(window => window.id));
   const windows = buildProviderQuotaState(account).windows
-    .filter((window) => typeof window.remaining === "number" && Number.isFinite(window.remaining))
+    .filter((window) => windowIds.has(window.id) && typeof window.remaining === "number" && Number.isFinite(window.remaining))
     .slice()
     .sort((left, right) =>
       (left.remaining ?? Number.POSITIVE_INFINITY) - (right.remaining ?? Number.POSITIVE_INFINITY) ||
@@ -32,32 +34,31 @@ export function selectAccountListQuota(account: ManagedAccount, now: number): Ac
 }
 
 function nextFutureReset(account: ManagedAccount, now: number): number | null {
-  const future = buildProviderQuotaState(account).windows
-    .map((window) => finiteTimestamp(window.resetAt))
+  const future = getAccountQuotaSelection(account).windows
+    .map((window) => finiteTimestamp(window.resetsAt))
     .filter((value): value is number => value !== null && value > now);
   return future.length > 0 ? Math.min(...future) : null;
 }
 
-function readinessRank(account: ManagedAccount): number {
+function readinessRank(account: ManagedAccount, now: number): number {
   if (account.archived) return 4;
-  if (account.credentialState !== "ready") return 3;
-  if (account.status === "error" || account.status === "limited") return 2;
-  if (account.status === "near_limit") return 1;
-  return 0;
+  const order = { ready: 0, needs_refresh: 1, needs_reauth: 2, unavailable: 3 } as const;
+  return order[getAccountReadiness(account, { now }).state];
 }
+
+// Display order only: these exact provider/legacy names do not imply measured quota multipliers.
+const planPriorities: Readonly<Record<string, number>> = {
+  enterprise: 90, edu: 90, ent26: 90, enterprisecbpautomation: 90, enterprisecbpusagebased: 90, eduplus: 90, edupro: 90,
+  prox20: 80, googleaiultrax20: 80, promax: 80,
+  prox10: 70, prolite: 70, googleaiultra: 70,
+  prox5: 60, pro: 55,
+  team: 50, business: 50, selfservebusinessprolite: 50, selfservebusinessusagebased: 50,
+  plus: 40, googleaipro: 40, go: 30, free: 20
+};
 
 export function accountPlanPriority(account: ManagedAccount): number {
   const key = String(account.planType ?? "unknown").toLowerCase().replace(/[\s_-]+/g, "");
-  if (key === "enterprise" || key === "edu") return 90;
-  if (key.includes("20") || key === "googleaiultrax20") return 80;
-  if (key.includes("10") || key === "prolite" || key === "googleaiultra") return 70;
-  if (key.includes("5")) return 60;
-  if (key === "pro") return 55;
-  if (key === "team" || key === "business") return 50;
-  if (key === "plus" || key === "googleaipro") return 40;
-  if (key === "go") return 30;
-  if (key === "free") return 20;
-  return 10;
+  return Object.hasOwn(planPriorities, key) ? planPriorities[key] : 10;
 }
 
 function compareNullableNumber(left: number | null, right: number | null, direction: "asc" | "desc"): number {
@@ -80,12 +81,12 @@ export function sortAccountList(accounts: ManagedAccount[], sort: AccountListSor
   };
   const remaining = (account: ManagedAccount) => quotaById.get(account.id)?.remainingPercent ?? null;
   const reset = (account: ManagedAccount) => resetById.get(account.id) ?? null;
-  const freshness = (account: ManagedAccount) => finiteTimestamp(account.lastRefreshAt);
+  const freshness = (account: ManagedAccount) => finiteTimestamp(account.quotaSnapshot?.capturedAt ?? account.lastRefreshAt);
 
   return accounts.slice().sort((left, right) => {
     if (sort === "smart") {
       return Number(right.isActive) - Number(left.isActive) ||
-        readinessRank(left) - readinessRank(right) ||
+        readinessRank(left, now) - readinessRank(right, now) ||
         accountPlanPriority(right) - accountPlanPriority(left) ||
         compareNullableNumber(remaining(left), remaining(right), "desc") ||
         compareNullableNumber(reset(left), reset(right), "asc") ||
@@ -94,7 +95,7 @@ export function sortAccountList(accounts: ManagedAccount[], sort: AccountListSor
     }
     if (sort === "subscription") {
       return accountPlanPriority(right) - accountPlanPriority(left) ||
-        readinessRank(left) - readinessRank(right) ||
+        readinessRank(left, now) - readinessRank(right, now) ||
         compareNullableNumber(remaining(left), remaining(right), "desc") ||
         byName(left, right);
     }

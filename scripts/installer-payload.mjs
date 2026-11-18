@@ -1,6 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { extractFile, listPackage, statFile } from '@electron/asar';
+import { windowsNumericVersion } from './installer-ownership.mjs';
+
+// Numeric PE ProductVersion cannot carry the exact prerelease identity.
+// Only a completed ASAR/source comparison grants its narrow compatibility case.
+const verifiedPayloads = new WeakMap();
+const packageIdentity = (pkg) => JSON.stringify(['name', 'productName', 'version', 'main'].map((key) => pkg[key]));
 
 async function filesIn(directory, relative = '') {
   const files = [];
@@ -14,6 +20,7 @@ async function filesIn(directory, relative = '') {
 }
 
 export async function verifyInstallerPayload(root, payloadDir, pkg) {
+  verifiedPayloads.delete(pkg);
   const executable = path.join(payloadDir, `${pkg.productName}.exe`);
   if (!(await fs.stat(executable)).isFile()) throw new Error('Missing application executable');
   const asar = path.join(payloadDir, 'resources', 'app.asar');
@@ -35,11 +42,25 @@ export async function verifyInstallerPayload(root, payloadDir, pkg) {
     const actual = packed ? extractFile(asar, packed.split('/').join(path.sep)) : await fs.readFile(path.join(payloadDir, 'resources', 'icon.png'));
     if (!expected.equals(actual)) throw new Error(`Payload resource differs: ${source}`);
   }
+  verifiedPayloads.set(pkg, { identity: packageIdentity(pkg), numeric: windowsNumericVersion(pkg) });
 }
 export function verifyExecutableMetadata(metadata, pkg) {
+  const numeric = windowsNumericVersion(pkg);
+  const fileVersions = new Set([pkg.version, numeric]);
+  const productVersions = new Set([pkg.version, numeric]);
+  if (!pkg.version.includes('-')) productVersions.add(`${pkg.version}.0`);
+  const prerelease = /^(\d+\.\d+\.\d+)-/.exec(pkg.version);
+  const proof = verifiedPayloads.get(pkg);
+  if (prerelease && numeric.startsWith(`${prerelease[1]}.`)
+      && metadata.fileVersion === numeric
+      && proof?.identity === packageIdentity(pkg) && proof.numeric === numeric) {
+    // electron-builder 26 writes 3.2.0.0 as ProductVersion for 3.2.0-rc.1,
+    // while the configured FileVersion identifies the exact build (3.2.0.1).
+    productVersions.add(`${prerelease[1]}.0`);
+  }
   if (metadata.productName !== pkg.productName
-      || metadata.fileVersion !== pkg.version
-      || metadata.productVersion !== `${pkg.version}.0`) {
+      || !fileVersions.has(metadata.fileVersion)
+      || !productVersions.has(metadata.productVersion)) {
     throw new Error('Payload executable identity/version does not match package.json');
   }
 }

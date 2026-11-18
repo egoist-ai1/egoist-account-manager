@@ -35,12 +35,25 @@ export interface CodexProtocolRuntime {
   error: string | null;
 }
 
+export interface CodexFeatureCapability {
+  available: boolean;
+  reason: string | null;
+}
+
+export interface CodexFeatureCapabilities {
+  initialize: CodexFeatureCapability;
+  accountRead: CodexFeatureCapability;
+  quotaRead: CodexFeatureCapability;
+  excludeResetCreditDetails: CodexFeatureCapability;
+}
+
 export interface CodexCapabilityReport {
   generatedAt: number;
   cliVersion: string | null;
   protocol: CodexProtocolRuntime;
   loginMethods: CodexLoginCapability[];
   identity: CodexRuntimeIdentity;
+  features?: CodexFeatureCapabilities;
 }
 
 export const CODEX_LOGIN_METHODS: readonly CodexLoginMethodId[] = [
@@ -55,6 +68,12 @@ export function unavailableCodexCapabilityReport(error: string, generatedAt = Ma
   return {
     generatedAt,
     cliVersion: null,
+    features: {
+      initialize: { available: false, reason: error },
+      accountRead: { available: false, reason: error },
+      quotaRead: { available: false, reason: error },
+      excludeResetCreditDetails: { available: false, reason: error }
+    },
     protocol: {
       compatible: false,
       userAgent: null,

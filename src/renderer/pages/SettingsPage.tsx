@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import {
   FileDown,
   FolderOpen,
@@ -6,11 +7,8 @@ import {
   Lock,
   RefreshCcw,
   ShieldCheck,
-  SlidersHorizontal,
   TerminalSquare,
-  Trash2,
   Volume2,
-  Zap
 } from "lucide-react";
 import type { AntigravityProfileStatus, AppDiagnostics, AppSettings, ManagedAccount } from "../../shared/types";
 import { getUiText } from "../i18n";
@@ -55,10 +53,6 @@ export interface SettingsPageProps {
   antigravityStatus?: AntigravityProfileStatus | null;
   accounts?: ManagedAccount[];
   busy?: boolean;
-  godModeEnabled?: boolean;
-  hygieneBusy?: boolean;
-  onToggleGodMode?: (enabled: boolean) => void;
-  onCleanHygiene?: () => void;
   onUpdate: (input: Partial<AppSettings>) => void;
   onSelectWorkspace?: () => void;
   onOpenLogViewer?: () => void;
@@ -72,16 +66,20 @@ export function SettingsPage({
   antigravityStatus,
   accounts = [],
   busy,
-  godModeEnabled = false,
-  hygieneBusy = false,
-  onToggleGodMode,
-  onCleanHygiene,
   onUpdate,
   onSelectWorkspace,
   onOpenLogViewer,
   onExportDiagnosticReport,
   displayPath = (v, f = "не выбрана") => v ?? f
 }: SettingsPageProps) {
+  const rootRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    rootRef.current?.querySelectorAll<HTMLElement>('[role="radiogroup"]').forEach((group) => {
+      const radios = [...group.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+      const selected = radios.find((radio) => radio.getAttribute("aria-checked") === "true") ?? radios[0];
+      radios.forEach((radio) => { radio.tabIndex = radio === selected ? 0 : -1; });
+    });
+  }, [settings]);
   const disabled = !settings || Boolean(busy);
   const language = settings?.language ?? "ru";
   const uiText = getUiText(language);
@@ -90,22 +88,26 @@ export function SettingsPage({
   const capabilities = diagnostics?.codexCapabilities;
   const desktopLifecycle = diagnostics?.desktopLifecycle;
   const isCodexReady = capabilities?.protocol?.compatible === true;
-  const isAgReady = antigravityStatus?.detected === true || accounts.some((a) => a.platform === "antigravity");
+  const isAgReady = antigravityStatus?.detected === true;
+  const runtimeAg = accounts.find((account) => account.platform === "antigravity" && account.isActive)?.runtimeVerification?.runtime === "verified";
 
   return (
-    <section className="settings-v303 settings-v4-unified" aria-label={uiText.nav.settings}>
+    <section ref={rootRef} className="settings-v303 settings-v4-unified" aria-label={uiText.nav.settings} onKeyDown={(event) => {
+      const target = event.target as HTMLElement;
+      const group = target.closest('[role="radiogroup"]');
+      if (!group || target.getAttribute("role") !== "radio") return;
+      const radios = [...group.querySelectorAll<HTMLButtonElement>('[role="radio"]')].filter((radio) => !radio.disabled);
+      const index = radios.indexOf(target as HTMLButtonElement);
+      const next = event.key === "ArrowRight" || event.key === "ArrowDown" ? (index + 1) % radios.length : event.key === "ArrowLeft" || event.key === "ArrowUp" ? (index - 1 + radios.length) % radios.length : event.key === "Home" ? 0 : event.key === "End" ? radios.length - 1 : null;
+      if (next === null || !radios.length) return;
+      event.preventDefault(); radios[next].focus(); radios[next].click();
+    }}>
       {/* Header */}
-      <header className="settings-v303-header">
-        <div>
-          <span>{isEnglish ? "SYSTEM PREFERENCES" : "НАСТРОЙКИ СИСТЕМЫ"}</span>
-          <h2>{isEnglish ? "Configuration & Runtime" : "Конфигурация и среда"}</h2>
-        </div>
-        <span className="settings-v303-mark">
-          <SlidersHorizontal />
-        </span>
+      <header className="page-head settings-heading">
+        <h2>{isEnglish ? "Application preferences" : "Настройки приложения"}</h2>
       </header>
 
-      {/* 4-Card Unified Grid */}
+
       <div className="settings-v303-grid settings-modern-grid">
         {/* Card 1: Limits & Sync */}
         <section className="settings-group settings-card-unified">
@@ -117,6 +119,7 @@ export function SettingsPage({
             </div>
           </div>
 
+          <div className="settings-group-content">
           <div className="settings-item settings-item-stack">
             <div>
               <strong>{uiText.settings.autoRefresh}</strong>
@@ -185,6 +188,7 @@ export function SettingsPage({
               </div>
             </div>
           )}
+                  </div>
         </section>
 
         {/* Card 2: Windows & System Tray */}
@@ -197,6 +201,7 @@ export function SettingsPage({
             </div>
           </div>
 
+          <div className="settings-group-content">
           <div className="settings-item">
             <div>
               <strong>{isEnglish ? "Start with Windows" : "Запускать вместе с Windows"}</strong>
@@ -278,6 +283,7 @@ export function SettingsPage({
               onClick={() => onUpdate({ notificationSoundEnabled: !settings?.notificationSoundEnabled })}
             />
           </div>
+                  </div>
         </section>
 
         {/* Card 3: Switch Safety & Behavior */}
@@ -290,6 +296,7 @@ export function SettingsPage({
             </div>
           </div>
 
+          <div className="settings-group-content">
           <div className="settings-item">
             <div>
               <strong>{isEnglish ? "Confirm switching" : "Подтверждать переключение"}</strong>
@@ -336,8 +343,10 @@ export function SettingsPage({
                   : "Мягкое закрытие с авто-завершением процесса при таймауте."}
               </span>
             </div>
-            <div className="settings-segments">
+            <div className="settings-segments" role="radiogroup" aria-label={isEnglish ? "Codex close policy" : "Политика закрытия Codex"}>
               <button
+                role="radio"
+                aria-checked={settings?.desktopClosePolicy === "exact-tree-fallback"}
                 className={settings?.desktopClosePolicy === "exact-tree-fallback" ? "is-selected" : ""}
                 disabled={disabled}
                 onClick={() => onUpdate({ desktopClosePolicy: "exact-tree-fallback" })}
@@ -345,6 +354,8 @@ export function SettingsPage({
                 {isEnglish ? "Automatic" : "Автоматически"}
               </button>
               <button
+                role="radio"
+                aria-checked={settings?.desktopClosePolicy === "graceful-only"}
                 className={settings?.desktopClosePolicy === "graceful-only" ? "is-selected" : ""}
                 disabled={disabled}
                 onClick={() => onUpdate({ desktopClosePolicy: "graceful-only" })}
@@ -358,7 +369,7 @@ export function SettingsPage({
             <div className="settings-item settings-workspace-item">
               <div className="settings-workspace-info">
                 <strong>{isEnglish ? "Codex workspace folder" : "Рабочая папка Codex"}</strong>
-                <span className="settings-workspace-path" title={diagnostics?.workspacePath ?? undefined}>
+                <span className="settings-workspace-path" title={settings?.privacyMode ? undefined : diagnostics?.workspacePath ?? undefined}>
                   {displayPath(diagnostics?.workspacePath, isEnglish ? "not selected" : "не выбрана")}
                 </span>
               </div>
@@ -368,6 +379,7 @@ export function SettingsPage({
               </button>
             </div>
           )}
+                  </div>
         </section>
 
         {/* Card 4: Runtime & Diagnostics */}
@@ -380,6 +392,7 @@ export function SettingsPage({
             </div>
           </div>
 
+          <div className="settings-group-content">
           <div className="settings-item">
             <div>
               <strong>
@@ -440,7 +453,7 @@ export function SettingsPage({
                   <strong>Antigravity IDE</strong>
                 </div>
                 <span>
-                  {isAgReady ? (isEnglish ? "Live session synced" : "Сессия синхронизирована") : (isEnglish ? "Not connected" : "Не подключён")}
+                  {runtimeAg ? (isEnglish ? "Runtime email confirmed" : "Email работающей IDE подтверждён") : isAgReady ? (isEnglish ? "Local IDE profile found" : "Локальный профиль IDE найден") : (isEnglish ? "Not connected" : "Не подключён")}
                 </span>
                 <small>
                   {antigravityStatus?.diagnostics?.userDataDirExists ? "state.vscdb" : (isEnglish ? "IDE profile" : "Профиль IDE")}
@@ -448,49 +461,6 @@ export function SettingsPage({
               </div>
             </div>
           </div>
-
-          {/* Antigravity God Mode (Zero Confirmations) */}
-          <div className="settings-item">
-            <div>
-              <strong>
-                <Zap size={14} />
-                {isEnglish ? "God Mode (Zero Confirmations)" : "Режим Бога (Zero Confirmations)"}
-              </strong>
-              <span>
-                {isEnglish
-                  ? "Suppresses IDE prompts, auto-allows commands, and disables telemetry."
-                  : "Отключает подтверждения команд и телеметрию в Antigravity IDE."}
-              </span>
-            </div>
-            <Toggle
-              checked={godModeEnabled === true}
-              disabled={disabled || !onToggleGodMode}
-              label={isEnglish ? "God Mode" : "Режим Бога"}
-              onClick={() => onToggleGodMode?.(!godModeEnabled)}
-            />
-          </div>
-
-          {/* Context & Session Hygiene */}
-          {onCleanHygiene && (
-            <div className="settings-item settings-workspace-item">
-              <div className="settings-workspace-info">
-                <strong>{isEnglish ? "Context & Session Hygiene" : "Гигиена контекста и блокировок"}</strong>
-                <span className="settings-workspace-path">
-                  {isEnglish
-                    ? "Purges stale lockfiles, crash dumps, and GPU shader caches."
-                    : "Очистка зависших lockfile, кэшей и дампов сбоев."}
-                </span>
-              </div>
-              <button
-                className="button secondary compact-button"
-                onClick={onCleanHygiene}
-                disabled={disabled || hygieneBusy}
-              >
-                <Trash2 size={13} />
-                <span>{hygieneBusy ? (isEnglish ? "Purging…" : "Очистка…") : (isEnglish ? "Clean" : "Очистить")}</span>
-              </button>
-            </div>
-          )}
 
           {/* Diagnostics Actions */}
           <div className="settings-item settings-diagnostics-actions-item">
@@ -517,6 +487,7 @@ export function SettingsPage({
               )}
             </div>
           </div>
+                  </div>
         </section>
       </div>
     </section>

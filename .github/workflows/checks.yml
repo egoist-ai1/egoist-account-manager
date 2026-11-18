@@ -43,6 +43,8 @@ jobs:
 
       - name: Тесты
         run: pnpm run test:node
+        env:
+          CAM_TEST_WORKDIR: ${{ runner.temp }}
 
       - name: Release delivery tests
         run: pnpm run test:delivery

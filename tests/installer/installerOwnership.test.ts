@@ -41,7 +41,7 @@ function install() { return execute('--install-owned', source, manifestFile, tar
 async function installedManifest() { return JSON.parse(await fs.readFile(path.join(target, '.egoist-install.json'), 'utf8')) as Manifest; }
 
 const native = process.platform === 'win32' ? describe : describe.skip;
-native('compiled installer ownership boundary', () => {
+native('compiled installer ownership boundary', { timeout: 30_000 }, () => {
   beforeAll(async () => {
     scratch = await fs.mkdtemp(path.join(process.env.CAM_TEST_WORKDIR ?? os.tmpdir(), 'installer-ownership-'));
     helper = path.join(scratch, 'ModernInstaller.exe');

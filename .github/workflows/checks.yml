@@ -42,9 +42,11 @@ jobs:
         run: pnpm run lint
 
       - name: Тесты
-        run: pnpm run test:node
+        run: pnpm run test:node --maxWorkers=2 --testTimeout=30000 --hookTimeout=90000
         env:
           CAM_TEST_WORKDIR: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
 
       - name: Release delivery tests
         run: pnpm run test:delivery

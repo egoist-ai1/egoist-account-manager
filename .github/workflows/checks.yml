@@ -95,6 +95,9 @@ jobs:
       - name: Проверить точный package
         run: pnpm run verify:package
 
+      - name: Проверить рендер виджета панели задач
+        run: pnpm run verify:taskbar
+
       - name: Проверить запуск shipping binary без live adapters
         run: pnpm run verify:startup
 

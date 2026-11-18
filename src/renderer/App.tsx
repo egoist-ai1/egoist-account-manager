@@ -6,6 +6,7 @@ import {
   Archive,
   ArrowRightLeft,
   CheckCircle2,
+  ChevronDown,
   Clock,
   Command,
   Database,
@@ -13,9 +14,11 @@ import {
   FileDown,
   FileUp,
   FolderOpen,
+  Funnel,
   KeyRound,
   LayoutDashboard,
   LayoutGrid,
+  LayoutTemplate,
   Layers3,
   List,
   Loader2,
@@ -27,7 +30,7 @@ import {
   Plus,
   Search,
   ShieldCheck,
-  SlidersHorizontal,
+  Settings2,
   RefreshCcw,
   Star,
   ArrowUpDown,
@@ -74,7 +77,7 @@ import { buildProviderQuotaState } from "../shared/providerAdapter";
 import { hasCurrentQuotaRefreshFailure } from "../shared/quotaFreshness";
 import { buildQuotaRefreshErrorMessage } from "../shared/quotaRefreshError";
 import { buildQuotaRefreshAccountMessage, buildQuotaRefreshMessage } from "../shared/quotaRefreshMessage";
-import { selectSmartAccount } from "../shared/smartSelection";
+import { getAccountReadiness, selectSmartAccount } from "../shared/smartSelection";
 import { appVersion, releaseNotes } from "../shared/releaseNotes";
 import { englishReleaseNotes } from "./releaseNotes";
 import { productName } from "../shared/branding";
@@ -89,7 +92,8 @@ import { OverviewPage } from "./components/v3/OverviewPage";
 import { TrayPopover } from "./components/TrayPopover";
 import { TrayHoverPopover } from "./components/TrayHoverPopover";
 import "@fontsource-variable/unbounded";
-import "@fontsource-variable/montserrat";
+import "@fontsource-variable/onest";
+import "@fontsource-variable/jetbrains-mono";
 import { useVisibleClock } from "./hooks/useVisibleClock";
 import { useDialogManager } from "./hooks/useDialogManager";
 import { AntigravityImportModal, type AntigravityExternalImportSource } from "./components/AntigravityImportModal";
@@ -104,6 +108,7 @@ import { profilePresentation } from "./profilePresentation";
 import { mergeNotification, notificationDeadline, notificationOperation } from "./notificationPresentation";
 import { formatQuotaRemaining } from "../shared/providerAdapter";
 import "./styles.css";
+import "./workspace-shell.css";
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
@@ -783,10 +788,7 @@ function switchErrorMessage(error: unknown, platform: PlatformFilter, language: 
 
 
 function meterTone(usedPercent: number | null): string {
-  const usedValue = usedPercent ?? 0;
-  if (usedValue >= 85) return "danger";
-  if (usedValue >= 60) return "warn";
-  return "good";
+  return usedPercent !== null && usedPercent > 90 ? "danger" : "good";
 }
 
 function remainingPercent(usedPercent: number | null): number | null {
@@ -938,12 +940,6 @@ function AccountCard({
               <span className="account-label" title={privacyMode ? undefined : account.label}>{displayMetadata(account.label, privacyMode, language)}</span>
               {account.favorite ? <Star className="inline-mark" /> : null}
               {account.archived ? <span className="badge compact">{isEnglish ? "Archived" : "Архив"}</span> : null}
-              {account.isActive ? (
-                <span className="status-pill-clean is-live account-card-live-pill" title={runtimeLabel(account.runtimeVerification, language)}>
-                  <span className="status-dot" />
-                  <span>{isEnglish ? "Selected" : "Выбран"}</span>
-                </span>
-              ) : null}
             </div>
             <div className="email" title={privacyMode ? undefined : account.email}>{privacyMode ? maskEmailForPrivacy(account.email) : account.email}</div>
           </div>
@@ -972,8 +968,16 @@ function AccountCard({
         />
       </div>
       <div className="profile-card-foot">
-        <QuotaFreshnessChip account={account} language={language} />
-        <span className="profile-refresh-age">{view.ageLabel}</span>
+        <div className="card-quota-freshness">
+          <QuotaFreshnessChip account={account} language={language} />
+          <span className="profile-refresh-age">{view.ageLabel}</span>
+        </div>
+        {account.isActive ? (
+          <span className={`card-runtime ${account.runtimeVerification?.runtime === "verified" ? "is-verified" : ""}`}>
+            {account.runtimeVerification?.runtime === "verified" ? <ShieldCheck aria-hidden="true" /> : <Activity aria-hidden="true" />}
+            {runtimeLabel(account.runtimeVerification, language)}
+          </span>
+        ) : null}
       </div>
       <div className={`row-actions card-actions ${needsRepair ? "needs-repair" : ""}`} onClick={(event) => event.stopPropagation()}>
         <button className="icon-btn" aria-label={isEnglish ? "Refresh limits" : "Обновить лимиты"} disabled={busy !== null} onClick={() => onRefresh(account.id)} title={isEnglish ? "Refresh limits" : "Обновить лимиты"}>
@@ -1101,9 +1105,17 @@ function AccountInspector({
           ) : null}
         </div>
       </div>
-      <div className="inspector-limit-grid">
-        {view.windows.length ? view.windows.map((window) => <div className="inspector-quota-window" key={window.id}><LimitMeter label={window.title} usedPercent={window.usedPercent} resetsAt={window.resetsAt} platform={account.platform} language={language} /><small>{displayMetadata([window.label, window.modelId, window.scope].filter(Boolean).join(" · "), privacyMode, language)}</small></div>) : <LimitMeter label={isEnglish ? "Quota not observed" : "Лимит не наблюдался"} usedPercent={null} resetsAt={null} language={language} />}
-      </div>
+      <section className="inspector-section">
+        <h4>{isEnglish ? "Limits" : "Лимиты"}</h4>
+        <div className="inspector-limit-grid">
+          {view.windows.length ? view.windows.map((window) => (
+            <div className="inspector-quota-window" key={window.id}>
+              <LimitMeter label={window.title} usedPercent={window.usedPercent} resetsAt={window.resetsAt} platform={account.platform} language={language} />
+              <small>{displayMetadata([window.label, window.modelId, window.scope].filter(Boolean).join(" · "), privacyMode, language)}</small>
+            </div>
+          )) : <LimitMeter label={isEnglish ? "Quota not observed" : "Лимит не наблюдался"} usedPercent={null} resetsAt={null} language={language} />}
+        </div>
+      </section>
       {currentQuotaFailure ? (
         <div className="quota-refresh-warning" title={privacyMode ? undefined : account.lastRefreshError ?? undefined}>
           <AlertTriangle />
@@ -1122,10 +1134,10 @@ function AccountInspector({
         </div>
       ) : null}
       <RuntimeEvidence evidence={account.runtimeVerification} privacyMode={privacyMode} language={language} selected={account.isActive} busy={busy !== null} onVerify={() => onVerifyRuntime(account.id)} />
-      <div className="inspector-path" title={privacyMode ? (isEnglish ? "Path hidden" : "Путь скрыт") : account.profileDir}>
-        <Database />
-        <span>{privacyMode ? (isEnglish ? "Path hidden" : "Путь скрыт") : account.profileDir}</span>
-      </div>
+      <details className="inspector-storage">
+        <summary><Database aria-hidden="true" />{isEnglish ? "Local storage" : "Локальное хранилище"}<ChevronDown aria-hidden="true" /></summary>
+        <div className="inspector-path">{privacyMode ? (isEnglish ? "Path hidden" : "Путь скрыт") : account.profileDir}</div>
+      </details>
       <section className="inspector-management" aria-label={isEnglish ? "Profile management" : "Управление профилем"}>
         <div className="inspector-management-head">
           <strong>{isEnglish ? "Profile management" : "Управление профилем"}</strong>
@@ -1148,6 +1160,8 @@ type TransferMode = "export" | "import";
 type ViewKey = AppViewKey;
 type NavItem = { key: ViewKey; label: string; description: string; icon: LucideIcon };
 type PlatformFilter = "all" | "codex" | "antigravity";
+type ProfileStatusFilter = "all" | "selected" | "ready" | "attention" | "archived";
+type ProfileViewMode = "auto" | "table" | "cards";
 const ANTIGRAVITY_CLI_DOCS_URL = "https://www.antigravity.google/docs/cli-getting-started";
 
 const antigravityOAuthStepMessage: Record<string, string> = {
@@ -1286,7 +1300,13 @@ function App() {
     return saved === "subscription" || saved === "remaining" || saved === "reset" || saved === "freshness" || saved === "added" || saved === "name" ? saved : "smart";
   });
   const [platformFilter, setPlatformFilter] = useState<PlatformFilter>("all");
-  const [viewMode, setViewMode] = useState<"table" | "cards">(() => window.localStorage.getItem("cam.accountView") === "cards" ? "cards" : "table");
+  const [statusFilter, setStatusFilter] = useState<ProfileStatusFilter>("all");
+  const [profileViewPreference, setProfileViewPreference] = useState<ProfileViewMode>(() => {
+    const saved = window.localStorage.getItem("cam.accountView");
+    return saved === "cards" || saved === "table" ? saved : "auto";
+  });
+  const [compactProfiles, setCompactProfiles] = useState(() => window.matchMedia("(max-width: 760px)").matches);
+  const viewMode = profileViewPreference === "auto" ? compactProfiles ? "cards" : "table" : profileViewPreference;
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const inspectorTriggerRef = useRef<HTMLElement | null>(null);
@@ -1311,10 +1331,6 @@ function App() {
   const uiText = getUiText(language);
   const isEnglish = language === "en";
   const shellText = {
-    platformFilter: isEnglish ? "Platform filter" : "Фильтр платформы",
-    platform: isEnglish ? "Platform" : "Платформа",
-    actionCenter: isEnglish ? "Action center" : "Центр действий",
-    actions: isEnglish ? "Actions" : "Действия",
     addCodex: isEnglish ? "Add Codex" : "Добавить Codex",
     addAntigravity: isEnglish ? "Add Antigravity" : "Добавить Antigravity",
     commands: isEnglish ? "Commands" : "Команды",
@@ -1329,9 +1345,8 @@ function App() {
   const accountsText = {
     title: isEnglish ? "Profiles" : "Профили",
     searchProfile: isEnglish ? "Search profile" : "Поиск профиля",
-    accountFilter: isEnglish ? "Account filter" : "Фильтр аккаунтов",
     viewMode: isEnglish ? "Account view" : "Вид аккаунтов",
-    all: isEnglish ? "All" : "Все",
+    auto: isEnglish ? "Auto" : "Авто",
     table: isEnglish ? "Table" : "Таблица",
     cards: isEnglish ? "Cards" : "Карточки",
     sort: isEnglish ? "Sort accounts" : "Сортировка аккаунтов",
@@ -1344,11 +1359,6 @@ function App() {
     nameSort: isEnglish ? "By name" : "По названию",
     export: isEnglish ? "Export" : "Экспорт",
     import: isEnglish ? "Import" : "Импорт",
-    account: isEnglish ? "Account" : "Аккаунт",
-    plan: isEnglish ? "Plan" : "План",
-    fiveHours: isEnglish ? "5 hours" : "5 часов",
-    week: isEnglish ? "Week" : "Неделя",
-    status: isEnglish ? "Status" : "Статус",
     emptyFiltered: isEnglish ? "No accounts match this filter." : "Под этот фильтр аккаунтов нет."
   };
   const privacyMode = settingsData?.privacyMode === true;
@@ -1356,12 +1366,6 @@ function App() {
   const displayPath = (value: string | null | undefined, fallback = "не выбран"): string => {
     return privacyMode && value ? (isEnglish ? "Path hidden" : "Путь скрыт") : (value ?? fallback);
   };
-
-  const stats = useMemo(() => {
-    const codex = accounts.filter((account) => accountPlatform(account) === "codex").length;
-    const antigravity = accounts.filter((account) => accountPlatform(account) === "antigravity").length;
-    return { codex, antigravity };
-  }, [accounts]);
 
   const smartRecommendation = useMemo(() => selectSmartAccount(accounts, workspaceBinding, { now, staleAfterSeconds: 900 }), [accounts, workspaceBinding, now]);
   const bestAccount = useMemo(() => {
@@ -1389,43 +1393,32 @@ function App() {
       null;
   }, [bestAccount, scopedAccounts, selectedAccountId]);
 
+  const filterTime = Math.floor(now / 60) * 60;
   const visibleAccounts = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    const filtered = scopedAccounts
-      .filter((account) => {
-        if (!needle) return true;
-        return `${account.label} ${account.email} ${account.planType}`.toLowerCase().includes(needle);
-      });
-    return sortAccountList(filtered, accountSort, nowSeconds());
-  }, [accountSort, scopedAccounts, search]);
-  const scopedProtectedCount = scopedAccounts.filter((account) => account.credentialState === "ready").length;
-  const scopedAttentionCount = scopedAccounts.filter((account) => profilePresentation(account, now, language).readiness.state !== "ready" || (account.isActive && account.runtimeVerification?.runtime !== "verified")).length;
+    const filtered = scopedAccounts.filter((account) => {
+      if (statusFilter === "archived" && !account.archived) return false;
+      if (statusFilter === "selected" && (!account.isActive || account.archived)) return false;
+      if (statusFilter === "ready" || statusFilter === "attention") {
+        if (account.archived) return false;
+        const ready = getAccountReadiness(account, { now: filterTime }).state === "ready"
+          && (!account.isActive || account.runtimeVerification?.runtime === "verified");
+        if (ready !== (statusFilter === "ready")) return false;
+      }
+      if (!needle) return true;
+      const label = displayMetadata(account.label, privacyMode, language);
+      const email = privacyMode ? maskEmailForPrivacy(account.email) : account.email;
+      return `${label} ${email} ${account.planType}`.toLowerCase().includes(needle);
+    });
+    return sortAccountList(filtered, accountSort, filterTime);
+  }, [accountSort, filterTime, language, privacyMode, scopedAccounts, search, statusFilter]);
   const refreshableAccountCount = accounts.length;
   const navItems: NavItem[] = [
     { key: "accounts", label: isEnglish ? "Profiles" : "Профили", description: isEnglish ? "Accounts and limits" : "Аккаунты и лимиты", icon: Layers3 },
     { key: "overview", label: isEnglish ? "Overview" : "Обзор", description: isEnglish ? "Session and readiness" : "Сессия и готовность", icon: LayoutDashboard },
     { key: "activity", label: isEnglish ? "Journal" : "Журнал", description: isEnglish ? "Switch evidence" : "Проверки переключений", icon: Activity },
-    { key: "settings", label: uiText.nav.settings, description: isEnglish ? "App behavior" : "Поведение приложения", icon: SlidersHorizontal }
+    { key: "settings", label: uiText.nav.settings, description: isEnglish ? "App behavior" : "Поведение приложения", icon: Settings2 }
   ];
-  const platformSummaries = [
-    {
-      id: "codex",
-      label: "Codex",
-      count: stats.codex,
-      state: diagnostics?.codexPath ? (isEnglish ? "CLI found" : "CLI найден") : (isEnglish ? "CLI required" : "Нужен CLI"),
-      tone: diagnostics?.codexPath ? "ready" : "warn",
-    },
-    {
-      id: "antigravity",
-      label: "Antigravity",
-      count: stats.antigravity,
-      state: antigravityProfileStatus?.detected || stats.antigravity > 0
-        ? (isEnglish ? "Profile found" : "Профиль найден")
-        : (isEnglish ? "Sign-in needed" : "Нужен вход"),
-      tone: antigravityProfileStatus?.detected || stats.antigravity > 0 ? "ready" : "warn",
-    }
-  ] as const;
-
   useEffect(() => {
     if (selectedAccountId && scopedAccounts.some((account) => account.id === selectedAccountId)) return;
     const bestScopedAccountId = bestAccount && scopedAccounts.some((account) => account.id === bestAccount.id) ? bestAccount.id : null;
@@ -1443,8 +1436,15 @@ function App() {
   }, [accountSort]);
 
   useEffect(() => {
-    window.localStorage.setItem("cam.accountView", viewMode);
-  }, [viewMode]);
+    window.localStorage.setItem("cam.accountView", profileViewPreference);
+  }, [profileViewPreference]);
+
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 760px)");
+    const onChange = (event: MediaQueryListEvent) => setCompactProfiles(event.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
 
   useEffect(() => {
     const onVisibilityChange = () => setVisibilityEpoch((value) => value + 1);
@@ -2403,11 +2403,6 @@ function App() {
             <header className="page-head">
                 <div>
                   <h2>{accountsText.title}</h2>
-                  <p>
-                    {isEnglish
-                      ? `${scopedProtectedCount} with saved sign-in · ${scopedAttentionCount} need attention`
-                      : `${scopedProtectedCount} с сохранённым входом · ${scopedAttentionCount} ${scopedAttentionCount === 1 ? "требует" : "требуют"} внимания`}
-                  </p>
                 </div>
                 <div className="panel-actions">
                   <button className="button secondary" disabled={busy !== null || refreshableAccountCount === 0} aria-busy={busy === "refresh:all"} onClick={refreshAllAccounts} title={refreshableAccountCount === 0 ? shellText.noRefreshableAccounts : shellText.refreshLimits}>
@@ -2424,7 +2419,7 @@ function App() {
                 </div>
             </header>
             <section className="panel account-panel" aria-label={accountsText.title}>
-              <div className="profile-toolbar">
+              <div className="profile-toolbar profile-controls">
                   <div className="search-wrap">
                     <Search aria-hidden="true" />
                     <input
@@ -2437,12 +2432,27 @@ function App() {
                     />
                     {search ? <button className="search-clear" onClick={() => setSearch("")} aria-label={isEnglish ? "Clear search" : "Очистить поиск"}><X /></button> : null}
                   </div>
-                  <label className="account-sort-control provider-filter-control"><span className="sr-only">{isEnglish ? "Provider filter" : "Фильтр провайдера"}</span><select aria-label={isEnglish ? "Provider filter" : "Фильтр провайдера"} value={platformFilter} onChange={(event) => setPlatformFilter(event.target.value as PlatformFilter)}><option value="all">{isEnglish ? "All providers" : "Все провайдеры"}</option><option value="codex">Codex</option><option value="antigravity">Antigravity</option></select></label>
-                  <div className="segmented account-view-toggle" role="group" aria-label={accountsText.viewMode}>
-                    <button className={viewMode === "cards" ? "is-selected" : ""} aria-pressed={viewMode === "cards"} onClick={() => setViewMode("cards")} title={accountsText.cards} aria-label={accountsText.cards}><LayoutGrid /><span>{accountsText.cards}</span></button>
-                    <button className={viewMode === "table" ? "is-selected" : ""} aria-pressed={viewMode === "table"} onClick={() => setViewMode("table")} title={accountsText.table} aria-label={accountsText.table}><List /><span>{accountsText.table}</span></button>
-                  </div>
-                  <label className="account-sort-control" title={accountsText.sort}>
+                  <label className="account-sort-control provider-filter-control">
+                    <Layers3 aria-hidden="true" />
+                    <select aria-label={isEnglish ? "Provider filter" : "Фильтр провайдера"} value={platformFilter} onChange={(event) => setPlatformFilter(event.target.value as PlatformFilter)}>
+                      <option value="all">{isEnglish ? "All platforms" : "Все платформы"}</option>
+                      <option value="codex">Codex</option>
+                      <option value="antigravity">Antigravity</option>
+                    </select>
+                    <ChevronDown className="select-chevron" aria-hidden="true" />
+                  </label>
+                  <label className="account-sort-control status-filter-control">
+                    <Funnel aria-hidden="true" />
+                    <select aria-label={isEnglish ? "Status filter" : "Фильтр по статусу"} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as ProfileStatusFilter)}>
+                      <option value="all">{isEnglish ? "Any status" : "Любой статус"}</option>
+                      <option value="selected">{isEnglish ? "Selected" : "Выбранные"}</option>
+                      <option value="ready">{isEnglish ? "Ready" : "Готовые"}</option>
+                      <option value="attention">{isEnglish ? "Need attention" : "Требуют внимания"}</option>
+                      <option value="archived">{isEnglish ? "Archived" : "В архиве"}</option>
+                    </select>
+                    <ChevronDown className="select-chevron" aria-hidden="true" />
+                  </label>
+                  <label className="account-sort-control profile-sort-control" title={accountsText.sort}>
                     <ArrowUpDown aria-hidden="true" />
                     <span className="sr-only">{accountsText.sort}</span>
                     <select value={accountSort} onChange={(event) => setAccountSort(event.target.value as AccountListSort)} aria-label={accountsText.sort}>
@@ -2454,7 +2464,19 @@ function App() {
                       <option value="added">{accountsText.addedSort}</option>
                       <option value="name">{accountsText.nameSort}</option>
                     </select>
+                    <ChevronDown className="select-chevron" aria-hidden="true" />
                   </label>
+                  <div className="segmented account-view-toggle" role="group" aria-label={accountsText.viewMode}>
+                    {([
+                      ["auto", LayoutTemplate, accountsText.auto],
+                      ["table", List, accountsText.table],
+                      ["cards", LayoutGrid, accountsText.cards]
+                    ] as const).map(([mode, Icon, label]) => (
+                      <button key={mode} className={profileViewPreference === mode ? "is-selected" : ""} aria-pressed={profileViewPreference === mode} onClick={() => setProfileViewPreference(mode)} title={label} aria-label={label}>
+                        <Icon aria-hidden="true" />
+                      </button>
+                    ))}
+                  </div>
               </div>
               <div className="profile-workbench">
                 <div ref={profileMainRef} className="profile-main is-scrollable">
@@ -2504,6 +2526,11 @@ function App() {
               </div>
               <footer className="profile-table-footer">
                 <span role="status">{isEnglish ? "Profiles shown" : "Показано профилей"} <strong>{visibleAccounts.length}</strong> {isEnglish ? "of" : "из"} {scopedAccounts.length}</span>
+                {search.trim() || platformFilter !== "all" || statusFilter !== "all" ? (
+                  <button className="profile-filter-reset" onClick={() => { setSearch(""); setPlatformFilter("all"); setStatusFilter("all"); }}>
+                    <X aria-hidden="true" />{isEnglish ? "Clear filters" : "Сбросить фильтры"}
+                  </button>
+                ) : null}
                 {viewMode === "table" && visibleAccounts.length > 0 ? <span><kbd>↑</kbd><kbd>↓</kbd>{isEnglish ? "select" : "выбор"}<kbd>Enter</kbd>{isEnglish ? "details" : "подробности"}</span> : null}
               </footer>
             </section>
@@ -2543,61 +2570,34 @@ function App() {
 
   return (
     <main className="shell ops-shell">
-      <aside className="side-rail" aria-label={isEnglish ? "Main sections" : "Основные разделы"}>
+      <header className="workspace-header">
         <div className="rail-brand">
           <div className="mark">
             <img src={appAvatarUrl} alt="" aria-hidden="true" />
           </div>
           <h1>{productName}</h1>
         </div>
-        <nav className="rail-nav" style={{ "--nav-index": navItems.findIndex((item) => item.key === activeView) } as React.CSSProperties}><span className="rail-nav-selection" aria-hidden="true" />
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.key}
-                className={activeView === item.key ? "is-active" : ""}
-                onClick={() => setActiveView(item.key)}
-                aria-label={item.label}
-                aria-current={activeView === item.key ? "page" : undefined}
-                title={`${item.label} · ${item.description}`}
-              >
-                <Icon aria-hidden="true" />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </nav>
-        <section className="platform-stack" aria-label={shellText.platformFilter}>
-          <div className="rail-section-title">{shellText.platform}</div>
-          {platformSummaries.map((platform) => (
-            <button
-              key={platform.id}
-              className={`platform-tile ${platform.tone} ${activeView === "accounts" && platformFilter === platform.id ? "is-active" : ""}`}
-              aria-label={`${platform.label}: ${platform.count} · ${platform.state}`}
-              aria-pressed={activeView === "accounts" && platformFilter === platform.id}
-              title={`${platform.label} · ${platform.state}`}
-              onClick={() => {
-                setActiveView("accounts");
-                setPlatformFilter((current) => activeView === "accounts" && current === platform.id ? "all" : platform.id);
-              }}
-            >
-              <span className="platform-tile-label">
-                <PlatformMark platform={platform.id} size="tile" />
-                <span><b>{platform.label}</b><small>{platform.state}</small></span>
-              </span>
-              <strong>{platform.count}</strong>
-            </button>
-          ))}
-        </section>
-        <div className="rail-footer">
-          <p role="status"><span className={`rail-status-dot is-${loadState}`} aria-hidden="true" />{message ? displayMetadata(message, privacyMode, language) : uiText.states.success}</p>
-          <span className="version">v{appVersion}</span>
+        <div className="workspace-navigation" role="group" aria-label={isEnglish ? "Main sections" : "Основные разделы"}>
+          <nav className="rail-nav">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.key}
+                  className={activeView === item.key ? "is-active" : ""}
+                  onClick={() => setActiveView(item.key)}
+                  aria-label={item.label}
+                  aria-current={activeView === item.key ? "page" : undefined}
+                  title={`${item.label} · ${item.description}`}
+                >
+                  <Icon aria-hidden="true" />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
         </div>
-      </aside>
-
-      <section className="app-frame">
-        <header className="topbar">
+        <div className="topbar">
           <button className="button secondary command-trigger" aria-label={shellText.commands} title={shellText.commands} aria-keyshortcuts="Control+k Meta+k" onClick={() => {
             setCommandOpen(true);
             setCommandSearch("");
@@ -2614,12 +2614,11 @@ function App() {
               aria-label={isEnglish ? "Switch audit journal" : "Журнал аудита переключений"}
             >
               <Activity size={14} />
-              <span>{isEnglish ? "Audit" : "Аудит"}</span>
             </button>
             <button className="icon-btn update-check-button" aria-label={isEnglish ? "Check app updates" : "Проверить обновления приложения"} title={isEnglish ? "Check app updates" : "Проверить обновления приложения"} disabled={busy !== null} aria-busy={busy === "updates"} onClick={checkApplicationUpdates}>
               {busy === "updates" ? <Loader2 className="spin" /> : <PackageCheck />}
             </button>
-            <button className="button" disabled={busy !== null} onClick={platformFilter === "antigravity" ? () => openAntigravityImport() : openLoginWizard}>
+            <button className="button workspace-add-profile" aria-label={isEnglish ? "Add profile" : "Добавить профиль"} disabled={busy !== null} onClick={activeView === "accounts" && platformFilter === "antigravity" ? () => openAntigravityImport() : openLoginWizard}>
               <Plus />
               <span>{isEnglish ? "Add profile" : "Добавить профиль"}</span>
             </button>
@@ -2635,8 +2634,10 @@ function App() {
               </button>
             </div>
           </div>
-        </header>
+        </div>
+      </header>
 
+      <section className="app-frame">
         {appNotifications.length > 0 ? (
           <section className="process-notice-stack" aria-label={isEnglish ? "Application notifications" : "Уведомления приложения"}>
             {appNotifications.map((notice) => (
@@ -2704,6 +2705,10 @@ function App() {
         ) : (
           <div ref={contentRef} className={`content content-${activeView}`}>{pageContent}</div>
         )}
+        <footer className="workspace-status">
+          <p role="status"><span className={`rail-status-dot is-${loadState}`} aria-hidden="true" />{message ? displayMetadata(message, privacyMode, language) : uiText.states.success}</p>
+          <span className="version">v{appVersion}</span>
+        </footer>
       </section>
       <AddAccountWizard
         state={loginWizard}

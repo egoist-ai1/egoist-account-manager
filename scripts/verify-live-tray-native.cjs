@@ -21,7 +21,7 @@ app.whenReady().then(async () => {
         ? "stale"
         : label === "—"
           ? "unknown"
-          : numeric !== null && numeric <= 10
+          : numeric !== null && numeric < 10
             ? "critical"
             : "fresh";
     const snapshot = {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LIVE_TRAY_REPRESENTATIONS, buildLiveTraySnapshot, buildDualLiveTraySnapshot, renderLiveTrayBitmap } from "../../src/shared/liveTray";
+import { LIVE_TRAY_REPRESENTATIONS, buildLiveTraySnapshot, buildDualLiveTraySnapshot, buildTaskbarQuotaValue, renderLiveTrayBitmap } from "../../src/shared/liveTray";
 import type { ManagedAccount } from "../../src/shared/types";
 
 function account(input: Partial<ManagedAccount> = {}): ManagedAccount {
@@ -45,6 +45,32 @@ function account(input: Partial<ManagedAccount> = {}): ManagedAccount {
 }
 
 describe("live tray indicator", () => {
+  it.each([
+    [0, "0%", true],
+    [0.4, "<1%", true],
+    [9.9, "9%", true],
+    [10, "10%", false],
+    [10.1, "10%", false],
+    [34, "34%", false],
+    [100, "100%", false]
+  ])("formats %s percent for the taskbar using the strict threshold", (remainingPercent, label, critical) => {
+    const snapshot = buildLiveTraySnapshot([account({
+      primaryUsedPercent: 100 - remainingPercent,
+      secondaryUsedPercent: null,
+      fiveHourUsedPercent: null,
+      weeklyUsedPercent: null
+    })], { now: 1_100 });
+    expect(snapshot.state).toBe(critical ? "critical" : "fresh");
+    expect(buildTaskbarQuotaValue(snapshot)).toEqual({ text: label, critical });
+  });
+
+  it("renders unavailable taskbar values as a neutral dash", () => {
+    for (const state of ["empty", "stale", "error", "unknown"] as const) {
+      expect(buildTaskbarQuotaValue({ state, remainingPercent: 0 })).toEqual({ text: "—", critical: false });
+    }
+    expect(buildTaskbarQuotaValue(null)).toEqual({ text: "—", critical: false });
+  });
+
   it("uses the most constrained fresh quota window", () => {
     const snapshot = buildLiveTraySnapshot([account()], { now: 1_100 });
     expect(snapshot).toMatchObject({
@@ -124,7 +150,7 @@ describe("live tray indicator", () => {
 
   it("keeps visually confusable exact values distinct at the 16px shell size", () => {
     const render = (value: number) => Buffer.from(renderLiveTrayBitmap({
-      state: value <= 10 ? "critical" : "fresh",
+      state: value < 10 ? "critical" : "fresh",
       accountId: "fixture",
       accountLabel: "Fixture",
       remainingPercent: value,

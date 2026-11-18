@@ -15,11 +15,11 @@ body:has(:is(.tray-live, .tray-hover)),
   width: min(310px, 100%);
   padding: 12px;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  background: var(--color-panel);
-  color: var(--quartz);
-  font: 500 12px/16px var(--font-sans);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  color: var(--text);
+  font: 500 12px/16px var(--font-text);
   user-select: none;
 }
 
@@ -40,11 +40,12 @@ body:has(:is(.tray-live, .tray-hover)),
 }
 
 .tray-summary {
-  min-height: 34px;
+  min-height: 40px;
 }
 
 .tray-brand svg {
   flex: none;
+  --platform-mark-size: 30px;
 }
 
 .tray-brand-text {
@@ -53,13 +54,13 @@ body:has(:is(.tray-live, .tray-hover)),
 }
 
 .tray-brand-text strong {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 650;
 }
 
 .tray-value {
   flex: none;
-  font: 700 26px/1 var(--font-display);
+  font: 650 28px/1 var(--font-display);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -68,16 +69,35 @@ body:has(:is(.tray-live, .tray-hover)),
 .tray-plan,
 .tray-runtime-message,
 .tray-limit-timing {
-  color: var(--ash);
+  color: var(--text-muted);
 }
 
 .tray-brand-text > *,
 .tray-identity > *,
-.tray-runtime-message,
+.tray-runtime-message > span,
 .tray-limit-timing time {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tray-runtime-message {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tray-runtime-message svg {
+  flex: none;
+}
+
+.tray-runtime-message[data-runtime="verified"] {
+  color: var(--success);
+}
+
+.tray-runtime-message[data-runtime="mismatch"] {
+  color: var(--danger);
 }
 
 .tray-metadata,
@@ -111,8 +131,8 @@ body:has(:is(.tray-live, .tray-hover)),
   display: block;
   height: 7px;
   overflow: hidden;
-  border-radius: var(--radius-pill);
-  background: var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--line-strong);
 }
 
 .tray-progress-track > span {
@@ -129,7 +149,7 @@ body:has(:is(.tray-live, .tray-hover)),
 
 [data-status="stale"] :is(.tray-value, .tray-progress-track),
 [data-status="error"] :is(.tray-value, .tray-progress-track) {
-  color: var(--ash);
+  color: var(--text-muted);
 }
 
 @media (forced-colors: active) {

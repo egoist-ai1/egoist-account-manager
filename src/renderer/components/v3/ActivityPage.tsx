@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import {
-  Activity,
   ArrowRight,
   BadgeCheck,
   CheckCircle2,
@@ -18,6 +17,7 @@ import {
 import { RuntimeEvidence, runtimeLabel } from "../RuntimeEvidence";
 import { displayMetadata } from "../../displayPrivacy";
 import type { ManagedAccount, SwitchHistoryItem, SwitchTransaction, SwitchTransactionPhase } from "../../../shared/types";
+import "../../activity-page.css";
 
 export type ActivityFilter = "all" | "success" | "rollback" | "error";
 
@@ -206,37 +206,33 @@ export function ActivityPage({
       <header className="page-head">
         <h2>{isEnglish ? "Switch journal" : "Журнал переключений"}</h2>
       </header>
-      <section className={`activity-command ${needsRecovery ? "needs-recovery" : ""}`} aria-live="polite">
+      {latest ? <section className={`activity-command ${needsRecovery ? "needs-recovery" : ""}`} aria-live="polite">
         <div className="activity-command-main">
           <div className="activity-command-title">
-            <span className={`activity-signal ${latest ? transactionTone(latest) : "neutral"}`}>{latest ? statusIcon(latest) : <Activity />}</span>
+            <span className={`activity-signal ${transactionTone(latest)}`}>{statusIcon(latest)}</span>
             <div>
-              {latest ? <span className="activity-latest-label">{isEnglish ? "Latest switch" : "Последнее переключение"} · {latest.platform === "antigravity" ? "Antigravity" : "Codex"}</span> : null}
-              <h3>{latest ? statusLabel(latest, isEnglish) : (isEnglish ? "Journal is ready" : "Журнал готов")}</h3>
-              {latest ? (
-                <p className="activity-account-route">
-                  <bdi title={latestPreviousLabel ?? undefined}>{latestPreviousLabel}</bdi>
-                  <ArrowRight aria-hidden="true" />
-                  <bdi title={latestTargetLabel ?? undefined}>{latestTargetLabel}</bdi>
-                </p>
-              ) : <p>{isEnglish ? "Verified switches and recovery events will appear here." : "Здесь появятся проверенные переключения и события восстановления."}</p>}
+              <span className="activity-latest-label">{isEnglish ? "Latest switch" : "Последнее переключение"} · {latest.platform === "antigravity" ? "Antigravity" : "Codex"}</span>
+              <h3>{statusLabel(latest, isEnglish)}</h3>
+              <p className="activity-account-route">
+                <bdi title={latestPreviousLabel ?? undefined}>{latestPreviousLabel}</bdi>
+                <ArrowRight aria-hidden="true" />
+                <bdi title={latestTargetLabel ?? undefined}>{latestTargetLabel}</bdi>
+              </p>
             </div>
           </div>
-          {latest ? (
-            <div className="activity-latest-meta">
-              <span><Clock3 />{formatTime(latest.createdAt, isEnglish)}</span>
-              <span><TimerReset />{formatDuration(latest, isEnglish)}</span>
-            </div>
-          ) : null}
+          <div className="activity-latest-meta">
+            <span><Clock3 />{formatTime(latest.createdAt, isEnglish)}</span>
+            <span><TimerReset />{formatDuration(latest, isEnglish)}</span>
+          </div>
         </div>
 
-        <div className="activity-kpis">
-          <div><strong>{successRate === null ? "-" : `${successRate}%`}</strong><span>{isEnglish ? "profiles applied" : "профилей применено"}</span></div>
-          <div><strong>{averageDuration === null ? "-" : `${averageDuration}${isEnglish ? "s" : " с"}`}</strong><span>{isEnglish ? "average duration" : "среднее время"}</span></div>
-          <div className={recovered ? "is-warning" : ""}><strong>{recovered}</strong><span>{isEnglish ? "safe rollbacks" : pluralRu(recovered, "безопасный откат", "безопасных отката", "безопасных откатов")}</span></div>
+        {completed.length ? <div className="activity-kpis">
+          <div><strong>{successRate === null ? "—" : `${successRate}%`}</strong><span>{isEnglish ? "profiles applied" : "профилей применено"}</span></div>
+          <div><strong>{averageDuration === null ? "—" : `${averageDuration}${isEnglish ? "s" : " с"}`}</strong><span>{isEnglish ? "average duration" : "среднее время"}</span></div>
+          <div><strong>{recovered}</strong><span>{isEnglish ? "safe rollbacks" : pluralRu(recovered, "безопасный откат", "безопасных отката", "безопасных откатов")}</span></div>
           <div className={problems ? "is-danger" : ""}><strong>{problems}</strong><span>{isEnglish ? "need attention" : problems === 1 ? "требует внимания" : "требуют внимания"}</span></div>
-        </div>
-      </section>
+        </div> : null}
+      </section> : null}
 
       {latest ? (
         <section className="activity-route" aria-label={isEnglish ? "Switch progress" : "Ход переключения"}>
@@ -277,7 +273,7 @@ export function ActivityPage({
       <section className="activity-journal">
         <header className="activity-journal-head">
           <div><h3>{isEnglish ? "History" : "История"}</h3><p>{isEnglish ? `${transactions.length} operations · ${history.length} audit records` : `${transactions.length} ${pluralRu(transactions.length, "операция", "операции", "операций")} · ${history.length} ${pluralRu(history.length, "запись аудита", "записи аудита", "записей аудита")}`}</p></div>
-          <div className="activity-filters" aria-label={isEnglish ? "Journal filter" : "Фильтр журнала"}>
+          <div className="activity-filters" role="group" aria-label={isEnglish ? "Journal filter" : "Фильтр журнала"}>
             {filters.map((item) => <button key={item.id} aria-pressed={filter === item.id} className={filter === item.id ? "is-selected" : ""} onClick={() => setFilter(item.id)}>{item.labels[isEnglish ? 0 : 1]}<span>{item.count}</span></button>)}
           </div>
         </header>

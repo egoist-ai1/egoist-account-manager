@@ -30,6 +30,17 @@ export interface DualLiveTraySnapshot {
   primary: PlatformTraySnapshot;
 }
 
+export function buildTaskbarQuotaValue(snapshot: Pick<LiveTraySnapshot, "state" | "remainingPercent"> | null): { text: string; critical: boolean } {
+  const remaining = snapshot?.remainingPercent;
+  if ((snapshot?.state !== "fresh" && snapshot?.state !== "critical") || remaining == null || !Number.isFinite(remaining)) {
+    return { text: "—", critical: false };
+  }
+  return {
+    text: formatQuotaRemaining(remaining),
+    critical: remaining < 10
+  };
+}
+
 export const LIVE_TRAY_REPRESENTATIONS = [
   { scaleFactor: 1, pixelSize: 16 },
   { scaleFactor: 1.25, pixelSize: 20 },
@@ -89,7 +100,7 @@ export function buildPlatformTraySnapshot(
       ? "stale"
       : remainingPercent === null || readiness.reason === "missing" || readiness.reason === "model_unknown"
         ? "unknown"
-        : remainingPercent <= 10
+        : remainingPercent < 10
           ? "critical"
           : "fresh";
   const locale = isEnglish ? "en" : "ru";

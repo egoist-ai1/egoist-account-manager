@@ -3,7 +3,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { z } from "zod";
 import { fileURLToPath } from "node:url";
-import { BrowserWindow, Menu, Tray, app, clipboard, dialog, ipcMain, nativeImage, nativeTheme, powerMonitor, screen, shell, type IpcMainInvokeEvent } from "electron";
+import { BrowserWindow, Menu, Tray, app, clipboard, dialog, ipcMain, nativeImage, nativeTheme, powerMonitor, screen, shell, type IpcMainInvokeEvent, type MenuItemConstructorOptions, type Rectangle } from "electron";
 import { AccountStore } from "./db.js";
 import { Vault } from "./security.js";
 import { getAppDataDir, getDefaultCodexHome } from "./paths.js";
@@ -15,7 +15,7 @@ import { CodexCapabilityService } from "./services/codexCapabilityService.js";
 import { SettingsService } from "./services/settingsService.js";
 import { registerHealthIpc } from "./ipc/healthIpc.js";
 import { registerSettingsIpc } from "./ipc/settingsIpc.js";
-import type { AntigravityImportResult, AppDiagnostics, AppNotificationPayload, AppSettings, LoginStartResult, ManagedAccount } from "../shared/types.js";
+import type { AccountPlatform, AntigravityImportResult, AppDiagnostics, AppNotificationPayload, AppSettings, LoginStartResult, ManagedAccount } from "../shared/types.js";
 import { redactDiagnosticReport } from "../shared/diagnosticRedaction.js";
 import {
   antigravityCredentialPayloadImportInputSchema,
@@ -39,7 +39,7 @@ import { redactSensitiveText } from "../shared/redaction.js";
 import { selectSmartAccount } from "../shared/smartSelection.js";
 import { buildTrayAccountLabel } from "../shared/trayLabel.js";
 import { toRendererDto } from "./services/rendererDtoService.js";
-import { LIVE_TRAY_REPRESENTATIONS, buildLiveTraySnapshot, renderLiveTrayBitmap } from "../shared/liveTray.js";
+import { LIVE_TRAY_REPRESENTATIONS, buildDualLiveTraySnapshot, buildLiveTraySnapshot, buildTaskbarQuotaValue, renderLiveTrayBitmap } from "../shared/liveTray.js";
 import { calculateTraySurfacePosition } from "../shared/traySurfacePosition.js";
 import { appVersion } from "../shared/releaseNotes.js";
 import { productName, productLatinName } from "../shared/branding.js";
@@ -66,6 +66,7 @@ import { quiesceAntigravityAsync, launchAntigravityAsync, resolveAntigravitySwit
 import { createProviderRuntimeAdapters } from "./services/providerRuntimeAdapter.js";
 import { WindowsDesktopLifecycleService } from "./services/windowsDesktopLifecycleService.js";
 import { QuotaAlertService } from "./services/quotaAlertService.js";
+import { QuotaTaskbarWidget, type TaskbarWidgetInput } from "./services/quotaTaskbarWidget.js";
 import { DeviceCodeHandoffService } from "./services/deviceCodeHandoffService.js";
 import {
   InAppNotificationService,
@@ -82,7 +83,10 @@ let manager: AccountManager | null = null;
 let vault: Vault | null = null;
 let tray: Tray | null = null;
 let antigravityTray: Tray | null = null;
-let lastInteractedTray: Tray | null = null;
+let quotaTaskbarWidget: QuotaTaskbarWidget | null = null;
+let taskbarWidgetReady = false;
+let taskbarContextMenu: Menu | null = null;
+type TrayAnchor = { platform: AccountPlatform; bounds: Rectangle };
 let trayPopoverWindow: BrowserWindow | null = null;
 let trayHoverWindow: BrowserWindow | null = null;
 let currentPopoverPlatform: "codex" | "antigravity" = "codex";
@@ -97,7 +101,8 @@ let trayRefreshTimer: NodeJS.Timeout | null = null;
 let sessionSnapshotTimer: NodeJS.Timeout | null = null;
 let trayHoverShowTimer: NodeJS.Timeout | null = null;
 let trayHoverHideTimer: NodeJS.Timeout | null = null;
-let trayHoverRequested = false;
+let trayHoverTarget: TrayAnchor | null = null;
+let trayPopoverRequest = 0;
 let autoRefreshInFlight = false;
 let trayRefreshInFlight = false;
 let updaterService: UpdaterService | null = null;
@@ -1240,40 +1245,29 @@ function updateTraySurfaceSize(window: BrowserWindow, isHover: boolean): void {
   }
 }
 
-function positionTraySurface(window: BrowserWindow, gap = 10, explicitTray?: Tray | null): void {
-  const anchorTray = explicitTray ?? lastInteractedTray ?? antigravityTray ?? tray;
-  if (!anchorTray) return;
-  const trayBounds = anchorTray.getBounds();
-  const display = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
-  const popupBounds = window.getBounds();
-  const position = calculateTraySurfacePosition(trayBounds, popupBounds, display.workArea, gap);
+function positionTraySurface(window: BrowserWindow, anchor: TrayAnchor, gap: number): void {
+  const { bounds } = anchor;
+  const display = screen.getDisplayNearestPoint({ x: bounds.x, y: bounds.y });
+  const position = calculateTraySurfacePosition(bounds, window.getBounds(), display.workArea, gap);
   window.setPosition(position.x, position.y, false);
 }
 
-function toggleTrayPopover(explicitTray?: Tray | null): void {
-  const targetTray = explicitTray ?? lastInteractedTray ?? antigravityTray ?? tray;
-  if (!targetTray) return;
-  const platform: "codex" | "antigravity" = targetTray === antigravityTray ? "antigravity" : "codex";
+function openTrayPopover(anchor: TrayAnchor, toggle = false): void {
+  taskbarContextMenu?.closePopup();
+  hideTrayHoverPopover();
   const window = createTrayPopoverWindow();
-
-  if (window.isVisible()) {
-    if (currentPopoverPlatform === platform) {
-      window.hide();
-      return;
-    }
-    currentPopoverPlatform = platform;
-    positionTraySurface(window, 10, targetTray);
-    window.webContents.send("tray:platform", platform);
-    window.webContents.send("accounts:updated");
-    window.focus();
+  const request = ++trayPopoverRequest;
+  if (toggle && window.isVisible() && currentPopoverPlatform === anchor.platform) {
+    window.hide();
     return;
   }
 
-  currentPopoverPlatform = platform;
+  currentPopoverPlatform = anchor.platform;
   updateTraySurfaceSize(window, false);
   const show = () => {
-    positionTraySurface(window, 10, targetTray);
-    window.webContents.send("tray:platform", platform);
+    if (window.isDestroyed() || request !== trayPopoverRequest) return;
+    positionTraySurface(window, anchor, 10);
+    window.webContents.send("tray:platform", anchor.platform);
     window.webContents.send("accounts:updated");
     window.show();
     window.focus();
@@ -1290,26 +1284,20 @@ function clearTrayHoverTimers(): void {
 }
 
 function hideTrayHoverPopover(): void {
-  trayHoverRequested = false;
+  trayHoverTarget = null;
   clearTrayHoverTimers();
   if (trayHoverWindow && !trayHoverWindow.isDestroyed()) trayHoverWindow.hide();
 }
 
-function showTrayHoverPopover(explicitTray?: Tray | null): void {
-  if (!trayHoverRequested || (!tray && !antigravityTray)) return;
-  if (trayPopoverWindow && !trayPopoverWindow.isDestroyed() && trayPopoverWindow.isVisible()) return;
-
-  const targetTray = explicitTray ?? lastInteractedTray ?? antigravityTray ?? tray;
-  if (!targetTray) return;
-  const platform: "codex" | "antigravity" = targetTray === antigravityTray ? "antigravity" : "codex";
-  currentHoverPlatform = platform;
-
+function showTrayHoverPopover(anchor: TrayAnchor): void {
+  if (trayHoverTarget !== anchor || trayPopoverWindow?.isVisible() || taskbarContextMenu) return;
+  currentHoverPlatform = anchor.platform;
   const window = createTrayHoverWindow();
   updateTraySurfaceSize(window, true);
   const show = () => {
-    if (!trayHoverRequested || window.isDestroyed()) return;
-    positionTraySurface(window, 8, targetTray);
-    window.webContents.send("tray:platform", platform);
+    if (trayHoverTarget !== anchor || window.isDestroyed()) return;
+    positionTraySurface(window, anchor, 8);
+    window.webContents.send("tray:platform", anchor.platform);
     window.webContents.send("accounts:updated");
     window.showInactive();
   };
@@ -1317,218 +1305,221 @@ function showTrayHoverPopover(explicitTray?: Tray | null): void {
   else show();
 }
 
-function scheduleTrayHoverShow(targetTray?: Tray | null): void {
-  trayHoverRequested = true;
-  if (trayHoverHideTimer) clearTimeout(trayHoverHideTimer);
-  trayHoverHideTimer = null;
-
-  const actualTray = targetTray ?? lastInteractedTray ?? antigravityTray ?? tray;
-  if (!actualTray) return;
-  const platform: "codex" | "antigravity" = actualTray === antigravityTray ? "antigravity" : "codex";
-
-  if (trayHoverWindow && !trayHoverWindow.isDestroyed() && trayHoverWindow.isVisible()) {
-    if (currentHoverPlatform !== platform) {
-      currentHoverPlatform = platform;
-      positionTraySurface(trayHoverWindow, 8, actualTray);
-      trayHoverWindow.webContents.send("tray:platform", platform);
-      trayHoverWindow.webContents.send("accounts:updated");
-    }
+function scheduleTrayHoverShow(anchor: TrayAnchor): void {
+  clearTrayHoverTimers();
+  trayHoverTarget = anchor;
+  if (trayHoverWindow?.isVisible()) {
+    if (currentHoverPlatform !== anchor.platform) showTrayHoverPopover(anchor);
     return;
   }
-
-  if (trayHoverShowTimer) clearTimeout(trayHoverShowTimer);
   trayHoverShowTimer = setTimeout(() => {
     trayHoverShowTimer = null;
-    showTrayHoverPopover(actualTray);
+    showTrayHoverPopover(anchor);
   }, trayHoverDwellMs);
 }
 
 function scheduleTrayHoverHide(): void {
-  trayHoverRequested = false;
-  if (trayHoverShowTimer) clearTimeout(trayHoverShowTimer);
-  trayHoverShowTimer = null;
-  if (trayHoverHideTimer) clearTimeout(trayHoverHideTimer);
+  trayHoverTarget = null;
+  clearTrayHoverTimers();
   trayHoverHideTimer = setTimeout(() => {
     trayHoverHideTimer = null;
-    if (trayHoverWindow && !trayHoverWindow.isDestroyed()) trayHoverWindow.hide();
+    trayHoverWindow?.hide();
   }, trayHoverExitMs);
 }
 
-function updateTrayMenu(): void {
-  if ((!tray && !antigravityTray) || !manager) return;
-  const accounts = manager.list();
-  const privacyMode = settingsService?.get().privacyMode === true;
-  const isEnglish = settingsService?.get().language === "en";
-
-  const codexAccounts = accounts.filter((a) => (a.platform ?? "codex") === "codex");
-  const antigravityAccounts = accounts.filter((a) => a.platform === "antigravity");
-  const hasAntigravity = antigravityAccounts.length > 0;
-
-  // 1. Update Codex Tray
-  if (tray) {
-    tray.setImage(createLiveTrayImage("codex"));
-    tray.setToolTip("");
-    const activeCodex = codexAccounts.find((a) => a.isActive);
-    const recCodex = selectSmartAccount(codexAccounts, manager.getWorkspaceBinding(), { provider: "codex" });
-    const bestCodex = recCodex ? codexAccounts.find((a) => a.id === recCodex.accountId) : null;
-
-    tray.setContextMenu(
-      Menu.buildFromTemplate([
-        {
-          label: activeCodex
-            ? (privacyMode ? (isEnglish ? "Codex profile selected" : "Выбранный профиль Codex") : `Codex: ${activeCodex.label}`)
-            : (isEnglish ? "No Codex profile selected" : "Профиль Codex не выбран"),
-          enabled: false
-        },
-        { type: "separator" },
-        {
-          label: bestCodex ? (isEnglish ? `Smart Switch: ${privacyMode ? "Codex profile" : bestCodex.label}` : `Умный выбор: ${privacyMode ? "профиль Codex" : bestCodex.label}`) : (isEnglish ? "Smart switch unavailable" : "Умный выбор недоступен"),
-          enabled: Boolean(bestCodex && !bestCodex.isActive),
-          click: () => {
-            if (bestCodex) void manager?.switchAccount(bestCodex.id).finally(() => updateTrayMenu());
-          }
-        },
-        {
-          label: isEnglish ? "Codex Accounts" : "Аккаунты Codex",
-          enabled: codexAccounts.length > 0,
-          submenu: codexAccounts.slice(0, 12).map((account) => ({
-            label: buildTrayAccountLabel(account, privacyMode, settingsService?.get().language ?? "ru"),
-            enabled: account.credentialState === "ready" && (!account.isActive || account.runtimeVerification?.runtime !== "verified"),
-            click: () => void manager?.switchAccount(account.id).finally(() => updateTrayMenu())
-          }))
-        },
-        { type: "separator" },
-        {
-          label: isEnglish ? "Refresh Quotas" : "Обновить лимиты",
-          enabled: accounts.length > 0,
-          click: () => void refreshAllRateLimits("manual").finally(() => updateTrayMenu())
-        },
-        { label: isEnglish ? "Open Manager" : "Открыть окно", click: showMainWindow },
-        {
-          label: isEnglish ? "Quit" : "Выход",
-          click: () => {
-            isQuitting = true;
-            app.quit();
-          }
-        }
-      ])
-    );
-  }
-
-  // 2. Manage Antigravity Tray
-  if (hasAntigravity) {
-    if (!antigravityTray) {
-      antigravityTray = new Tray(createLiveTrayImage("antigravity"));
-      antigravityTray.on("mouse-enter", () => {
-        lastInteractedTray = antigravityTray;
-        scheduleTrayHoverShow(antigravityTray);
-      });
-      antigravityTray.on("mouse-move", () => {
-        lastInteractedTray = antigravityTray;
-        scheduleTrayHoverShow(antigravityTray);
-      });
-      antigravityTray.on("mouse-leave", scheduleTrayHoverHide);
-      antigravityTray.on("click", () => {
-        lastInteractedTray = antigravityTray;
-        hideTrayHoverPopover();
-        toggleTrayPopover(antigravityTray);
-      });
+function platformTrayItems(anchor: TrayAnchor, accounts: ManagedAccount[], settings: AppSettings): MenuItemConstructorOptions[] {
+  const { platform } = anchor;
+  const providerName = platform === "codex" ? "Codex" : "Antigravity";
+  const isEnglish = settings.language === "en";
+  const profiles = accounts.filter((account) => (account.platform ?? "codex") === platform);
+  const active = profiles.find((account) => account.isActive);
+  const recommendation = selectSmartAccount(profiles, manager?.getWorkspaceBinding(), { provider: platform });
+  const best = recommendation ? profiles.find((account) => account.id === recommendation.accountId) : null;
+  const switchProfile = (accountId: string) => {
+    void manager?.switchAccount(accountId).catch((error) => log(`${providerName} switch failed`, error)).finally(updateTrayMenu);
+  };
+  const bestLabel = settings.privacyMode ? (isEnglish ? `${providerName} profile` : `профиль ${providerName}`) : best?.label;
+  return [
+    { label: isEnglish ? `Open ${providerName} quota` : `Лимит ${providerName}`, click: () => openTrayPopover(anchor) },
+    {
+      label: active
+        ? (settings.privacyMode
+          ? (isEnglish ? `${providerName} profile selected` : `Выбранный профиль ${providerName}`)
+          : `${providerName}: ${active.label}`)
+        : (isEnglish ? `No ${providerName} profile selected` : `Профиль ${providerName} не выбран`),
+      enabled: false
+    },
+    { type: "separator" },
+    {
+      label: best
+        ? (isEnglish ? `Smart Switch: ${bestLabel}` : `Умный выбор: ${bestLabel}`)
+        : (isEnglish ? "Smart switch unavailable" : "Умный выбор недоступен"),
+      enabled: Boolean(best && !best.isActive),
+      click: () => { if (best) switchProfile(best.id); }
+    },
+    {
+      label: isEnglish ? `${providerName} Accounts` : `Аккаунты ${providerName}`,
+      enabled: profiles.length > 0,
+      submenu: profiles.slice(0, 12).map((account) => ({
+        label: buildTrayAccountLabel(account, settings.privacyMode, settings.language),
+        enabled: account.credentialState === "ready" && (!account.isActive || account.runtimeVerification?.runtime !== "verified"),
+        click: () => switchProfile(account.id)
+      }))
     }
-    antigravityTray.setImage(createLiveTrayImage("antigravity"));
-    antigravityTray.setToolTip("");
-    const activeAg = antigravityAccounts.find((a) => a.isActive);
-    const recAg = selectSmartAccount(antigravityAccounts, manager.getWorkspaceBinding(), { provider: "antigravity" });
-    const bestAg = recAg ? antigravityAccounts.find((a) => a.id === recAg.accountId) : null;
+  ];
+}
 
-    antigravityTray.setContextMenu(
-      Menu.buildFromTemplate([
-        {
-          label: activeAg
-            ? (privacyMode ? (isEnglish ? "Antigravity profile selected" : "Выбранный профиль Antigravity") : `Antigravity: ${activeAg.label}`)
-            : (isEnglish ? "No Antigravity profile selected" : "Профиль Antigravity не выбран"),
-          enabled: false
-        },
-        { type: "separator" },
-        {
-          label: bestAg ? (isEnglish ? `Smart Switch: ${privacyMode ? "Antigravity profile" : bestAg.label}` : `Умный выбор: ${privacyMode ? "профиль Antigravity" : bestAg.label}`) : (isEnglish ? "Smart switch unavailable" : "Умный выбор недоступен"),
-          enabled: Boolean(bestAg && !bestAg.isActive),
-          click: () => {
-            if (bestAg) void manager?.switchAccount(bestAg.id).catch((error) => log("Antigravity switch failed", error)).finally(() => updateTrayMenu());
-          }
-        },
-        {
-          label: isEnglish ? "Antigravity Accounts" : "Аккаунты Antigravity",
-          enabled: antigravityAccounts.length > 0,
-          submenu: antigravityAccounts.slice(0, 12).map((account) => ({
-            label: buildTrayAccountLabel(account, privacyMode, settingsService?.get().language ?? "ru"),
-            enabled: account.credentialState === "ready" && (!account.isActive || account.runtimeVerification?.runtime !== "verified"),
-            click: () => void manager?.switchAccount(account.id).catch((error) => log("Antigravity switch failed", error)).finally(() => updateTrayMenu())
-          }))
-        },
-        { type: "separator" },
-        {
-          label: isEnglish ? "Refresh Quotas" : "Обновить лимиты",
-          enabled: accounts.length > 0,
-          click: () => void refreshAllRateLimits("manual").finally(() => updateTrayMenu())
-        },
-        { label: isEnglish ? "Open Manager" : "Открыть окно", click: showMainWindow },
-        {
-          label: isEnglish ? "Quit" : "Выход",
-          click: () => {
-            isQuitting = true;
-            app.quit();
-          }
-        }
-      ])
+function commonTrayItems(accounts: ManagedAccount[], settings: AppSettings): MenuItemConstructorOptions[] {
+  const isEnglish = settings.language === "en";
+  return [
+    { type: "separator" },
+    {
+      label: isEnglish ? "Refresh Quotas" : "Обновить лимиты",
+      enabled: accounts.length > 0,
+      click: () => void refreshAllRateLimits("manual").finally(updateTrayMenu)
+    },
+    { label: isEnglish ? "Open Manager" : "Открыть окно", click: showMainWindow },
+    { label: isEnglish ? "Quit" : "Выход", click: () => app.quit() }
+  ];
+}
+
+function setTrayMenu(icon: Tray, platform: AccountPlatform, accounts: ManagedAccount[], settings: AppSettings): void {
+  const items = platformTrayItems({ platform, bounds: icon.getBounds() }, accounts, settings);
+  icon.setContextMenu(Menu.buildFromTemplate([...items, ...commonTrayItems(accounts, settings)]));
+}
+
+function destroyTrayIcons(): void {
+  const icons = [tray, antigravityTray];
+  tray = null;
+  antigravityTray = null;
+  for (const icon of icons) icon?.destroy();
+}
+
+function createTrayIcon(platform: AccountPlatform): Tray {
+  const windows = process.platform === "win32";
+  const icon = new Tray(windows ? nativeImage.createFromPath(getWindowIconPath()) : createLiveTrayImage(platform));
+  const anchor = () => ({ platform, bounds: icon.getBounds() });
+  icon.setToolTip(windows ? productName : "");
+  const onHover = () => scheduleTrayHoverShow(anchor());
+  icon.on("mouse-enter", onHover);
+  icon.on("mouse-move", onHover);
+  icon.on("mouse-leave", scheduleTrayHoverHide);
+  icon.on("click", () => openTrayPopover(anchor(), true));
+  if (windows) {
+    icon.on("right-click", () => {
+      const settings = settingsService?.get();
+      if (!settings || !manager) return;
+      const accounts = manager.list();
+      const bounds = icon.getBounds();
+      const platforms = ["codex", "antigravity"] as const;
+      const menu = Menu.buildFromTemplate([
+        ...platforms.map((provider) => ({
+          label: provider === "codex" ? "Codex" : "Antigravity",
+          submenu: platformTrayItems({ platform: provider, bounds }, accounts, settings)
+        })),
+        ...commonTrayItems(accounts, settings)
+      ]);
+      icon.popUpContextMenu(menu);
+    });
+  }
+  return icon;
+}
+
+function updateTrayMenu(): void {
+  const settings = settingsService?.get();
+  if (!settings?.trayEnabled || !manager || isQuitting) return;
+  const accounts = manager.list();
+  if (quotaTaskbarWidget) {
+    const snapshots = buildDualLiveTraySnapshot(accounts, { language: settings.language, privacyMode: true });
+    quotaTaskbarWidget.setState(
+      buildTaskbarQuotaValue(snapshots.codex).text,
+      buildTaskbarQuotaValue(snapshots.antigravity).text,
+      nativeTheme.shouldUseDarkColorsForSystemIntegratedUI ? "dark" : "light"
     );
-  } else if (antigravityTray) {
-    antigravityTray.destroy();
-    antigravityTray = null;
   }
 
-  if (trayHoverWindow && !trayHoverWindow.isDestroyed() && !trayHoverWindow.webContents.isLoadingMainFrame()) {
-    trayHoverWindow.webContents.send("accounts:updated");
+  if (process.platform === "win32") {
+    if (!taskbarWidgetReady && !tray) tray = createTrayIcon("codex");
+    return;
+  }
+
+  tray ??= createTrayIcon("codex");
+  tray.setImage(createLiveTrayImage("codex"));
+  setTrayMenu(tray, "codex", accounts, settings);
+  if (accounts.some((account) => account.platform === "antigravity")) {
+    antigravityTray ??= createTrayIcon("antigravity");
+    antigravityTray.setImage(createLiveTrayImage("antigravity"));
+    setTrayMenu(antigravityTray, "antigravity", accounts, settings);
+  } else {
+    antigravityTray?.destroy();
+    antigravityTray = null;
   }
 }
 
-function createTray(): void {
-  if (tray) return;
-  tray = new Tray(createLiveTrayImage("codex"));
-  tray.on("mouse-enter", () => {
-    lastInteractedTray = tray;
-    scheduleTrayHoverShow(tray);
-  });
-  tray.on("mouse-move", () => {
-    lastInteractedTray = tray;
-    scheduleTrayHoverShow(tray);
-  });
-  tray.on("mouse-leave", scheduleTrayHoverHide);
-  tray.on("click", () => {
-    lastInteractedTray = tray;
+function onTaskbarWidgetInput(event: TaskbarWidgetInput): void {
+  if (!settingsService?.get().trayEnabled || isQuitting) return;
+  if (event.type === "leave") {
+    scheduleTrayHoverHide();
+    return;
+  }
+
+  const point = screen.screenToDipPoint(event.point);
+  const anchor = { platform: event.platform, bounds: { ...point, width: 1, height: 1 } };
+  if (event.type === "enter") {
+    scheduleTrayHoverShow(anchor);
+  } else if (event.type === "click") {
+    openTrayPopover(anchor, true);
+  } else {
     hideTrayHoverPopover();
-    toggleTrayPopover(tray);
-  });
-  updateTrayMenu();
+    const accounts = manager?.list() ?? [];
+    const settings = settingsService.get();
+    const menu = Menu.buildFromTemplate([
+      ...platformTrayItems(anchor, accounts, settings), ...commonTrayItems(accounts, settings)
+    ]);
+    taskbarContextMenu?.closePopup();
+    taskbarContextMenu = menu;
+    const window = mainWindow ?? createTrayPopoverWindow();
+    const content = window.getContentBounds();
+    menu.popup({
+      window,
+      x: point.x - content.x,
+      y: point.y - content.y,
+      callback: () => { if (taskbarContextMenu === menu) taskbarContextMenu = null; }
+    });
+  }
 }
 
 function applyDesktopIntegrationSettings(settings: AppSettings): void {
   if (settings.trayEnabled) {
-    createTray();
+    if (process.platform === "win32" && !probeIsolation.enabled) {
+      quotaTaskbarWidget ??= new QuotaTaskbarWidget(
+        app.isPackaged
+          ? path.join(process.resourcesPath, "KvesserQuotaWidget.exe")
+          : path.join(app.getAppPath(), "build", "taskbar", "KvesserQuotaWidget.exe"),
+        {
+          onAvailability(available) {
+            taskbarWidgetReady = available;
+            taskbarContextMenu?.closePopup();
+            hideTrayHoverPopover();
+            if (available) destroyTrayIcons();
+            else updateTrayMenu();
+          },
+          onInput: onTaskbarWidgetInput
+        }
+      );
+    }
     updateTrayMenu();
+    quotaTaskbarWidget?.start();
+    broadcastAccountsUpdated();
   } else {
+    quotaTaskbarWidget?.stop();
+    taskbarContextMenu?.closePopup();
     hideTrayHoverPopover();
     trayHoverWindow?.destroy();
     trayHoverWindow = null;
     trayPopoverWindow?.destroy();
     trayPopoverWindow = null;
-    if (tray) {
-      tray.destroy();
-      tray = null;
-    }
-    if (antigravityTray) {
-      antigravityTray.destroy();
-      antigravityTray = null;
-    }
+    destroyTrayIcons();
   }
 
   if (!probeIsolation.enabled && process.platform === "win32" && app.isPackaged) {
@@ -1776,8 +1767,7 @@ if (!gotLock) {
     nativeTheme.on("updated", () => {
       if (darkTray === nativeTheme.shouldUseDarkColorsForSystemIntegratedUI) return;
       darkTray = nativeTheme.shouldUseDarkColorsForSystemIntegratedUI;
-      tray?.setImage(createLiveTrayImage("codex"));
-      antigravityTray?.setImage(createLiveTrayImage("antigravity"));
+      updateTrayMenu();
     });
     const appDataDir = getAppDataDir();
     logPath = path.join(appDataDir, "logs", "main.log");
@@ -1932,8 +1922,9 @@ if (!gotLock) {
     }
     deviceCodeHandoff.dispose();
     syncActiveSessions("before-quit");
-    tray?.destroy();
-    tray = null;
+    quotaTaskbarWidget?.stop();
+    taskbarContextMenu?.closePopup();
+    destroyTrayIcons();
     hideTrayHoverPopover();
     trayHoverWindow?.destroy();
     trayHoverWindow = null;

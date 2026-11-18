@@ -18,6 +18,7 @@ const hash = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 before(async () => {
   if (!native) return;
   if (!work || !path.isAbsolute(work)) throw new Error('CAM_RELEASE_TEST_WORK must name this task isolated fixture directory');
+  await fs.mkdir(work, { recursive: true });
   scratch = await fs.mkdtemp(path.join(work, 'nsis-h-'));
   const temp = path.join(scratch, 'temp');
   await fs.mkdir(temp);

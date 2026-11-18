@@ -1,0 +1,113 @@
+.profile-table-scroll > .profile-table { min-width: 600px; }
+
+.profile-table-scroll > .profile-table thead th {
+  padding: 11px clamp(8px, 1.2cqi, 16px);
+  color: var(--text-muted);
+  background: var(--surface-2);
+  font-weight: 550;
+}
+
+.profile-table-scroll > .profile-table thead th:nth-child(1) { width: 28%; }
+.profile-table-scroll > .profile-table thead th:nth-child(2) { width: 25%; }
+.profile-table-scroll > .profile-table thead th:nth-child(3) { width: 13%; }
+.profile-table-scroll > .profile-table thead th:nth-child(4) { width: 18%; }
+.profile-table-scroll > .profile-table thead th:nth-child(5) { width: 16%; }
+
+.profile-table-scroll > .profile-table tbody :is(th, td) {
+  height: 72px;
+  padding: 9px clamp(8px, 1.2cqi, 16px);
+}
+
+.profile-table-scroll > .profile-table tbody tr.is-selected > * {
+  border-bottom-color: var(--line-strong);
+}
+
+.profile-table-scroll .table-profile { gap: 12px; }
+.profile-table-scroll .table-profile .platform-mark { --platform-mark-size: 28px; }
+.profile-table-scroll .table-profile-name > strong { color: var(--text); }
+.profile-table-scroll .table-profile-name svg { color: var(--text-muted); }
+
+.profile-table-scroll .selected-profile-chip {
+  background: transparent;
+  border-color: var(--line-strong);
+  color: var(--text-secondary);
+  font-weight: 550;
+}
+
+.profile-table-scroll .table-quota strong { line-height: 1.15; }
+.profile-table-scroll .table-quota .bar { background: var(--line); }
+.profile-table-scroll .table-quota .bar > span { background: var(--text-muted); box-shadow: none; }
+.profile-table-scroll .table-quota.is-critical .bar > span { background: var(--danger); }
+.profile-table-scroll .table-quota.is-critical strong { color: var(--danger); }
+
+.profile-table-scroll .table-freshness,
+.profile-table-scroll .table-runtime-message {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--text-meta);
+  line-height: 1.35;
+}
+
+.profile-table-scroll .table-freshness svg,
+.profile-table-scroll .table-runtime-message svg {
+  width: 13px;
+  height: 13px;
+  align-self: flex-start;
+  margin-top: 1px;
+  flex: none;
+  color: var(--text-muted);
+}
+
+.profile-table-scroll .table-freshness.is-fresh svg { color: var(--success); }
+.profile-table-scroll :is(.table-freshness, .table-runtime-message).is-error,
+.profile-table-scroll :is(.table-freshness, .table-runtime-message).is-error svg { color: var(--danger); }
+
+.profile-table-scroll .table-runtime-message { color: var(--text-secondary); }
+.profile-table-scroll .table-runtime-message + .table-credentials:not(.is-error) { color: var(--text-muted); }
+.profile-table-scroll .table-runtime-message + .table-credentials { display: block; margin-top: 4px; }
+
+.profile-table-scroll .table-actions {
+  display: grid;
+  width: 100%;
+  max-width: 122px;
+}
+
+.profile-table-scroll .table-actions .profile-switch-action {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+
+.profile-table-scroll .table-actions .profile-switch-action svg:not(.spin) { display: none; }
+
+.profile-table-scroll .table-actions .profile-switch-action:not(:disabled):hover {
+  background: var(--surface-3);
+  border-color: var(--line-strong);
+}
+
+@container (max-width: 1200px) {
+  .profile-table-scroll > .profile-table thead th:nth-child(2) { width: 22%; }
+  .profile-table-scroll > .profile-table thead th:nth-child(5) { width: 19%; }
+}
+
+@container (max-width: 840px) {
+  .profile-table-scroll > .profile-table thead th:nth-child(1) { width: 27%; }
+  .profile-table-scroll > .profile-table thead th:nth-child(2) { width: 18%; }
+  .profile-table-scroll > .profile-table thead th:nth-child(4) { width: 21%; }
+  .profile-table-scroll > .profile-table thead th:nth-child(5) { width: 21%; }
+  .profile-table-scroll .table-profile { gap: 8px; }
+  .profile-table-scroll .table-profile .platform-mark { --platform-mark-size: 25px; }
+}
+
+@container (min-width: 1600px) {
+  .profile-table-scroll .table-actions {
+    display: flex;
+    max-width: none;
+  }
+
+  .profile-table-scroll .table-actions .profile-switch-action { width: auto; min-width: 108px; }
+}

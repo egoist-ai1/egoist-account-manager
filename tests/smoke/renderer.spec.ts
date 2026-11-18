@@ -77,6 +77,36 @@ test("provider filter and search keep the table usable", async ({ page }) => {
   await page.getByLabel("Поиск профиля").fill("does-not-exist"); await expect(page.locator(".profile-table-scroll .empty")).toBeVisible();
 });
 
+test("status and sort controls combine, and automatic view follows the window width", async ({ page }) => {
+  await page.setViewportSize({ width: 1060, height: 740 });
+  await installRendererFixture(page, { count: 8 });
+  const rows = page.locator(".profile-table tbody tr");
+  await expect(rows).toHaveCount(8);
+  await page.evaluate(() => document.fonts.ready);
+  const settings = await page.locator(".rail-nav button").last().boundingBox();
+  const commands = await page.getByRole("button", { name: "Команды", exact: true }).boundingBox();
+  expect(settings && commands && settings.x + settings.width < commands.x).toBe(true);
+  const status = page.getByLabel("Фильтр по статусу");
+  await status.selectOption("selected");
+  await expect(rows).toHaveCount(1);
+  await page.getByLabel("Фильтр провайдера").selectOption("antigravity");
+  await expect(rows).toHaveCount(0);
+  await page.getByRole("button", { name: "Сбросить фильтры" }).click();
+  await expect(rows).toHaveCount(8);
+  await page.getByLabel("Сортировка аккаунтов").selectOption("name");
+  await expect(rows.first()).toContainText("Profile 001");
+  await expect(rows.last()).toContainText("Profile 008");
+
+  await page.setViewportSize({ width: 690, height: 740 });
+  await expect(page.locator(".profile-card")).toHaveCount(8);
+  await expect(page.getByRole("button", { name: "Авто", exact: true })).toHaveAttribute("aria-pressed", "true");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(690);
+  await page.getByRole("button", { name: "Таблица", exact: true }).click();
+  await expect(rows).toHaveCount(8);
+  await page.getByRole("button", { name: "Авто", exact: true }).click();
+  await expect(page.locator(".profile-card")).toHaveCount(8);
+});
+
 test("unknown and fractional quota remain honest; all scopes appear in details", async ({ page }) => {
   await installRendererFixture(page, { count: 1 });
   const row = page.locator(".profile-table tbody tr");
@@ -136,7 +166,7 @@ test("settings radios support arrow keys and every core English surface", async 
   await expect(page.getByRole("dialog", { name: "Command center" })).toContainText("Show Antigravity profiles");
   await page.keyboard.press("Escape");
   await page.getByLabel("Main sections").getByRole("button", { name: "Journal", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Journal is ready" })).toBeVisible();
+  await expect(page.getByText("No operations yet", { exact: true })).toBeVisible();
 });
 
 test("import is previewed with conflicts skipped before apply", async ({ page }) => {

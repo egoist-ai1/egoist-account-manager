@@ -47,7 +47,7 @@ pnpm run verify:package
 pnpm run verify:startup
 ```
 
-Canonical `build` выполняет typecheck/lint → clean `dist` → main/preload/renderer compilation → Electron native rebuild → **portable** с `--publish never` → **custom Setup с manifest владения**. Стандартный NSIS Setup не входит в default Windows target. `build:dir` оставляет только unpacked payload; отдельный `build:installer` требует уже актуальные payload и portable.
+Команда `build` последовательно запускает проверки типов и стиля, сборку Electron и нативного виджета панели задач, упаковку **portable** с `--publish never` и **custom Setup с манифестом владения**. `build:dir` собирает распакованный пакет. Для отдельного запуска `build:installer` нужны актуальные распакованный пакет и portable.
 
 Результат сборки находится в `release/3.2.0-rc.4/`. Установщик и portable имеют отдельные контрольные суммы SHA-256.
 
@@ -76,5 +76,7 @@ GUI regression имеет отдельный compile-defined entry в `tests/ins
 `verify:sandbox`, `verify:sandbox:apply`, `verify:sandbox:live`, `verify:sandbox:live:apply`, `verify:sandbox:live:finalize` — **исторические сценарии 3.1.5/3.1.6** с прежними paths/fixtures и собственным rebuild. Они не являются gates версии 3.2.0 и не входят в canonical build/CI. Windows Sandbox/Hyper-V не включаются автоматически ради этих scripts.
 
 `verify:tray-native` — отдельная проверка `nativeImage` на синтетических битмапах. Она не доказывает скорость reopening, native hover, доступность tray на разных DPI или реальный остаток аккаунта. Её output/userData также должны находиться в собственном временный каталог.
+
+В Windows два процента рисует `KvesserQuotaWidget.exe`. Основной процесс передаёт ему отображаемые значения и тему через стандартный ввод. Для разработки `build:taskbar` собирает его в `build/taskbar`. После упаковки `verify:taskbar` проверяет рисунок того же EXE на синтетических данных при масштабе 100%, 125% и 200%.
 
 Структура: [ARCHITECTURE](ARCHITECTURE.md), [APP_MAP](APP_MAP.md), [implementation contract](implementation-3.2.0.md), [release checklist](release-checklist.md). Итоговые подтверждения привязываются к точным hashes результата в companion review board.

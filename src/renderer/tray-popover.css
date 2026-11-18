@@ -2,6 +2,7 @@
 
 .tray-live {
   height: 192px;
+  padding-block: 8px;
   -webkit-app-region: no-drag;
 }
 
@@ -10,7 +11,7 @@
   gap: 4px;
   align-items: center;
   padding-top: 4px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--line);
 }
 
 .tray-live-footer button {
@@ -19,19 +20,19 @@
   justify-content: center;
   height: 32px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--ash);
+  color: var(--text-muted);
 }
 
 .tray-live-footer button:not(:disabled):hover,
 .tray-live-footer button:not(:disabled):active {
-  background: var(--surface-hover);
-  color: var(--quartz);
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 .tray-live-footer button:focus-visible {
-  outline-color: currentColor;
+  outline-color: var(--focus);
   outline-offset: -2px;
 }
 
@@ -49,7 +50,7 @@
   margin-left: auto;
   padding-inline: 8px;
   font-weight: 650;
-  color: var(--quartz);
+  color: var(--text);
 }
 
 .tray-refresh-error {

@@ -1,4 +1,4 @@
-import { ArrowRightLeft, CheckCircle2, KeyRound, Layers3, Loader2, MoreHorizontal, RefreshCcw, Search, ShieldAlert, Star } from "lucide-react";
+import { ArrowRightLeft, CheckCircle2, CircleDashed, Clock3, KeyRound, Layers3, Loader2, MoreHorizontal, RefreshCcw, Search, ShieldAlert, Star } from "lucide-react";
 import { useRef } from "react";
 import type { AppSettings, ManagedAccount } from "../../shared/types";
 import { maskEmailForPrivacy } from "../../shared/privacyDisplay";
@@ -8,6 +8,7 @@ import { runtimeLabel } from "./RuntimeEvidence";
 import { PlatformMark } from "./PlatformMark";
 import { useListMotion } from "../hooks/useSurfaceMotion";
 import { usePreservedScroll, type ScrollPosition } from "../hooks/usePreservedScroll";
+import "../profile-table.css";
 
 export interface ProfileTableProps {
   accounts: ManagedAccount[];
@@ -48,6 +49,8 @@ export function ProfileTable({ accounts, selectedId, now, language, privacyMode,
       const providerLabel = provider === "antigravity" ? "Antigravity" : "Codex";
       const authAction = repair ? (en ? "Repair profile" : "Восстановить профиль") : (en ? "Authorize again" : "Авторизовать заново");
       const runtime = account.runtimeVerification?.runtime;
+      const { freshnessState } = view;
+      const FreshnessIcon = freshnessState === "error" ? ShieldAlert : freshnessState === "stale" ? Clock3 : freshnessState === "fresh" ? CheckCircle2 : CircleDashed;
       return <tr key={account.id} data-profile-id={account.id} className={`${focusId === account.id ? "is-selected" : ""} ${account.isActive ? "is-applied" : ""}`} tabIndex={focusId === account.id ? 0 : -1} aria-selected={focusId === account.id} onClick={(event) => { if ((event.target as HTMLElement).closest("button")) return; onSelect(account.id); event.currentTarget.focus(); }} onKeyDown={(event) => {
         if (event.target !== event.currentTarget) return;
         if (event.key === "Enter") { event.preventDefault(); onInspect(account.id, event.currentTarget); return; }
@@ -64,7 +67,7 @@ export function ProfileTable({ accounts, selectedId, now, language, privacyMode,
               <div className="table-profile-name">
                 <strong title={label}>{label}</strong>
                 {account.favorite ? <Star aria-label={en ? "Favorite" : "Избранное"} /> : null}
-                {account.isActive ? <span className="selected-profile-chip">{en ? "Selected" : "Выбран"}</span> : null}
+                {account.isActive ? <span className="selected-profile-chip">{en ? "Applied" : "Применён"}</span> : null}
                 {account.archived ? <span className="badge compact">{en ? "Archived" : "Архив"}</span> : null}
               </div>
               <div className="table-profile-meta">
@@ -77,12 +80,12 @@ export function ProfileTable({ accounts, selectedId, now, language, privacyMode,
         <td>
           <div className="table-quota-windows">
             {windows.length ? windows.map((window) => (
-              <div key={window.id} className={`table-quota ${window.remaining <= 10 ? "is-critical" : ""}`} title={privacyMode ? undefined : [window.title, window.modelId, window.scope].filter(Boolean).join(" · ")}>
+              <div key={window.id} className={`table-quota ${window.remaining < 10 ? "is-critical" : ""}`} title={privacyMode ? undefined : [window.title, window.modelId, window.scope].filter(Boolean).join(" · ")}>
                 <span>{window.title}</span>
                 <strong>{view.formatRemaining(window.remaining)}</strong>
-                <div className="bar"><span style={{ width: `${window.remaining}%` }} /></div>
+                <div className="bar" aria-hidden="true"><span style={{ width: `${window.remaining}%` }} /></div>
               </div>
-            )) : <div className="table-quota is-unknown"><span>{en ? "No quota data" : "Нет данных лимита"}</span><strong>—</strong><div className="bar" /></div>}
+            )) : <div className="table-quota is-unknown"><span>{en ? "No quota data" : "Нет данных лимита"}</span><strong>—</strong></div>}
           </div>
           {extraWindowsCompact > 0 || first?.resetsAt ? <small className="table-quota-meta">
             {first?.resetsAt ? <span>{first.resetsAt <= now ? (en ? "Reset needs confirmation" : "Сброс требует проверки") : (en ? "Reset" : "Сброс") + " " + new Date(first.resetsAt * 1000).toLocaleTimeString(en ? "en-US" : "ru-RU", { hour: "2-digit", minute: "2-digit" })}</span> : null}
@@ -90,8 +93,20 @@ export function ProfileTable({ accounts, selectedId, now, language, privacyMode,
             {extraWindowsCompact > 0 ? <span className="table-quota-more-compact">+{extraWindowsCompact} {en ? "in details" : "в подробностях"}</span> : null}
           </small> : null}
         </td>
-        <td><span className={`table-freshness ${view.refreshFailed ? "is-error" : view.readiness.state === "ready" ? "is-fresh" : "is-stale"}`}>{view.refreshFailed ? <ShieldAlert aria-hidden="true" /> : <span className="status-dot" aria-hidden="true" />}{view.freshness}</span><small>{view.ageLabel}</small></td>
-        <td><span className={`table-credentials ${account.credentialState !== "ready" ? "is-error" : ""}`}>{view.credentialsLabel}</span>{account.isActive ? <small className={`table-runtime-message ${runtime === "mismatch" ? "is-error" : ""}`}>{runtimeLabel(account.runtimeVerification, language)}</small> : view.readiness.reason !== "ready" && view.readiness.reason !== "needs_reauth" ? <small>{en ? "Refresh before recommendation" : "Для рекомендации нужен свежий снимок"}</small> : null}</td>
+        <td>
+          <span className={`table-freshness is-${freshnessState}`}><FreshnessIcon aria-hidden="true" />{view.freshness}</span>
+          <small>{view.ageLabel}</small>
+        </td>
+        <td>
+          {account.isActive ? (
+            <span className={`table-runtime-message ${runtime === "mismatch" ? "is-error" : ""}`}>
+              {runtime === "verified" ? <CheckCircle2 aria-hidden="true" /> : runtime === "mismatch" ? <ShieldAlert aria-hidden="true" /> : <Clock3 aria-hidden="true" />}
+              {runtimeLabel(account.runtimeVerification, language)}
+            </span>
+          ) : null}
+          <span className={`table-credentials ${account.credentialState !== "ready" ? "is-error" : ""}`}>{view.credentialsLabel}</span>
+          {!account.isActive && view.readiness.reason !== "ready" && view.readiness.reason !== "needs_reauth" ? <small>{en ? "Refresh before recommendation" : "Для рекомендации нужен свежий снимок"}</small> : null}
+        </td>
         <td>
           <div className="table-actions" onClick={(event) => event.stopPropagation()}>
             <button className="icon-btn" disabled={busy !== null} aria-busy={busy === `refresh:${account.id}`} aria-label={en ? `Refresh ${label}` : `Обновить ${label}`} title={en ? "Refresh limits" : "Обновить лимиты"} onClick={() => onRefresh(account.id)}>

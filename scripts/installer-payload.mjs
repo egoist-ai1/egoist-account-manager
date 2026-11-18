@@ -42,6 +42,11 @@ export async function verifyInstallerPayload(root, payloadDir, pkg) {
     const actual = packed ? extractFile(asar, packed.split('/').join(path.sep)) : await fs.readFile(path.join(payloadDir, 'resources', 'icon.png'));
     if (!expected.equals(actual)) throw new Error(`Payload resource differs: ${source}`);
   }
+  for (const resource of pkg.build?.win?.extraResources ?? []) {
+    const source = await fs.readFile(path.join(root, resource.from));
+    const packed = await fs.readFile(path.join(payloadDir, 'resources', resource.to));
+    if (!source.equals(packed)) throw new Error(`Payload resource differs: ${resource.to}`);
+  }
   verifiedPayloads.set(pkg, { identity: packageIdentity(pkg), numeric: windowsNumericVersion(pkg) });
 }
 export function verifyExecutableMetadata(metadata, pkg) {

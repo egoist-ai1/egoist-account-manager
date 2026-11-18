@@ -1,14 +1,15 @@
-import { CircleDashed, Cloud, Sparkles } from "lucide-react";
+import { CircleCheck, CircleDashed, TriangleAlert } from "lucide-react";
 import { productName } from "../../shared/branding";
 import type { AppApi } from "../../shared/types";
 import { useTrayState } from "../hooks/useTrayState";
+import { PlatformMark } from "./PlatformMark";
 import { runtimeLabel } from "./RuntimeEvidence";
 import "../tray-hover.css";
 
 type TrayState = ReturnType<typeof useTrayState>;
 
 export function TrayQuotaSummary({ tray, surface }: { tray: TrayState; surface: "tray-hover" | "tray-live" }) {
-  const Mark = tray.platform === "antigravity" ? Sparkles : tray.platform === "codex" ? Cloud : CircleDashed;
+  const runtimeState = tray.active?.runtimeVerification?.runtime;
   const runtime = tray.active ? runtimeLabel(tray.active.runtimeVerification, tray.language) : null;
   const exactReset = tray.resetAt ? new Date(tray.resetAt * 1000) : null;
 
@@ -16,10 +17,10 @@ export function TrayQuotaSummary({ tray, surface }: { tray: TrayState; surface: 
     <>
       <header className="tray-summary">
         <div className="tray-brand">
-          <Mark size={21} aria-hidden="true" />
+          {tray.platform ? <PlatformMark platform={tray.platform} /> : <CircleDashed size={30} aria-hidden="true" />}
           <div className="tray-brand-text">
             <strong>{tray.platformName ?? productName}</strong>
-            <span className="tray-status" role="status">{tray.stateLabel}</span>
+            <span className={tray.status === "fresh" ? "tray-status sr-only" : "tray-status"} role="status">{tray.stateLabel}</span>
           </div>
         </div>
         <div className={`${surface}-value tray-value`}>
@@ -34,7 +35,13 @@ export function TrayQuotaSummary({ tray, surface }: { tray: TrayState; surface: 
             <strong title={tray.accountTitle}>{tray.accountLabel}</strong>
             {tray.planLabel ? <span className="tray-plan" title={tray.planLabel}>{tray.planLabel}</span> : null}
           </div>
-          {runtime ? <span className="tray-runtime-message" title={runtime}>{runtime}</span> : null}
+          {runtime ? (
+            <span className="tray-runtime-message" data-runtime={runtimeState} title={runtime}>
+              {runtimeState === "verified" ? <CircleCheck size={13} aria-hidden="true" /> : null}
+              {runtimeState === "mismatch" ? <TriangleAlert size={13} aria-hidden="true" /> : null}
+              <span>{runtime}</span>
+            </span>
+          ) : null}
         </div>
       ) : null}
 

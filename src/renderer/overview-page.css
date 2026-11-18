@@ -1,0 +1,176 @@
+.overview-page {
+  gap: clamp(16px, 2vw, 24px);
+}
+
+.overview-page .overview-platforms {
+  gap: 16px;
+}
+
+.overview-page :is(.overview-selected-profile, .overview-connect) {
+  padding: clamp(14px, 2vw, 22px);
+  border-color: var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+}
+
+.overview-page .overview-platform-header {
+  gap: 10px;
+  min-block-size: 40px;
+}
+
+.overview-page .overview-platform-header .platform-mark.large {
+  width: clamp(34px, 3.7vw, 48px);
+  height: clamp(34px, 3.7vw, 48px);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.overview-page .overview-platform-header > strong {
+  color: var(--text);
+}
+
+.overview-page .overview-freshness {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-wrap: balance;
+}
+
+.overview-page .overview-freshness.is-error { color: var(--danger); }
+
+.overview-page .overview-profile-identity {
+  padding-block: 20px 16px;
+}
+
+.overview-page .overview-profile-identity h3,
+.overview-page .overview-connect-body h3 {
+  font: 650 var(--text-heading, 19px)/1.25 var(--font-text);
+}
+
+.overview-page .overview-profile-identity p {
+  margin-block: 4px 10px;
+}
+
+.overview-page .runtime-inline {
+  display: inline-flex;
+  width: fit-content;
+  color: var(--text-muted);
+  font-size: var(--text-meta);
+}
+
+.overview-page .runtime-inline.is-verified { color: var(--success); }
+.overview-page .runtime-inline.is-error { color: var(--danger); }
+
+.overview-page .overview-quotas {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  margin-block-end: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.overview-page .overview-quota {
+  display: grid;
+  grid-template-columns: minmax(4ch, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 14px;
+  padding: 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.overview-page .overview-quota + .overview-quota {
+  border-block-start: 1px solid var(--line);
+}
+
+.overview-page .overview-quota-number strong {
+  color: var(--text);
+  font: 620 22px/1 var(--font-text);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.05em;
+  white-space: nowrap;
+}
+
+.overview-page .overview-quota.is-primary .overview-quota-number strong {
+  font-size: clamp(28px, 3.8vw, 44px);
+}
+
+.overview-page .overview-quota.is-critical .overview-quota-number strong {
+  color: var(--danger);
+}
+
+.overview-page .overview-quota-copy {
+  display: grid;
+  gap: 3px;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.overview-page .overview-quota-copy > span {
+  color: var(--text);
+  font-size: var(--text-control);
+}
+
+.overview-page .overview-quota-copy small {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-meta);
+}
+
+.overview-page .overview-quota .bar {
+  grid-column: 1 / -1;
+  height: 4px;
+  background: var(--line-strong);
+}
+
+.overview-page .overview-quota .bar > span {
+  background: var(--text);
+  box-shadow: none;
+}
+
+.overview-page .overview-quota.is-critical .bar > span {
+  background: var(--danger);
+}
+
+.overview-page .overview-quotas.is-historical .overview-quota-number strong { color: var(--text-muted); }
+.overview-page .overview-quotas.is-historical .overview-quota .bar > span { background: var(--text-muted); }
+
+.overview-page .overview-selected-profile footer {
+  flex-wrap: wrap;
+  padding-block-start: 4px;
+  border: 0;
+}
+
+.overview-page .overview-connect-body {
+  place-content: center start;
+  justify-items: start;
+  min-block-size: 184px;
+  padding-inline: 0;
+  text-align: start;
+}
+
+.overview-page .overview-summary {
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+}
+
+.overview-page .overview-summary strong {
+  font-family: var(--font-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.overview-page .overview-journal-link {
+  flex-wrap: wrap;
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+}
+
+.overview-page .overview-journal-link > svg { color: var(--text-muted); }
+
+@media (max-width: 560px) {
+  .overview-page .overview-journal-link > .button { inline-size: 100%; }
+}

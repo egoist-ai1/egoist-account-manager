@@ -1,4 +1,4 @@
-import { Activity, ArrowRight, Circle, Clock3, KeyRound, Layers3, RefreshCcw, ShieldCheck } from "lucide-react";
+import { Activity, ArrowRight, Circle, Clock3, Layers3, Plus, RefreshCcw, ShieldAlert, ShieldCheck } from "lucide-react";
 import type { AppDiagnostics, ManagedAccount, SwitchTransaction } from "../../../shared/types";
 import { getAccountReadiness, rankSwitchCandidates } from "../../../shared/smartSelection";
 import { formatRemainingCountdown } from "../../../shared/accountListPresentation";
@@ -7,6 +7,7 @@ import { useVisibleClock } from "../../hooks/useVisibleClock";
 import { runtimeLabel } from "../RuntimeEvidence";
 import { PlatformMark } from "../PlatformMark";
 import { verificationSummary } from "./ActivityPage";
+import "../../overview-page.css";
 
 export function formatLiveCountdown(secondsRemaining: number | null, isEnglish: boolean): string | null {
   if (secondsRemaining === null || secondsRemaining <= 0) return null;
@@ -42,10 +43,11 @@ export function OverviewPage({ accounts, latestTransaction, busy, autoRefreshInt
   const now = useVisibleClock();
   const language = en ? "en" : "ru";
   const candidates = rankSwitchCandidates(accounts, { now, staleAfterSeconds: 900 });
-  const selected = accounts.filter((account) => account.isActive && !account.archived);
+  const profiles = accounts.filter((account) => !account.archived);
+  const selected = profiles.filter((account) => account.isActive);
   const platforms = ["codex", "antigravity"] as const;
-  const readyCount = accounts.filter((account) => !account.isActive && getAccountReadiness(account, { now, staleAfterSeconds: 900 }).state === "ready").length;
-  const needAttention = accounts.filter((account) => getAccountReadiness(account, { now, staleAfterSeconds: 900 }).state !== "ready" || (account.isActive && account.runtimeVerification?.runtime !== "verified")).length;
+  const readyCount = profiles.filter((account) => !account.isActive && getAccountReadiness(account, { now, staleAfterSeconds: 900 }).state === "ready").length;
+  const needAttention = profiles.filter((account) => getAccountReadiness(account, { now, staleAfterSeconds: 900 }).state !== "ready" || (account.isActive && account.runtimeVerification?.runtime !== "verified")).length;
   return (
     <div className="overview-page">
       <header className="page-head">
@@ -61,16 +63,15 @@ export function OverviewPage({ accounts, latestTransaction, busy, autoRefreshInt
       </header>
       <div className="overview-platforms">
         {platforms.map((platform) => {
-          const account = selected.find((item) => item.platform === platform);
+          const account = selected.find((item) => (item.platform ?? "codex") === platform);
           const label = platform === "antigravity" ? "Antigravity" : "Codex";
           if (!account) return (
             <section key={platform} className="overview-connect" aria-label={label}>
-              <header className="overview-platform-header"><PlatformMark platform={platform} /><strong>{label}</strong></header>
+              <header className="overview-platform-header"><PlatformMark platform={platform} size="large" /><strong>{label}</strong></header>
               <div className="overview-connect-body">
-                <span className="empty-icon"><KeyRound aria-hidden="true" /></span>
-                <p>{en ? "No selected profile" : "Профиль не выбран"}</p>
+                <h3>{en ? "No selected profile" : "Профиль не выбран"}</h3>
                 <button className="button secondary" disabled={busy !== null} onClick={platform === "antigravity" ? onAddAntigravity ?? onAdd : onAddCodex ?? onAdd}>
-                  {en ? "Add profile" : "Добавить профиль"}
+                  <Plus aria-hidden="true" />{en ? "Add profile" : "Добавить профиль"}
                 </button>
               </div>
             </section>
@@ -79,48 +80,56 @@ export function OverviewPage({ accounts, latestTransaction, busy, autoRefreshInt
           const remaining = view.readiness.remainingPercent;
           const verified = account.runtimeVerification?.runtime === "verified";
           const mismatch = account.runtimeVerification?.runtime === "mismatch";
+          const RuntimeIcon = verified ? ShieldCheck : mismatch ? ShieldAlert : Circle;
+          const windows = [...view.summaryWindows].sort((left, right) => left.remaining - right.remaining).slice(0, 2);
+          const historical = view.refreshFailed || view.readiness.reason === "stale" || view.readiness.reason === "reset_passed";
           const suggestion = remaining !== null && remaining <= smartSwitchThresholdPercent
-            ? candidates.find((item) => item.account.platform === platform && item.account.id !== account.id && item.state === "ready")
+            ? candidates.find((item) => (item.account.platform ?? "codex") === platform && item.account.id !== account.id && item.state === "ready")
             : null;
           return (
             <section className="overview-selected-profile" key={platform} aria-label={label}>
               <header className="overview-platform-header">
-                <PlatformMark platform={platform} />
+                <PlatformMark platform={platform} size="large" />
                 <strong>{label}</strong>
-                <span className="overview-freshness">{view.freshness} · {view.ageLabel}</span>
+                <span className={`overview-freshness ${view.refreshFailed ? "is-error" : ""}`}>{view.freshness} · {view.ageLabel}</span>
               </header>
               <div className="overview-profile-identity">
                 <h3>{displayLabel(account.label)}</h3>
                 <p>{displayEmail(account.email)}</p>
                 <span className={`runtime-inline ${verified ? "is-verified" : ""} ${mismatch ? "is-error" : ""}`}>
-                  {verified ? <ShieldCheck aria-hidden="true" /> : <Circle aria-hidden="true" />}
+                  <RuntimeIcon aria-hidden="true" />
                   {runtimeLabel(account.runtimeVerification, language)}
                 </span>
               </div>
-              <div className="overview-quotas">
-                {view.summaryWindows.length ? view.summaryWindows.slice(0, 2).map((window) => (
-                  <div key={window.id} className={`overview-quota ${window.remaining <= 10 ? "is-critical" : ""}`}>
-                    <span>{window.title}</span>
-                    <strong>{view.formatRemaining(window.remaining)}</strong>
-                    <div className="bar"><span style={{ width: `${window.remaining}%` }} /></div>
-                    <small>{formatQuotaReset(window.resetsAt, now, en)}</small>
+              <div className={`overview-quotas ${historical ? "is-historical" : ""}`} aria-label={historical
+                ? (en ? "Last known quotas" : "Последние известные лимиты")
+                : (en ? "Remaining quotas" : "Остатки лимитов")}>
+                {windows.length ? windows.map((window, index) => (
+                  <div key={window.id} className={`overview-quota ${index === 0 ? "is-primary" : ""} ${window.remaining < 10 ? "is-critical" : ""}`}>
+                    <div className="overview-quota-number"><strong>{view.formatRemaining(window.remaining >= 1 ? Math.floor(window.remaining) : window.remaining)}</strong></div>
+                    <div className="overview-quota-copy"><span>{window.title}</span><small>{formatQuotaReset(window.resetsAt, now, en)}</small></div>
+                    <div className="bar" aria-hidden="true"><span style={{ width: `${window.remaining}%` }} /></div>
                   </div>
-                )) : <div className="overview-quota"><span>{en ? "No quota data" : "Нет данных лимита"}</span><strong>—</strong></div>}
+                )) : <div className="overview-quota is-primary"><div className="overview-quota-number"><strong>—</strong></div><div className="overview-quota-copy"><span>{en ? "No quota data" : "Нет данных лимита"}</span></div></div>}
               </div>
               {suggestion ? (
                 <footer>
                   <span>{en ? "Fresh alternative" : "Профиль с доступным лимитом"}<strong>{displayLabel(suggestion.account.label)}</strong></span>
                   <button className="button" disabled={busy !== null} onClick={() => onSwitch(suggestion.account.id)}>{en ? "Switch" : "Переключить"}<ArrowRight /></button>
                 </footer>
-              ) : null}
+              ) : (
+                <footer>
+                  <button className="button secondary" onClick={onOpenAccounts}>{en ? "Manage profiles" : "Управление профилями"}<ArrowRight aria-hidden="true" /></button>
+                </footer>
+              )}
             </section>
           );
         })}
       </div>
       <section className="overview-summary" aria-label={en ? "Profile summary" : "Сводка профилей"}>
-        <div><Layers3 aria-hidden="true" /><strong>{accounts.filter((account) => !account.archived).length}</strong><span>{en ? "Saved profiles" : "Сохранённых профилей"}</span></div>
+        <div><Layers3 aria-hidden="true" /><strong>{profiles.length}</strong><span>{en ? "Saved profiles" : "Сохранённых профилей"}</span></div>
         <div><Clock3 aria-hidden="true" /><strong>{readyCount}</strong><span>{en ? "Fresh alternatives" : "Свежих альтернатив"}</span></div>
-        <div><KeyRound aria-hidden="true" /><strong>{needAttention}</strong><span>{en ? "Need a check" : "Требуют проверки"}</span></div>
+        <div><ShieldAlert aria-hidden="true" /><strong>{needAttention}</strong><span>{en ? "Need a check" : "Требуют проверки"}</span></div>
         <button className="button secondary overview-profiles-link" onClick={onOpenAccounts}>{en ? "All profiles" : "Все профили"}<ArrowRight /></button>
       </section>
       {latestTransaction && onOpenActivity ? (

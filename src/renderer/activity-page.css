@@ -1,0 +1,110 @@
+.activity-page {
+  gap: clamp(14px, 2vw, 22px);
+}
+
+.activity-page :is(.activity-command, .activity-route, .activity-journal) {
+  border-color: var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+}
+
+.activity-page .activity-command-main {
+  padding: clamp(14px, 2vw, 22px);
+}
+
+.activity-page .activity-command-title {
+  align-items: start;
+  min-inline-size: 0;
+}
+
+.activity-page .activity-signal {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.activity-page :is(.activity-row-icon, .activity-signal).success { color: var(--success); }
+.activity-page :is(.activity-row-icon, .activity-signal).danger { color: var(--danger); }
+
+.activity-page .activity-kpis {
+  background: var(--surface-2);
+  border-block-start-color: var(--line);
+  border-end-start-radius: var(--radius-md);
+  border-end-end-radius: var(--radius-md);
+}
+
+.activity-page .activity-kpis > div + div {
+  border-inline-start: 0;
+}
+
+.activity-page .activity-kpis strong {
+  color: var(--text);
+  font: 650 22px/1.15 var(--font-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-page .activity-kpis .is-danger strong { color: var(--danger); }
+
+.activity-page .activity-journal-head {
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.activity-page .activity-filters {
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.activity-page .activity-filters button {
+  min-height: 32px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.activity-page .activity-filters button:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+.activity-page .activity-filters button.is-selected {
+  border-color: var(--line-strong);
+  background: var(--surface-3);
+  color: var(--text);
+  font-weight: 650;
+}
+
+.activity-page .activity-timeline { margin-block-start: 10px; }
+
+.activity-page .timeline-event > summary {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto 14px;
+  padding: 13px 3px;
+  gap: 5px 12px;
+}
+
+.activity-page .timeline-event > summary::-webkit-details-marker { display: none; }
+.activity-page .timeline-route bdi { min-inline-size: 0; overflow-wrap: anywhere; }
+.activity-page .timeline-status { text-align: end; }
+.activity-page .timeline-details { background: var(--surface-2); }
+
+@media (max-width: 720px) {
+  .activity-page .timeline-event > summary {
+    grid-template-columns: 18px minmax(0, 1fr) 14px;
+  }
+
+  .activity-page .timeline-status {
+    grid-column: 2;
+    text-align: start;
+  }
+
+  .activity-page .timeline-chevron {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .activity-page .timeline-duration { display: none; }
+}

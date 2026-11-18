@@ -1,0 +1,64 @@
+/* Egoist Design System · Lagom · тёмный графит */
+:root {
+  color-scheme: dark;
+  --c-graphite-950: #0a0a0b;
+  --c-graphite-900: #0e0e0f;
+  --c-graphite-850: #141416;
+  --c-graphite-800: #1c1c1e;
+  --c-graphite-700: #26262a;
+  --c-graphite-600: #3a3a3d;
+  --c-graphite-500: #646460;
+  --c-graphite-400: #8c8a85;
+  --c-graphite-300: #b5b3ad;
+  --c-graphite-200: #d6d5d0;
+  --c-graphite-100: #edebe6;
+  --c-white: #fff;
+  --c-danger-500: #ff5a4e;
+  --c-success-500: #6fd08c;
+
+  --bg: var(--c-graphite-900);
+  --surface-1: var(--c-graphite-850);
+  --surface-2: var(--c-graphite-800);
+  --surface-3: var(--c-graphite-700);
+  --surface-inset: var(--c-graphite-950);
+  --line: var(--c-graphite-700);
+  --line-strong: var(--c-graphite-600);
+  --text: var(--c-graphite-100);
+  --text-secondary: var(--c-graphite-300);
+  --text-muted: var(--c-graphite-400);
+  --text-muted-on-raised: color-mix(in srgb, var(--c-graphite-400) 75%, var(--c-graphite-300));
+  --text-faint: var(--c-graphite-500);
+  --inverse-bg: var(--c-graphite-100);
+  --inverse-text: var(--c-graphite-900);
+  --inverse-hover: var(--c-white);
+  --accent: var(--inverse-bg);
+  --accent-text: var(--text);
+  --on-accent: var(--inverse-text);
+  --success: var(--c-success-500);
+  --focus: var(--success);
+  --success-surface: color-mix(in srgb, var(--success) 12%, var(--surface-1));
+  --danger: var(--c-danger-500);
+  --danger-surface: color-mix(in srgb, var(--danger) 12%, var(--surface-1));
+  --danger-hover: color-mix(in srgb, var(--danger) 20%, var(--surface-1));
+  --danger-border: color-mix(in srgb, var(--danger) 35%, var(--surface-1));
+  --grid-ink: var(--c-graphite-600);
+  --grid-label: var(--c-graphite-400);
+  --grid-line: 1px;
+  --grid-mark: 12px;
+  --shadow: 0 1px 0 rgba(255,255,255,.05) inset, 0 16px 40px rgba(0,0,0,.55);
+  --scrim: rgba(0,0,0,.68);
+
+  --font-display: "Unbounded Variable", Unbounded, "Segoe UI", system-ui, sans-serif;
+  --font-text: "Onest Variable", Onest, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --display-weight: 400;
+  --display-tracking: -.02em;
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-pill: 999px;
+  --dur-instant: 90ms;
+  --dur-fast: 160ms;
+  --dur-base: 280ms;
+  --ease-standard: cubic-bezier(.2,.7,.2,1);
+}

@@ -130,15 +130,20 @@ test("current settings persist polling, privacy and language through IPC", async
   try {
     await dismissNotes(page);
     await page.getByLabel("Основные разделы").getByRole("button", { name: "Настройки", exact: true }).click();
-    const settings = page.locator(".settings-v4-unified");
+    const settings = page.getByRole("region", { name: "Настройки", exact: true });
     await expect(settings.getByRole("heading", { name: "Настройки приложения" })).toBeVisible();
-    await expect(settings.locator(".settings-card-unified")).toHaveCount(4);
-    await settings.getByRole("radiogroup", { name: "Интервал автообновления" }).getByRole("radio", { name: "Выкл", exact: true }).click();
+    const sections = settings.getByRole("tablist", { name: "Разделы настроек" });
+    await expect(sections.getByRole("tab")).toHaveCount(4);
+    await sections.getByRole("tab", { name: "Лимиты и панель задач" }).click();
+    const limits = settings.getByRole("tabpanel", { name: "Лимиты и панель задач" });
+    await limits.getByRole("radiogroup", { name: "Интервал автообновления" }).getByRole("radio", { name: "Выкл", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.cam!.getSettings())).toMatchObject({ autoRefreshIntervalMs: 0 });
-    await settings.getByRole("switch", { name: "Режим приватности" }).click();
+    await sections.getByRole("tab", { name: "Основные" }).click();
+    const general = settings.getByRole("tabpanel", { name: "Основные" });
+    await general.getByRole("switch", { name: "Режим приватности" }).click();
     await expect.poll(() => page.evaluate(() => window.cam!.getSettings())).toMatchObject({ privacyMode: true });
-    await settings.getByRole("radio", { name: "EN", exact: true }).click();
-    await expect(settings.getByRole("heading", { name: "Application preferences" })).toBeVisible();
+    await general.getByRole("radio", { name: "EN", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Application preferences" })).toBeVisible();
     await expect.poll(() => page.evaluate(() => window.cam!.getSettings())).toMatchObject({ language: "en" });
   } finally { await closeIsolated(app, root); }
 });

@@ -10,7 +10,9 @@ const work = configuredWork ?? fs.mkdtempSync(path.join(os.tmpdir(), "egoist-can
 fs.mkdirSync(work, { recursive: true });
 // Workers and Electron fixtures inherit the same owned work as the fixture server.
 process.env.CAM_TEST_WORK_DIR = work;
-const rendererOrigin = "http://127.0.0.1:4188";
+const rendererPort = Number(process.env.CAM_RENDERER_TEST_PORT ?? "4188");
+if (!Number.isInteger(rendererPort) || rendererPort < 1024 || rendererPort > 65_535) throw new Error("Invalid CAM_RENDERER_TEST_PORT");
+const rendererOrigin = `http://127.0.0.1:${rendererPort}`;
 
 export default defineConfig({
   testDir: "tests/smoke",
@@ -24,7 +26,7 @@ export default defineConfig({
   webServer: {
     command: "node tests/smoke/renderer-server.mjs",
     cwd: process.cwd(),
-    env: { CAM_TEST_WORK_DIR: work, CAM_RENDERER_TEST_PORT: "4188" },
+    env: { CAM_TEST_WORK_DIR: work, CAM_RENDERER_TEST_PORT: String(rendererPort) },
     url: rendererOrigin,
     reuseExistingServer: false,
     timeout: 120_000

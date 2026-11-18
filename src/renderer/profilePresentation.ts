@@ -16,7 +16,8 @@ export function profilePresentation(account: ManagedAccount, now: number, langua
   const age = capturedAt ? Math.max(0, Math.floor((now - capturedAt) / 60)) : null;
   const ageLabel = age === null ? (en ? "No snapshot" : "Нет снимка") : age < 1 ? (en ? "Just now" : "Только что") : age < 60 ? (en ? `${age} min ago` : `${age} мин назад`) : (en ? `${Math.floor(age / 60)} h ago` : `${Math.floor(age / 60)} ч назад`);
   const refreshFailed = hasCurrentQuotaRefreshFailure(account);
-  const freshness = refreshFailed ? (en ? "Refresh failed" : "Сбой обновления") : age === null || windows.length === 0 ? (en ? "No data" : "Нет данных") : now - capturedAt! > 900 || readiness.reason === "reset_passed" ? (en ? "Stale" : "Устарел") : (en ? "Fresh" : "Свежий");
+  const freshnessState = refreshFailed ? "error" : age === null || windows.length === 0 ? "unknown" : now - capturedAt! > 900 || readiness.reason === "reset_passed" ? "stale" : "fresh";
+  const freshness = freshnessState === "error" ? (en ? "Refresh failed" : "Сбой обновления") : freshnessState === "unknown" ? (en ? "No data" : "Нет данных") : freshnessState === "stale" ? (en ? "Stale" : "Устарел") : (en ? "Fresh" : "Свежий");
   const credentialsLabel = account.credentialState === "ready" ? (en ? "Sign-in saved" : "Вход сохранён") : account.credentialState === "needs_reauth" ? (en ? "Sign-in required" : "Нужен вход") : (en ? "Check sign-in" : "Проверить вход");
-  return { readiness, windows, summaryWindows, remainingPercent: selection.remainingPercent, ageLabel, freshness, refreshFailed, credentialsLabel, formatRemaining: (value: number | null) => formatQuotaRemaining(value, language) };
+  return { readiness, windows, summaryWindows, remainingPercent: selection.remainingPercent, ageLabel, freshness, freshnessState, refreshFailed, credentialsLabel, formatRemaining: (value: number | null) => formatQuotaRemaining(value, language) };
 }

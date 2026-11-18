@@ -10,8 +10,25 @@ for (const [width, height] of [[860, 560], [1080, 780], [1460, 900]]) {
     await expect(page.locator(".overview-quotas .overview-quota")).toHaveCount(2);
     expect(await page.locator(".overview-selected-profile, .overview-connect").evaluateAll((panels) => panels.every((panel) => panel.scrollWidth <= panel.clientWidth + 1))).toBe(true);
     await nav.getByRole("button", { name: "Настройки", exact: true }).click();
-    await expect(page.locator(".settings-card-unified")).toHaveCount(4);
-    await page.locator(".settings-card-unified").last().scrollIntoViewIfNeeded(); await expect(page.locator(".settings-card-unified").last()).toBeInViewport();
+    const sections = page.getByRole("tablist", { name: "Разделы настроек" });
+    await expect(sections.getByRole("tab")).toHaveCount(4);
+    for (const [title, control] of [
+      ["Основные", "Режим приватности"],
+      ["Лимиты и панель задач", "Живой индикатор лимитов"],
+      ["Переключение", "Подтверждать переключение"],
+      ["Диагностика", "Экспорт отчёта"]
+    ]) {
+      const section = sections.getByRole("tab", { name: title, exact: true });
+      await section.click();
+      await expect(section).toHaveAttribute("aria-selected", "true");
+      await expect(page.getByRole("tabpanel")).toHaveCount(1);
+      const panel = page.getByRole("tabpanel", { name: title, exact: true });
+      await expect(panel.getByRole("heading", { name: title, exact: true })).toBeVisible();
+      const setting = panel.getByRole(title === "Диагностика" ? "button" : "switch", { name: control, exact: true });
+      await setting.scrollIntoViewIfNeeded();
+      await expect(setting).toBeInViewport();
+      expect(await panel.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+    }
     await page.getByRole("button", { name: "Журнал аудита переключений", exact: true }).click();
     const audit = page.getByRole("dialog", { name: "Журнал аудита переключений" }); await expect(audit).toBeVisible();
     expect(await audit.locator(".audit-drawer-panel").evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);

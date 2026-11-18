@@ -232,7 +232,8 @@ export function formatQuotaRemaining(remaining: number | null, locale: "ru" | "e
   if (remaining === null || !Number.isFinite(remaining)) return "—";
   const percent = clampPercent(remaining);
   if (percent > 0 && percent < 1) return "<1%";
-  return `${Math.round(percent).toLocaleString(locale)}%`;
+  const displayed = percent < 10 ? Math.min(9, Math.round(percent)) : Math.round(percent);
+  return `${displayed.toLocaleString(locale)}%`;
 }
 
 export function quotaWindowLabel(durationMins: number | null, locale: "ru" | "en" = "ru"): string {

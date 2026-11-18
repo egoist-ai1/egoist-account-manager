@@ -41,7 +41,7 @@ try {
   const extras = [...packedByRelative.keys()].filter((relative) => !sourceByRelative.has(relative));
 
   const packedPackage = JSON.parse(fs.readFileSync(path.join(scratch, "package.json"), "utf8"));
-  const rendererOnlyPackages = ["react", "react-dom", "lucide-react", "clsx", "date-fns", "@fontsource-variable/montserrat", "@fontsource-variable/unbounded"];
+  const rendererOnlyPackages = ["react", "react-dom", "lucide-react", "clsx", "date-fns", "@fontsource-variable/onest", "@fontsource-variable/jetbrains-mono", "@fontsource-variable/unbounded"];
   const rendererPackagesBundled = rendererOnlyPackages.filter((name) => fs.existsSync(path.join(scratch, "node_modules", name)));
   const allPackedFiles = listFiles(scratch);
   const packedDependencyFiles = allPackedFiles.filter((file) => path.relative(scratch, file).startsWith(`node_modules${path.sep}`));
@@ -55,13 +55,19 @@ try {
     && rendererEntryAssets.filter((name) => name.endsWith(".css")).length === 1
     && referencedRendererEntryAssets.length === rendererEntryAssets.length
     && orphanRendererEntryAssets.length === 0;
+  const mismatchedResources = (sourcePackage.build?.win?.extraResources ?? []).filter(({ from, to }) => {
+    const built = path.join(projectRoot, from);
+    const packed = path.join(path.dirname(asarPath), to);
+    return !fs.existsSync(built) || !fs.existsSync(packed) || sha256(built) !== sha256(packed);
+  }).map(({ to }) => to);
   const passed = mismatches.length === 0
     && extras.length === 0
     && sourceFiles.length === packedFiles.length
     && packedPackage.version === sourcePackage.version
     && !electronIsDevBundled
     && rendererPackagesBundled.length === 0
-    && rendererEntryAssetSetIsClean;
+    && rendererEntryAssetSetIsClean
+    && mismatchedResources.length === 0;
 
   const report = {
     passed,
@@ -78,6 +84,7 @@ try {
     packedDependencyFiles: packedDependencyFiles.length,
     packedDependencyBytes: packedDependencyFiles.reduce((total, file) => total + fs.statSync(file).size, 0),
     rendererPackagesBundled,
+    mismatchedResources,
     rendererEntryAssets,
     referencedRendererEntryAssets,
     orphanRendererEntryAssets,

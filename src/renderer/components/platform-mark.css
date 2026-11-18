@@ -1,0 +1,11 @@
+.platform-mark {
+  display: block;
+  flex: none;
+  width: var(--platform-mark-size, 26px);
+  height: var(--platform-mark-size, 26px);
+  color: var(--text);
+}
+
+.platform-mark.large { --platform-mark-size: 42px; }
+.platform-mark.tile { --platform-mark-size: 22px; }
+.platform-mark.micro { --platform-mark-size: 16px; }
